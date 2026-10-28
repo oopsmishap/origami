@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <clipPath id="og-dark-clip">
+      <path d="M 43.75 69.03 Q 42 66 45.39 65.13 L 194.61 26.87 Q 198 26 199.75 29.03 L 226.5 75.4 Q 228 78 226.23 80.42 L 184 138 L 212.25 186.97 Q 214 190 210.61 190.87 L 61.39 229.13 Q 58 230 56.25 226.97 L 29.5 180.6 Q 28 178 29.77 175.58 L 72 118 Z"/>
+    </clipPath>
+    <linearGradient id="og-dark-purple" x1="120" y1="46" x2="134.4" y2="102" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#C4B5FD"/>
+      <stop offset="45%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#6D28D9"/>
+    </linearGradient>
+    <linearGradient id="og-dark-green" x1="150" y1="98" x2="161.7" y2="143.7" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#064E3B"/>
+      <stop offset="22%" stop-color="#059669"/>
+      <stop offset="72%" stop-color="#34D399"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="og-dark-orange" x1="106" y1="158" x2="120.4" y2="214" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#EA580C"/>
+      <stop offset="42%" stop-color="#F97316"/>
+      <stop offset="100%" stop-color="#FDBA74"/>
+    </linearGradient>
+    <linearGradient id="og-dark-ridge" x1="72" y1="118" x2="228" y2="78" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.25"/>
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.78"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.35"/>
+    </linearGradient>
+    <linearGradient id="og-dark-valley" x1="28" y1="178" x2="184" y2="138" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#022C22" stop-opacity="0.45"/>
+      <stop offset="50%" stop-color="#022C22" stop-opacity="0.72"/>
+      <stop offset="100%" stop-color="#022C22" stop-opacity="0.40"/>
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#og-dark-clip)">
+    <!-- Middle reverse-fold pleat (Tier 2 · Emerald) with 1.5px seam bleed under creases -->
+    <polygon points="70,116 230,76 186,140 26,180" fill="url(#og-dark-green)"/>
+    <!-- Subtle diagonal origami facet sheen on middle pleat -->
+    <polygon points="72,118 228,78 28,178" fill="#FFFFFF" fill-opacity="0.06"/>
+
+    <!-- Top forward pleat (Tier 1 · Violet) -->
+    <polygon points="40,64 200,24 230,78 72,118" fill="url(#og-dark-purple)"/>
+    <!-- Subtle diagonal origami facet highlight on top pleat -->
+    <polygon points="42,66 198,26 72,118" fill="#FFFFFF" fill-opacity="0.09"/>
+
+    <!-- Bottom forward pleat (Tier 3 · Orange) -->
+    <polygon points="28,178 184,138 216,192 56,232" fill="url(#og-dark-orange)"/>
+    <!-- Subtle diagonal origami facet highlight on bottom pleat -->
+    <polygon points="28,178 214,190 58,230" fill="#FFFFFF" fill-opacity="0.09"/>
+
+    <!-- Mountain crease 1 specular ridge -->
+    <line x1="72" y1="118" x2="228" y2="78" stroke="url(#og-dark-ridge)" stroke-width="2.2" stroke-linecap="round"/>
+    <!-- Valley crease 2 tuck shadow + warm lip -->
+    <line x1="28" y1="178" x2="184" y2="138" stroke="url(#og-dark-valley)" stroke-width="2.4" stroke-linecap="round"/>
+    <line x1="28.5" y1="179.8" x2="184.5" y2="139.8" stroke="#FFEDD5" stroke-opacity="0.45" stroke-width="1.3" stroke-linecap="round"/>
+  </g>
+</svg>

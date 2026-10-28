@@ -1,6 +1,20 @@
-# Origami
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/header-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/header-light.svg">
+    <img alt="Origami" src="assets/header-dark.svg" width="100%">
+  </picture>
+</p>
 
-Incremental, reversible context folding for [`oh-my-pi`](https://omp.sh) (`omp`).
+<p align="center">
+  <a href="#highlights">Highlights</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#use">Use</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#more-documentation">Documentation</a>
+</p>
+
+<br>
 
 Origami keeps long coding sessions usable without destructive full-window compaction. It folds completed older work in measured steps, protects your current task and recent turns, preserves prompt-cache stability, and keeps exact originals searchable and recoverable.
 

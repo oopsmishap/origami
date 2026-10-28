@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <clipPath id="og-mono-clip">
+      <path d="M 43.75 69.03 Q 42 66 45.39 65.13 L 194.61 26.87 Q 198 26 199.75 29.03 L 226.5 75.4 Q 228 78 226.23 80.42 L 184 138 L 212.25 186.97 Q 214 190 210.61 190.87 L 61.39 229.13 Q 58 230 56.25 226.97 L 29.5 180.6 Q 28 178 29.77 175.58 L 72 118 Z"/>
+    </clipPath>
+    <mask id="og-mono-mask">
+      <rect width="256" height="256" fill="white"/>
+      <line x1="68" y1="119" x2="232" y2="77" stroke="black" stroke-width="4.5"/>
+      <line x1="24" y1="179" x2="188" y2="137" stroke="black" stroke-width="4.5"/>
+    </mask>
+  </defs>
+  <g clip-path="url(#og-mono-clip)" mask="url(#og-mono-mask)">
+    <polygon points="70,116 230,76 186,140 26,180" fill="currentColor" opacity="0.42"/>
+    <polygon points="40,64 200,24 230,78 72,118" fill="currentColor" opacity="0.98"/>
+    <polygon points="28,178 184,138 216,192 56,232" fill="currentColor" opacity="0.74"/>
+  </g>
+</svg>

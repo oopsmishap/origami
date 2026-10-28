@@ -362,6 +362,7 @@ function renderDashboardHtml(): string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Origami Context Dashboard · oh-my-pi</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256'%3E%3Cdefs%3E%3CclipPath id='c'%3E%3Cpath d='M 43.75 69.03 Q 42 66 45.39 65.13 L 194.61 26.87 Q 198 26 199.75 29.03 L 226.5 75.4 Q 228 78 226.23 80.42 L 184 138 L 212.25 186.97 Q 214 190 210.61 190.87 L 61.39 229.13 Q 58 230 56.25 226.97 L 29.5 180.6 Q 28 178 29.77 175.58 L 72 118 Z'/%3E%3C/clipPath%3E%3ClinearGradient id='p' x1='120' y1='46' x2='134' y2='102' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0%25' stop-color='%23DDD6FE'/%3E%3Cstop offset='45%25' stop-color='%238B5CF6'/%3E%3Cstop offset='100%25' stop-color='%236D28D9'/%3E%3C/linearGradient%3E%3ClinearGradient id='g' x1='150' y1='98' x2='161' y2='143' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0%25' stop-color='%23064E3B'/%3E%3Cstop offset='22%25' stop-color='%23059669'/%3E%3Cstop offset='72%25' stop-color='%2334D399'/%3E%3Cstop offset='100%25' stop-color='%23059669'/%3E%3C/linearGradient%3E%3ClinearGradient id='o' x1='106' y1='158' x2='120' y2='214' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0%25' stop-color='%23EA580C'/%3E%3Cstop offset='42%25' stop-color='%23F97316'/%3E%3Cstop offset='100%25' stop-color='%23FDBA74'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cg clip-path='url(%23c)'%3E%3Cpolygon points='70,116 230,76 186,140 26,180' fill='url(%23g)'/%3E%3Cpolygon points='40,64 200,24 230,78 72,118' fill='url(%23p)'/%3E%3Cpolygon points='28,178 184,138 216,192 56,232' fill='url(%23o)'/%3E%3Cline x1='72' y1='118' x2='228' y2='78' stroke='%23FFF' stroke-opacity='0.6' stroke-width='2.2'/%3E%3Cline x1='28' y1='178' x2='184' y2='138' stroke='%23022C22' stroke-opacity='0.6' stroke-width='2.4'/%3E%3C/g%3E%3C/svg%3E" />
   <style>
     :root {
       --bg-page: #0a0a0f;
@@ -448,12 +449,11 @@ function renderDashboardHtml(): string {
       border-radius: 8px;
       display: grid;
       place-items: center;
-      background: linear-gradient(135deg, rgba(6, 182, 212, 0.18), rgba(139, 92, 246, 0.18));
-      border: 1px solid rgba(6, 182, 212, 0.35);
-      color: var(--accent-cyan);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
       flex: none;
     }
-    .brand-mark svg { width: 16px; height: 16px; fill: currentColor; }
+    .brand-mark svg { width: 18px; height: 18px; display: block; }
     .brand-title {
       font-size: 15px;
       font-weight: 650;
@@ -1004,8 +1004,39 @@ function renderDashboardHtml(): string {
 <body>
   <header class="topbar">
     <div class="brand">
-      <div class="brand-mark">
-        <svg viewBox="0 0 24 24"><path d="M12 2L2 9l10 13 10-13-10-7zm0 3.2L18.4 9 12 18.2 5.6 9 12 5.2z"/></svg>
+      <div class="brand-mark" title="Origami">
+        <svg viewBox="0 0 256 256" width="18" height="18">
+          <defs>
+            <clipPath id="og-nav-clip">
+              <path d="M 43.75 69.03 Q 42 66 45.39 65.13 L 194.61 26.87 Q 198 26 199.75 29.03 L 226.5 75.4 Q 228 78 226.23 80.42 L 184 138 L 212.25 186.97 Q 214 190 210.61 190.87 L 61.39 229.13 Q 58 230 56.25 226.97 L 29.5 180.6 Q 28 178 29.77 175.58 L 72 118 Z"/>
+            </clipPath>
+            <linearGradient id="og-nav-p" x1="120" y1="46" x2="134.4" y2="102" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#DDD6FE"/><stop offset="45%" stop-color="#8B5CF6"/><stop offset="100%" stop-color="#6D28D9"/>
+            </linearGradient>
+            <linearGradient id="og-nav-g" x1="150" y1="98" x2="161.7" y2="143.7" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#064E3B"/><stop offset="22%" stop-color="#059669"/><stop offset="72%" stop-color="#34D399"/><stop offset="100%" stop-color="#059669"/>
+            </linearGradient>
+            <linearGradient id="og-nav-o" x1="106" y1="158" x2="120.4" y2="214" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#EA580C"/><stop offset="42%" stop-color="#F97316"/><stop offset="100%" stop-color="#FDBA74"/>
+            </linearGradient>
+            <linearGradient id="og-nav-r" x1="72" y1="118" x2="228" y2="78" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.25"/><stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.78"/><stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.35"/>
+            </linearGradient>
+            <linearGradient id="og-nav-v" x1="28" y1="178" x2="184" y2="138" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#022C22" stop-opacity="0.45"/><stop offset="50%" stop-color="#022C22" stop-opacity="0.72"/><stop offset="100%" stop-color="#022C22" stop-opacity="0.40"/>
+            </linearGradient>
+          </defs>
+          <g clip-path="url(#og-nav-clip)">
+            <polygon points="70,116 230,76 186,140 26,180" fill="url(#og-nav-g)"/>
+            <polygon points="72,118 228,78 28,178" fill="#FFFFFF" fill-opacity="0.06"/>
+            <polygon points="40,64 200,24 230,78 72,118" fill="url(#og-nav-p)"/>
+            <polygon points="42,66 198,26 72,118" fill="#FFFFFF" fill-opacity="0.09"/>
+            <polygon points="28,178 184,138 216,192 56,232" fill="url(#og-nav-o)"/>
+            <polygon points="28,178 214,190 58,230" fill="#FFFFFF" fill-opacity="0.09"/>
+            <line x1="72" y1="118" x2="228" y2="78" stroke="url(#og-nav-r)" stroke-width="2.2" stroke-linecap="round"/>
+            <line x1="28" y1="178" x2="184" y2="138" stroke="url(#og-nav-v)" stroke-width="2.4" stroke-linecap="round"/>
+          </g>
+        </svg>
       </div>
       <span class="brand-title">Origami Context Dashboard</span>
       <span class="omp-tag">oh-my-pi</span>

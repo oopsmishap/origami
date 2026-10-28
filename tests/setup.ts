@@ -11,4 +11,10 @@ const agentDir = mkdtempSync(join(tmpdir(), "origami-test-agent-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
 
 // Global hook: in a preload file it runs once, after every test file.
-afterAll(() => rmSync(agentDir, { recursive: true, force: true }));
+afterAll(() => {
+  try {
+    rmSync(agentDir, { recursive: true, force: true });
+  } catch {
+    // Windows asynchronous file handle release
+  }
+});
