@@ -15,8 +15,10 @@ export const TIER_HEADERS = {
   3: "[Ultra-condensed conversation summary]",
 } as const;
 
+/** Header names the block and its coverage so the model can recall, unfold, or merge it. */
 export function renderBlockText(block: Block): string {
-  return `${TIER_HEADERS[block.tier]} — ${block.topic}\n${block.summary}`;
+  const coverage = block.ranges.map((r) => (r.start === r.end ? r.start : `${r.start}..${r.end}`)).join(",");
+  return `${TIER_HEADERS[block.tier]} ${block.id}${coverage ? ` (${coverage})` : ""} — ${block.topic}\n${block.summary}`;
 }
 
 function refInRanges(ref: string, ranges: readonly RefRange[]): boolean {
@@ -41,10 +43,17 @@ export function planRender(input: {
   bound: readonly BoundMessage[];
   blocks: readonly Block[];
   pinnedHeadIndex: number;
+  /** Refs dropped outright (finished fold calls), independent of any block. */
+  hiddenRefs?: ReadonlySet<string>;
 }): RenderOp[] {
-  const { bound, blocks, pinnedHeadIndex } = input;
+  const { bound, blocks, pinnedHeadIndex, hiddenRefs } = input;
   const ops: RenderOp[] = [];
   const removed = new Set<number>();
+  if (hiddenRefs && hiddenRefs.size > 0) {
+    for (const m of bound) {
+      if (m.index >= pinnedHeadIndex && hiddenRefs.has(m.ref)) removed.add(m.index);
+    }
+  }
 
   for (const block of blocks) {
     const indices = coveredIndices(bound, block);

@@ -18,21 +18,30 @@ const KEEP_DROP_RULES = `## KEEP VERBATIM
 - Repeated status checks once state is known.`;
 
 const TIER1_RULES = `## Tier 1 — Range fold (\`fold\` with message ranges)
-Fold a contiguous span of older messages into one summary block. The summary replaces those messages in the rendered context; the originals stay recoverable via \`unfold\`.
-- Range syntax: \`"m00012..m00048"\`. One fold call may carry several ranges.
-- Write a \`topic\` (a few words) and a \`summary\` that lets a later reader continue WITHOUT the originals.
+Fold a contiguous span of older messages into one summary block. The summary replaces those messages in the rendered context; the originals stay recoverable.
+- Range syntax: \`"m00012..m00048"\`. One fold call may carry several folds; folds in one call must not overlap.
+- Write a \`topic\` (a few words) and a \`summary\` that lets a later reader continue WITHOUT the originals. A summary that is not smaller than what it replaces is rejected.
 - Group under short thematic headers when a range spans distinct concerns.
 - Preserve the goal, its evolution, every open objective, every decision and its rationale.
-- Never fold the current in-flight turn or the pinned first user message.`;
+- The pinned first user message, the current in-flight turn, and the protected recent tail cannot be folded.`;
 
-const TIER2_RULES = `## Tier 2 — Distillation (fold block ranges \`"b1..b5"\`)
-Merge existing fold blocks into one denser summary. Re-carry open objectives verbatim. Keep decisions and their rationale. This is the summary-of-summaries path: what survives here is what a reader needs after months.`;
+const TIER2_RULES = `## Tier 2 — Distillation (fold block ranges \`"b1..b5"\` or \`"b1,b4,b7"\`)
+Merge at least 2 active tier-1 blocks into one denser summary; the merged blocks are consumed (they leave context and return only if the tier-2 block is unfolded). Re-carry open objectives verbatim. Keep decisions and their rationale. This is the summary-of-summaries path: what survives here is what a reader needs after months.`;
 
 const TIER3_RULES = `## Tier 3 — Ultra-condense (fold block ranges)
-Last-resort compression of an already-distilled block. Keep ONLY: the goal, open objectives, and the load-bearing constraints. Everything else is expendable.`;
+Merge at least 2 active lower-tier blocks. Keep ONLY: the goal, open objectives, and the load-bearing constraints. Everything else is expendable.`;
 
-const NUDE_RESPONSE = `## Responding to nudge
-When you see a message beginning with \`[origami]\`, it advertises exact fold ranges and their token savings. Respond by calling the \`fold\` tool with EXACTLY those ranges (same start/end, same topic scope), then continue your work. Do not restate the nudge. Do not fold ranges that were not advertised.`;
+const RECOVERY_RULES = `## Getting detail back
+- \`fold_recall\` with refs (\`"m00042..m00045"\`) returns the exact original text without changing context. Use it whenever a summary is too thin for the task at hand — exact strings, numbers, code.
+- \`fold_search\` finds blocks and archived original messages by content when you don't know the refs; message hits list refs to pass to \`fold_recall\`.
+- \`unfold\` (\`mode: "file"\`) writes a block's originals to an artifact; \`mode: "inline"\` puts the block's contents back in context (one level; \`deep: true\` for raw messages). A consumed block is unfolded through its parent.`;
+
+const NUDE_RESPONSE = `## Responding to nudges
+Messages beginning with \`[origami]\` are folding reminders.
+- Emergency (context nearly full): fold before doing anything else. Not optional.
+- Efficiency: lists candidate ranges, largest first, with size and tool share. Fold the finished ones — all or a subset, using the advertised boundaries. Defer any range whose work is still in active use; the reminder returns after more growth.
+- Promotion: suggests merging tier-1 (or tier-2) blocks into the next tier. Merge related blocks; defer if they are unrelated threads you still need apart.
+Do not restate the nudge; fold, then continue your work.`;
 
 export function doctrinePrompt(): string {
   return [
@@ -46,6 +55,8 @@ export function doctrinePrompt(): string {
     TIER2_RULES,
     "",
     TIER3_RULES,
+    "",
+    RECOVERY_RULES,
     "",
     NUDE_RESPONSE,
   ].join("\n");

@@ -29,16 +29,16 @@ function makeBound(): BoundMessage[] {
 }
 
 function block(id: string, ranges: Block["ranges"], tier: 1 | 2 | 3 = 1): Block {
-  return { id, tier, ranges, topic: "topic", summary: "summary", children: [], superseded: false, tokensBefore: 0, tokensAfter: 0, createdAt: 0 };
+  return { id, tier, ranges, topic: "topic", summary: "summary", children: [], status: "active", consumedBy: null, anchorRef: null, tokensBefore: 0, tokensAfter: 0, createdAt: 0 };
 }
 
 const makeFold = (text: string, blockId: string) => ({ role: "custom", customType: "origami:fold", text, blockId });
 
 describe("renderBlockText", () => {
   it("emits byte-exact tier headers", () => {
-    expect(renderBlockText(block("b1", [], 1))).toBe("[Compressed conversation section] — topic\nsummary");
-    expect(renderBlockText(block("b2", [], 2))).toBe("[Distilled conversation summary] — topic\nsummary");
-    expect(renderBlockText(block("b3", [], 3))).toBe("[Ultra-condensed conversation summary] — topic\nsummary");
+    expect(renderBlockText(block("b1", [{ start: "m00004", end: "m00009" }], 1))).toBe("[Compressed conversation section] b1 (m00004..m00009) — topic\nsummary");
+    expect(renderBlockText(block("b2", [{ start: "m00004", end: "m00004" }, { start: "m00007", end: "m00008" }], 2))).toBe("[Distilled conversation summary] b2 (m00004,m00007..m00008) — topic\nsummary");
+    expect(renderBlockText(block("b3", [], 3))).toBe("[Ultra-condensed conversation summary] b3 — topic\nsummary");
     expect(TIER_HEADERS[1]).toBe("[Compressed conversation section]");
     expect(TIER_HEADERS[2]).toBe("[Distilled conversation summary]");
     expect(TIER_HEADERS[3]).toBe("[Ultra-condensed conversation summary]");

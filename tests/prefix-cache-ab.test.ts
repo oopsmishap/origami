@@ -64,13 +64,14 @@ describe("Prefix Cache A/B Simulation", () => {
       projectedTokens: () => entries.length * 100,
     };
 
-    const config = configFromPreset("balanced");
+    const config = { ...configFromPreset("balanced"), minFoldBenefitTokens: 0, minFoldBenefitWindowPct: 0 };
     // Configure aggressive fold cadence for simulation: fold whenever 6 messages accumulate
     const engine = new OrigamiEngine({
       host,
       entries,
       modelId: "test-model",
-      config: { ...config, growthStep: 600 },
+      // Tiny synthetic turns: protect the last 5 messages by count, not the 5K-token floor.
+      config: { ...config, growthStep: 600, protectedTailTokens: 0 },
       countFn: (text) => text.length,
     });
 

@@ -9,7 +9,8 @@ export type KernelRole =
 export interface KernelMessage {
   role: KernelRole;
   toolCallId?: string;
-  toolCallIds?: string[];
+  /** Tool calls an assistant message makes (id and tool name). */
+  toolCalls?: { id: string; name: string }[];
   contentHash: string;
   signedThinking: boolean;
   text: string;
@@ -28,17 +29,30 @@ export interface RefRange {
   end: string;
 }
 
+/**
+ * Block lifecycle:
+ * - `active`: rendered in place of the refs it covers.
+ * - `consumed`: folded into a higher block (`consumedBy`); not rendered.
+ * - `unfolded`: explicitly restored; its covered content renders as children or raw messages.
+ */
+export type BlockStatus = "active" | "consumed" | "unfolded";
+
 export interface Block {
   id: string;
   tier: 1 | 2 | 3;
+  /** Effective message ranges: everything this block stands in for, including consumed children. */
   ranges: RefRange[];
   topic: string;
   summary: string;
+  /** Direct child block ids consumed by this block. */
   children: string[];
-  superseded: boolean;
+  status: BlockStatus;
+  consumedBy: string | null;
   tokensBefore: number;
   tokensAfter: number;
   createdAt: number;
+  /** Newest message ref present when the fold happened; baseline for growth accounting. */
+  anchorRef: string | null;
 }
 
 export function parseRef(ref: string): number {

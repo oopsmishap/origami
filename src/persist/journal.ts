@@ -41,10 +41,13 @@ function parseBlock(value: unknown): Block | null {
     topic: strOr(value.topic, ""),
     summary: strOr(value.summary, ""),
     children: Array.isArray(value.children) ? (value.children as string[]) : [],
-    superseded: value.superseded === true,
+    // Lifecycle is derived by replaying ops; a logged block always starts active.
+    status: "active",
+    consumedBy: null,
     tokensBefore: numOr(value.tokensBefore, 0),
     tokensAfter: numOr(value.tokensAfter, 0),
     createdAt: numOr(value.createdAt, Date.now()),
+    anchorRef: typeof value.anchorRef === "string" && /^m\d{5,}$/.test(value.anchorRef) ? value.anchorRef : null,
   };
 }
 

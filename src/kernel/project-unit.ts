@@ -7,6 +7,8 @@ export interface ProjectUnitInput {
   foldedRefs: ReadonlySet<string>;
   pinnedHeadRef: string | null;
   activeTurn: number;
+  /** Turns at or after this one are the protected recent tail. Defaults to `activeTurn`. */
+  protectedFromTurn?: number;
 }
 
 export interface ProjectedSpan {
@@ -60,6 +62,7 @@ function compressToRanges(bound: readonly BoundMessage[], indices: readonly numb
 
 export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
   const { bound, ranges, foldedRefs, pinnedHeadRef, activeTurn } = input;
+  const protectedFromTurn = Math.min(activeTurn, input.protectedFromTurn ?? activeTurn);
   if (ranges.length === 0) return { ok: false, error: "empty range" };
 
   const membersByTurn = new Map<number, number[]>();
@@ -81,17 +84,20 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
   let splits = 0;
   let headHit = false;
   let turnHit = false;
+  let tailHit = false;
 
   for (const turn of touchedTurns) {
     const members = membersByTurn.get(turn) ?? [];
     const inSpan = members.filter((i) => spanHits(bound[i]!.ref, ranges));
     const hasHead = pinnedHeadRef !== null && members.some((i) => bound[i]!.ref === pinnedHeadRef);
     const isInFlight = turn === activeTurn;
+    const isTail = turn >= protectedFromTurn;
 
-    if (hasHead || isInFlight) {
+    if (hasHead || isInFlight || isTail) {
       if (inSpan.length === members.length) {
         if (hasHead) headHit = true;
-        else turnHit = true;
+        else if (isInFlight) turnHit = true;
+        else tailHit = true;
       } else {
         splits++;
       }
@@ -104,6 +110,7 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
   if (splits > 0) return { ok: false, error: `range splits ${splits} turn(s)` };
   if (headHit) return { ok: false, error: "range inside protected head" };
   if (turnHit) return { ok: false, error: "range includes current in-flight turn" };
+  if (tailHit) return { ok: false, error: `range includes protected recent tail (turn ${protectedFromTurn} onward)` };
   if (selected.size === 0) return { ok: false, error: "range matches no messages" };
 
   const indices = [...selected].sort((a, b) => a - b);
@@ -129,18 +136,45 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
   };
 }
 
-export function protectedZoneMap(
+/**
+ * First turn of the protected recent tail: walk back from the newest message until at
+ * least `minMessages` messages AND `minTokens` tokens are covered, then widen to the
+ * whole turn. Never later than `activeTurn`.
+ */
+export function protectedTailTurn(
   bound: readonly BoundMessage[],
   activeTurn: number,
+  minMessages: number,
+  minTokens: number,
+  tokensOf: (m: BoundMessage) => number,
+): number {
+  let messages = 0;
+  let tokens = 0;
+  let turn = activeTurn;
+  for (let i = bound.length - 1; i >= 0; i--) {
+    if (messages >= minMessages && tokens >= minTokens) break;
+    const m = bound[i]!;
+    if (m.ephemeral) continue;
+    messages++;
+    tokens += tokensOf(m);
+    if (m.turn < turn) turn = m.turn;
+  }
+  return turn;
+}
+
+export function protectedZoneMap(
+  bound: readonly BoundMessage[],
+  protectedFromTurn: number,
   foldedRefs: ReadonlySet<string>,
   pinnedHeadRef: string | null,
 ) {
   type Zone = { kind: "protected" | "compressible" | "folded"; start: string; end: string };
   const zones: Zone[] = [];
   let run: Zone | null = null;
+  const headTurn = pinnedHeadRef !== null ? pinnedHeadTurn(bound, pinnedHeadRef) : -1;
   for (const m of bound) {
-    const pinnedTurn = pinnedHeadRef !== null && m.turn === pinnedHeadTurn(bound, pinnedHeadRef);
-    const kind = m.ephemeral || m.turn === activeTurn || pinnedTurn ? "protected" : foldedRefs.has(m.ref) ? "folded" : "compressible";
+    const pinnedTurn = pinnedHeadRef !== null && m.turn === headTurn;
+    const kind = m.ephemeral || m.turn >= protectedFromTurn || pinnedTurn ? "protected" : foldedRefs.has(m.ref) ? "folded" : "compressible";
     if (run && run.kind === kind) {
       if (!run.start && m.ref) run.start = m.ref;
       if (m.ref) run.end = m.ref;

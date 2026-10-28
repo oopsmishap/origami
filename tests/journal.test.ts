@@ -4,7 +4,7 @@ import { BlockTree } from "../src/kernel/blocks.ts";
 import type { Block } from "../src/kernel/types.ts";
 
 function block(id: string, ranges: Block["ranges"], tier: 1 | 2 | 3 = 1): Block {
-  return { id, tier, ranges, topic: `topic-${id}`, summary: `summary-${id}`, children: [], superseded: false, tokensBefore: 100, tokensAfter: 10, createdAt: 5 };
+  return { id, tier, ranges, topic: `topic-${id}`, summary: `summary-${id}`, children: [], status: "active", consumedBy: null, anchorRef: null, tokensBefore: 100, tokensAfter: 10, createdAt: 5 };
 }
 
 function entry(data: unknown): { type: string; customType: string; data: unknown } {
@@ -52,7 +52,6 @@ describe("BlockTree rebuild", () => {
     const live = new BlockTree();
     live.rebuild(ops);
     expect(live.live().map((b) => b.id)).toEqual(["b1", "b2"]);
-    expect(live.nextId()).toBe("b3");
     expect([...live.foldedRefs()]).toEqual(["m00001", "m00002", "m00003", "m00004", "m00005", "m00006"]);
 
     const rebuilt = new BlockTree();
@@ -61,21 +60,34 @@ describe("BlockTree rebuild", () => {
     expect([...rebuilt.foldedRefs()]).toEqual([...live.foldedRefs()]);
   });
 
-  it("unfold reactivates refs and supersedes the block", () => {
+  it("unfold reactivates refs and marks the block unfolded", () => {
     const tree = new BlockTree();
     tree.rebuild([makeFoldOp(block("b1", [{ start: "m00001", end: "m00003" }])), makeUnfoldOp("b1")]);
     expect(tree.live().length).toBe(0);
     expect(tree.foldedRefs().size).toBe(0);
-    expect(tree.get("b1")!.superseded).toBe(true);
+    expect(tree.get("b1")!.status).toBe("unfolded");
   });
 
-  it("unfold supersedes parents listing the block as child", () => {
-    const parent = block("b1", [{ start: "m00001", end: "m00002" }]);
-    parent.children = ["b2"];
+  it("a parent fold consumes its children and unfolding it restores them", () => {
+    const parent = block("b3", [{ start: "m00001", end: "m00004" }], 2);
+    parent.children = ["b1", "b2"];
+    const ops = [
+      makeFoldOp(block("b1", [{ start: "m00001", end: "m00002" }])),
+      makeFoldOp(block("b2", [{ start: "m00003", end: "m00004" }])),
+      makeFoldOp(parent),
+    ];
     const tree = new BlockTree();
-    tree.rebuild([makeFoldOp(parent), makeFoldOp(block("b2", [{ start: "m00003", end: "m00004" }])), makeUnfoldOp("b2")]);
-    expect(tree.get("b1")!.superseded).toBe(true);
-    expect(tree.get("b2")!.superseded).toBe(true);
-    expect(tree.live().length).toBe(0);
+    tree.rebuild(ops);
+    expect(tree.live().map((b) => b.id)).toEqual(["b3"]);
+    expect(tree.get("b1")!.consumedBy).toBe("b3");
+
+    // A consumed child cannot be unfolded out from under its parent.
+    tree.apply(makeUnfoldOp("b1"));
+    expect(tree.get("b1")!.status).toBe("consumed");
+
+    tree.apply(makeUnfoldOp("b3"));
+    expect(tree.live().map((b) => b.id)).toEqual(["b1", "b2"]);
+    expect(tree.get("b1")!.consumedBy).toBeNull();
+    expect(tree.get("b3")!.status).toBe("unfolded");
   });
 });

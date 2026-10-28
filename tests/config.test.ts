@@ -5,9 +5,9 @@ const balanced = () => configFromPreset("balanced");
 
 describe("presets", () => {
   it("locks the three preset values", () => {
-    expect(PRESETS.balanced).toEqual({ growthStep: 50000, compressibleFloor: 22500, emergencyFillPct: 0.85, elideFillPct: 0.95 });
-    expect(PRESETS.lean).toEqual({ growthStep: 20000, compressibleFloor: 10000, emergencyFillPct: 0.8, elideFillPct: 0.92 });
-    expect(PRESETS.relaxed).toEqual({ growthStep: 100000, compressibleFloor: 40000, emergencyFillPct: 0.9, elideFillPct: 0.97 });
+    expect(PRESETS.balanced).toEqual({ growthStep: 50000, compressibleFloor: 22500, emergencyFillPct: 0.85, elideFillPct: 0.95, protectedTailMessages: 5, protectedTailTokens: 5000, tier2MassTokens: 15000, tier3MassTokens: 22500, minFoldBenefitTokens: 5000, minFoldBenefitWindowPct: 0.01, blockMatureFolds: 2 });
+    expect(PRESETS.lean).toEqual({ growthStep: 20000, compressibleFloor: 10000, emergencyFillPct: 0.8, elideFillPct: 0.92, protectedTailMessages: 4, protectedTailTokens: 3000, tier2MassTokens: 8000, tier3MassTokens: 12000, minFoldBenefitTokens: 2000, minFoldBenefitWindowPct: 0.005, blockMatureFolds: 1 });
+    expect(PRESETS.relaxed).toEqual({ growthStep: 100000, compressibleFloor: 40000, emergencyFillPct: 0.9, elideFillPct: 0.97, protectedTailMessages: 8, protectedTailTokens: 10000, tier2MassTokens: 30000, tier3MassTokens: 45000, minFoldBenefitTokens: 10000, minFoldBenefitWindowPct: 0.01, blockMatureFolds: 3 });
   });
 
   it("completes each preset into a full config", () => {

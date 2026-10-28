@@ -1,4 +1,4 @@
-import type { BoundMessage, KernelMessage, RefRange } from "./types.ts";
+import type { BoundMessage, KernelMessage } from "./types.ts";
 import { parseRef } from "./types.ts";
 import { BlockTree } from "./blocks.ts";
 import type { CountFn } from "./tokens.ts";
@@ -74,34 +74,27 @@ export class SessionState {
     return this.tree.foldedRefs();
   }
 
-  growthSinceFold(activeTurn: number): number {
-    const newest = this.tree.newestLive();
-    const anchorRef = newest ? parseRef(this.blockAnchor(newest.ranges)) : 0;
-    let total = 0;
-    for (const m of this.cachedBound) {
-      if (m.ephemeral || m.turn === activeTurn) continue;
-      if (parseRef(m.ref) > anchorRef) total += this.ledger.countMessage(m);
-    }
-    return total;
-  }
-
-  compressibleTokens(activeTurn: number): number {
+  /** Live (unfolded, not hidden) tokens that arrived after the most recent fold event. */
+  growthSinceFold(activeTurn: number, hidden: ReadonlySet<string> = NO_REFS): number {
+    const anchor = this.tree.latestFoldAnchor();
     const folded = this.foldedRefs();
     let total = 0;
     for (const m of this.cachedBound) {
-      if (m.ephemeral || folded.has(m.ref) || m.turn === activeTurn) continue;
-      total += this.ledger.countMessage(m);
+      if (m.ephemeral || m.turn === activeTurn || folded.has(m.ref) || hidden.has(m.ref)) continue;
+      if (parseRef(m.ref) > anchor) total += this.ledger.countMessage(m);
     }
     return total;
   }
 
-  private blockAnchor(ranges: readonly RefRange[]): string {
-    let min = Number.MAX_SAFE_INTEGER;
-    for (const r of ranges) {
-      const s = parseRef(r.start);
-      if (s < min) min = s;
+  /** Live tokens eligible for folding: everything older than the protected recent tail. */
+  compressibleTokens(protectedFromTurn: number, hidden: ReadonlySet<string> = NO_REFS): number {
+    const folded = this.foldedRefs();
+    let total = 0;
+    for (const m of this.cachedBound) {
+      if (m.ephemeral || folded.has(m.ref) || hidden.has(m.ref) || m.turn >= protectedFromTurn) continue;
+      total += this.ledger.countMessage(m);
     }
-    return min === Number.MAX_SAFE_INTEGER ? "" : `m${String(min).padStart(5, "0")}`;
+    return total;
   }
 
   tokensFor(refs: readonly string[]): number {
@@ -114,3 +107,5 @@ export class SessionState {
     return total;
   }
 }
+
+const NO_REFS: ReadonlySet<string> = new Set();

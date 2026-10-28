@@ -47,6 +47,11 @@ export function messageFacts(message: unknown): KernelMessage | null {
 
   const text = canonicalText(message.content);
   const toolCallId = typeof message.toolCallId === "string" ? message.toolCallId : undefined;
+  const toolCalls = Array.isArray(message.content)
+    ? message.content
+        .filter((b) => isRecord(b) && b.type === "toolCall")
+        .map((b) => ({ id: strOr((b as Record<string, unknown>).id, ""), name: strOr((b as Record<string, unknown>).name, "") }))
+    : [];
   const signedThinking =
     Array.isArray(message.content) &&
     message.content.some(
@@ -60,5 +65,6 @@ export function messageFacts(message: unknown): KernelMessage | null {
     bytes: new TextEncoder().encode(text).length,
     signedThinking,
     toolCallId,
+    ...(toolCalls.length > 0 ? { toolCalls } : {}),
   };
 }

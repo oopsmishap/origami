@@ -43,7 +43,8 @@ describe("Fold/unfold round-trip", () => {
       entries: () => entries,
     };
 
-    const config = configFromPreset("balanced");
+    // Recent-tail protection off: this fixture folds turn 2 of a 4-turn session.
+    const config = { ...configFromPreset("balanced"), protectedTailMessages: 0, protectedTailTokens: 0, minFoldBenefitTokens: 0, minFoldBenefitWindowPct: 0 };
     const engine = new OrigamiEngine({
       host,
       entries,
@@ -131,7 +132,7 @@ describe("Fold/unfold round-trip", () => {
     expect(journal.length).toBe(2);
     expect(journal[1]!.op).toBe("unfold");
 
-    // Re-render after inline unfold: block is superseded, original messages restored
+    // Re-render after inline unfold: block is unfolded, original messages restored
     const unfoldedRender = engine.render(entries.map((e) => e.message), makeFold);
     expect(unfoldedRender.length).toBe(8);
 

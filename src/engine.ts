@@ -1,13 +1,16 @@
-import type { Block, KernelMessage, RefRange } from "./kernel/types.ts";
+import type { Block, BlockStatus, KernelMessage, RefRange } from "./kernel/types.ts";
 import { formatRef, parseRangeSpec, parseRef } from "./kernel/types.ts";
 import { messageFacts } from "./kernel/message-facts.ts";
 import { SessionState } from "./kernel/state.ts";
 import type { SessionEntryLike } from "./kernel/state.ts";
-import { projectUnit, protectedZoneMap } from "./kernel/project-unit.ts";
-import type { ProjectUnitOk, ProjectUnitResult } from "./kernel/project-unit.ts";
+import { projectUnit, protectedTailTurn, protectedZoneMap } from "./kernel/project-unit.ts";
+import { checkInvariants, renderableBlocks } from "./kernel/invariants.ts";
+import { hiddenFoldCalls } from "./kernel/fold-calls.ts";
+import type { InvariantViolation } from "./kernel/invariants.ts";
+import type { ProjectUnitResult } from "./kernel/project-unit.ts";
 import { planRender, applyRender, expandRefRange, foldCoverageStats, renderBlockText } from "./kernel/render.ts";
 import type { RenderOp } from "./kernel/render.ts";
-import { decideNudge, formatTokens, recommendRanges } from "./kernel/nudge.ts";
+import { decideNudge, formatTokens, promotionCandidates, recommendRanges } from "./kernel/nudge.ts";
 import type { NudgeDecision, NudgeRange } from "./kernel/nudge.ts";
 import { planElision, selectElideCandidates, elideLabel } from "./kernel/guard.ts";
 import type { ElideCandidate } from "./kernel/guard.ts";
@@ -66,7 +69,11 @@ export interface StatusBlockRow {
   topic: string;
   summary: string;
   children: string[];
-  superseded: boolean;
+  status: BlockStatus;
+  consumedBy: string | null;
+  /** Fold calls made after this block's own: blocks become merge candidates once mature. */
+  survivedFolds: number;
+  generation: "young" | "old";
   createdAt: number;
 }
 
@@ -101,6 +108,9 @@ export interface StatusReport {
   folded: number;
   live: number;
   nudgeKind: string;
+  /** First turn of the protected recent tail (never foldable). */
+  protectedFromTurn: number;
+  invariantViolations: InvariantViolation[];
 }
 
 export interface CacheRound {
@@ -116,8 +126,20 @@ export interface FoldSearchHit {
   sessionId: string;
   tier: number;
   topic: string;
+  status: string;
   snippet: string;
   rank: number;
+}
+
+export interface FoldMessageHit {
+  sessionId: string;
+  ref: string;
+  role: string;
+  turn: number;
+  snippet: string;
+  rank: number;
+  /** False when the hit came from another session's archive (not recallable here). */
+  ownSession: boolean;
 }
 
 export function parseRangeList(spec: string): RefRange[] {
@@ -154,6 +176,7 @@ interface MessageRow {
   ephemeral: boolean;
   turn: number;
   tokens: number;
+  tool: boolean;
 }
 
 export class OrigamiEngine {
@@ -163,10 +186,14 @@ export class OrigamiEngine {
   private db: OrigamiDb | null = null;
   private nudgedThisTurn = false;
   private activeTurn = 1;
+  private protectedFromTurn = 1;
+  private hiddenRefs: ReadonlySet<string> = new Set();
   private pinnedHeadRef: string | null = null;
   private lastNudge: NudgeDecision = { kind: null, text: null };
   private activeNudge: string | null = null;
   private pendingFoldAttribution: string | null = null;
+  private lastEfficiencyAtGrowth: number | null = null;
+  private lastPromotionAtMass: { 1: number | null; 2: number | null } = { 1: null, 2: null };
   get sessionId(): string {
     return this.host.sessionId();
   }
@@ -200,6 +227,24 @@ export class OrigamiEngine {
     this.activeTurn = turns.length > 0 ? Math.max(...turns) : 1;
     const head = bound.find((m) => !m.ephemeral);
     this.pinnedHeadRef = head ? head.ref : null;
+    const tailTurn = protectedTailTurn(
+      bound,
+      this.activeTurn,
+      this.config.protectedTailMessages,
+      this.config.protectedTailTokens,
+      (m) => this.state.ledger.countMessage(m),
+    );
+    // The latest user instruction stays verbatim even when custom messages opened later turns.
+    let lastUserTurn = this.activeTurn;
+    for (let i = bound.length - 1; i >= 0; i--) {
+      const m = bound[i]!;
+      if (!m.ephemeral && m.role === "user") {
+        lastUserTurn = m.turn;
+        break;
+      }
+    }
+    this.protectedFromTurn = Math.min(tailTurn, lastUserTurn);
+    this.hiddenRefs = hiddenFoldCalls(bound, this.protectedFromTurn);
   }
 
   get bound() {
@@ -216,7 +261,8 @@ export class OrigamiEngine {
       ref: m.ref,
       ephemeral: m.ephemeral,
       turn: m.turn,
-      tokens: this.state.ledger.countMessage(m),
+      tokens: this.hiddenRefs.has(m.ref) ? 0 : this.state.ledger.countMessage(m),
+      tool: m.role === "toolResult",
     }));
   }
 
@@ -224,10 +270,16 @@ export class OrigamiEngine {
     return recommendRanges({
       bound: this.messageRows(),
       foldedRefs: this.state.foldedRefs(),
-      activeTurn: this.activeTurn,
+      protectedFromTurn: this.protectedFromTurn,
       pinnedHeadRef: this.pinnedHeadRef,
       maxRanges,
     });
+  }
+
+  /** Smallest reclaim worth a fold call: below this, the cache rewrite costs more than it saves. */
+  minFoldBenefit(): number {
+    const window = this.host.windowTokens();
+    return Math.max(this.config.minFoldBenefitTokens, Math.round(this.config.minFoldBenefitWindowPct * Math.max(0, window)));
   }
 
   decideNudge(): NudgeDecision {
@@ -235,17 +287,22 @@ export class OrigamiEngine {
     const projected = this.host.projectedTokens();
     const decision = decideNudge(
       {
-        growthSinceFoldTokens: this.state.growthSinceFold(this.activeTurn),
-        compressibleTokens: this.state.compressibleTokens(this.activeTurn),
+        growthSinceFoldTokens: this.state.growthSinceFold(this.activeTurn, this.hiddenRefs),
+        compressibleTokens: this.state.compressibleTokens(this.protectedFromTurn, this.hiddenRefs),
         windowFillPct: window > 0 ? projected / window : 0,
         nudgedThisTurn: this.nudgedThisTurn,
+        lastEfficiencyAtGrowth: this.lastEfficiencyAtGrowth,
+        lastPromotionAtMass: this.lastPromotionAtMass,
       },
       this.recommendedRanges(),
-      this.config,
+      promotionCandidates(this.state.tree.live(), this.state.tree.foldAges(), this.config.blockMatureFolds),
+      { ...this.config, minFoldBenefit: this.minFoldBenefit() },
     );
     if (decision.text) {
       this.activeNudge = decision.text;
       this.nudgedThisTurn = true;
+      if (decision.kind === "efficiency") this.lastEfficiencyAtGrowth = this.state.growthSinceFold(this.activeTurn, this.hiddenRefs);
+      if (decision.promotion) this.lastPromotionAtMass[decision.promotion.fromTier] = decision.promotion.tokens;
     } else if (!this.nudgedThisTurn) {
       this.activeNudge = null;
     }
@@ -270,6 +327,7 @@ export class OrigamiEngine {
         foldedRefs: this.state.foldedRefs(),
         pinnedHeadRef: this.pinnedHeadRef,
         activeTurn: this.activeTurn,
+        protectedFromTurn: this.protectedFromTurn,
       });
     }
     return this.projectBlocks(parseBlockRangeList(spec));
@@ -280,7 +338,7 @@ export class OrigamiEngine {
     for (const id of ids) {
       const block = this.state.tree.get(id);
       if (!block) return { ok: false, error: `unknown block: ${id}` };
-      if (block.superseded) return { ok: false, error: `block not live: ${id}` };
+      if (block.status !== "active") return { ok: false, error: `block ${id} is ${block.status}${block.consumedBy ? ` by ${block.consumedBy}` : ""}; only active blocks can be folded` };
       ranges.push(...block.ranges);
     }
     if (ranges.length === 0) return { ok: false, error: "empty range" };
@@ -298,104 +356,276 @@ export class OrigamiEngine {
 
   executeFold(params: FoldParams): FoldResult {
     const tier = params.tier ?? 1;
-    const planned: { spec: FoldSpec; projection: ProjectUnitOk; block: Block; children: string[] }[] = [];
+    if (params.folds.length === 0) return { ok: false, error: "no folds given", foldIndex: 0 };
+    const tree = this.state.tree;
+    const folded = this.state.foldedRefs();
+    const anchorRef = this.newestRef();
+    const claimedRefs = new Map<string, number>();
+    const claimedChildren = new Map<string, number>();
+    let ordinal = this.nextBlockOrdinal();
+    const planned: { block: Block; refs: string[] }[] = [];
 
+    // Validate the whole batch against the pre-mutation state before writing anything:
+    // a batch either applies completely or not at all.
     for (let i = 0; i < params.folds.length; i++) {
       const spec = params.folds[i]!;
-      let children: string[] = [];
-      let projection: ProjectUnitResult;
-      try {
-        if (tier === 1) {
-          projection = this.project(spec.range, 1);
-        } else {
-          children = parseBlockRangeList(spec.range);
-          projection = this.project(spec.range, tier);
-        }
-      } catch (e) {
-        return { ok: false, error: e instanceof Error ? e.message : String(e), foldIndex: i };
-      }
-      if (!projection.ok) return { ok: false, error: projection.error, foldIndex: i };
+      const fail = (error: string): FoldError => ({ ok: false, error, foldIndex: i });
+      const topic = (spec.topic ?? "").trim();
+      const summary = (spec.summary ?? "").trim();
+      if (!topic) return fail("topic must not be empty");
+      if (!summary) return fail("summary must not be empty");
 
-      const tokensBefore = projection.projected.tokens || this.state.tokensFor(projection.projected.refs);
-      const id = `b${this.state.tree.all().length + 1 + planned.length}`;
+      let projection: ProjectUnitResult;
+      let children: string[] = [];
+      try {
+        if (tier > 1) children = [...new Set(parseBlockRangeList(spec.range))];
+        projection = this.project(spec.range, tier);
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : String(e));
+      }
+      if (!projection.ok) return fail(projection.error);
+
+      let refs: string[];
+      let ranges: RefRange[];
+      let replacedTokens: number;
+      let tokensBefore: number;
+      if (tier === 1) {
+        // Refs already owned by an active block stay with that block: the new block
+        // covers only unfolded sources, so nothing is represented twice.
+        refs = projection.projected.refs.filter((r) => !folded.has(r));
+        if (refs.length === 0) return fail("range covers only already-folded messages");
+        ranges = rangesFromRefs(refs);
+        tokensBefore = this.state.tokensFor(refs.filter((r) => !this.hiddenRefs.has(r)));
+        replacedTokens = tokensBefore;
+      } else {
+        for (const childId of children) {
+          const child = tree.get(childId)!;
+          if (child.tier >= tier) return fail(`block ${childId} is tier ${child.tier}; a tier-${tier} fold only merges lower-tier blocks`);
+          const prior = claimedChildren.get(childId);
+          if (prior !== undefined) return fail(`block ${childId} is already merged by fold ${prior} in this batch`);
+        }
+        if (children.length < 2) return fail(`a tier-${tier} fold must merge at least 2 blocks`);
+        refs = projection.projected.refs;
+        ranges = projection.projected.ranges;
+        const kids = children.map((c) => tree.get(c)!);
+        tokensBefore = kids.reduce((s, b) => s + b.tokensBefore, 0);
+        replacedTokens = kids.reduce((s, b) => s + b.tokensAfter, 0);
+      }
+      for (const ref of refs) {
+        const prior = claimedRefs.get(ref);
+        if (prior !== undefined) return fail(`overlaps fold ${prior} in this batch at ${ref}`);
+      }
+
+      const tokensAfter = this.state.ledger.countText(`${topic}\n${summary}`);
+      if (tokensAfter >= replacedTokens) {
+        return fail(`summary (${tokensAfter}t) is not smaller than what it replaces (${replacedTokens}t)`);
+      }
+
+      for (const ref of refs) claimedRefs.set(ref, i);
+      for (const c of children) claimedChildren.set(c, i);
+      let id = `b${ordinal++}`;
+      while (tree.get(id)) id = `b${ordinal++}`;
       planned.push({
-        spec,
-        projection,
-        children,
+        refs,
         block: {
           id,
           tier,
-          ranges: projection.projected.ranges,
-          topic: spec.topic,
-          summary: spec.summary,
+          ranges,
+          topic,
+          summary,
           children,
-          superseded: false,
+          status: "active",
+          consumedBy: null,
+          anchorRef,
           tokensBefore,
-          tokensAfter: this.state.ledger.countText(`${spec.topic}\n${spec.summary}`),
+          tokensAfter,
           createdAt: Date.now(),
         },
       });
     }
 
+    // Folding rewrites the cached prefix; a tiny tier-1 reclaim costs more than it saves.
+    // Merges are gated by the mass nudges instead, and an emergency always folds.
+    if (tier === 1) {
+      const floor = this.minFoldBenefit();
+      const total = planned.reduce((s, p) => s + Math.max(0, p.block.tokensBefore - p.block.tokensAfter), 0);
+      const window = this.host.windowTokens();
+      const emergency = window > 0 && this.host.projectedTokens() / window >= this.config.emergencyFillPct;
+      if (floor > 0 && total < floor && !emergency) {
+        return {
+          ok: false,
+          error: `batch reclaims ~${formatTokens(total)}t, below the minimum fold benefit of ${formatTokens(floor)}t; fold more finished work at once or defer`,
+          foldIndex: 0,
+        };
+      }
+    }
+
     const created: FoldCreatedBlock[] = [];
     let reclaimed = 0;
     for (const p of planned) {
+      const replaced = p.block.tier === 1 ? p.block.tokensBefore : p.block.children.reduce((s, c) => s + (tree.get(c)?.tokensAfter ?? 0), 0);
+      if (p.block.tier === 1) this.archiveOriginals(p.refs);
       this.host.appendEvent(makeFoldOp(p.block));
-      this.state.tree.apply({ op: "fold", block: p.block });
-      if (this.db) {
-        this.db.insertBlock({
-          session_id: this.host.sessionId(),
-          block_id: p.block.id,
-          tier: p.block.tier,
-          topic: p.block.topic,
-          summary: p.block.summary,
-          body: blockBodyForIndex(p.block),
-          tokens_before: p.block.tokensBefore,
-          tokens_after: p.block.tokensAfter,
-          created_at: p.block.createdAt,
-        });
-      }
+      tree.apply({ op: "fold", block: p.block });
+      this.persistBlock(tree.get(p.block.id)!);
+      for (const c of p.block.children) this.persistStatus(c);
       created.push({
         id: p.block.id,
         tier: p.block.tier,
-        refs: p.projection.projected.refs,
+        refs: p.refs,
         tokensBefore: p.block.tokensBefore,
         tokensAfter: p.block.tokensAfter,
         topic: p.block.topic,
       });
-      reclaimed += Math.max(0, p.block.tokensBefore - p.block.tokensAfter);
+      reclaimed += Math.max(0, replaced - p.block.tokensAfter);
     }
 
-    if (created.length > 0) {
-      this.pendingFoldAttribution = created[created.length - 1]!.id;
-      this.activeNudge = null;
-    }
+    this.pendingFoldAttribution = created[created.length - 1]!.id;
+    this.activeNudge = null;
+    // A fold answers the outstanding nudge: growth re-anchors, and a merge resets its tier's mass backoff.
+    this.lastEfficiencyAtGrowth = null;
+    if (tier > 1) this.lastPromotionAtMass[(tier - 1) as 1 | 2] = null;
     return {
       ok: true,
       outcome: { blocks: created, tokensReclaimed: reclaimed, foldCount: created.length },
     };
   }
-  archiveText(ranges: readonly RefRange[]): string {
-    const bound = this.state.bound;
-    const parts: string[] = [];
-    for (const m of bound) {
-      if (m.ephemeral) continue;
-      const n = parseRef(m.ref);
-      const covered = ranges.some((r) => n >= parseRef(r.start) && n <= parseRef(r.end));
-      if (covered) parts.push(`[#${m.ref}] ${m.text}`);
+
+  /** Newest non-ephemeral ref currently bound (the fold-time anchor for growth). */
+  private newestRef(): string | null {
+    let best = 0;
+    for (const m of this.state.bound) {
+      if (m.ephemeral || !/^m\d{5,}$/.test(m.ref)) continue;
+      best = Math.max(best, parseRef(m.ref));
     }
-    return parts.join("\n\n");
+    return best > 0 ? formatRef(best) : null;
   }
 
-  executeUnfold(id: string): { ok: true; block: Block; refs: string[] } | { ok: false; error: string } {
-    const block = this.state.tree.get(id);
+  private nextBlockOrdinal(): number {
+    let max = 0;
+    for (const b of this.state.tree.all()) {
+      const n = Number.parseInt(b.id.replace(/^b/, ""), 10);
+      if (Number.isInteger(n) && n > max) max = n;
+    }
+    return max + 1;
+  }
+
+  /** Copy folded originals into the durable store so unfold/recall work off-branch. */
+  private archiveOriginals(refs: readonly string[]): void {
+    if (!this.db) return;
+    const want = new Set(refs);
+    const now = Date.now();
+    const rows = this.state.bound
+      .filter((m) => want.has(m.ref))
+      .map((m) => ({
+        session_id: this.host.sessionId(),
+        ref: m.ref,
+        role: m.role,
+        text: m.text,
+        turn: m.turn,
+        tokens: this.state.ledger.countMessage(m),
+        captured_at: now,
+      }));
+    if (rows.length > 0) this.db.archiveMessages(rows);
+  }
+
+  private persistBlock(b: Block): void {
+    if (!this.db) return;
+    this.db.insertBlock({
+      session_id: this.host.sessionId(),
+      block_id: b.id,
+      tier: b.tier,
+      topic: b.topic,
+      summary: b.summary,
+      body: blockBodyForIndex(b),
+      tokens_before: b.tokensBefore,
+      tokens_after: b.tokensAfter,
+      created_at: b.createdAt,
+      status: b.status,
+      consumed_by: b.consumedBy,
+      ranges: JSON.stringify(b.ranges),
+      children: JSON.stringify(b.children),
+    });
+  }
+
+  private persistStatus(id: string): void {
+    const b = this.state.tree.get(id);
+    if (!this.db || !b) return;
+    this.db.updateBlockStatus(this.host.sessionId(), b.id, b.status, b.consumedBy);
+  }
+
+  /**
+   * One clipped line per covered message: a mechanical summary for emergency archives.
+   * Full originals are kept in the durable archive (see `recall`), not in the summary.
+   */
+  archiveDigest(ranges: readonly RefRange[], perMessageChars = 160): string {
+    const parts: string[] = [];
+    for (const m of this.state.bound) {
+      if (m.ephemeral) continue;
+      const n = parseRef(m.ref);
+      if (!ranges.some((r) => n >= parseRef(r.start) && n <= parseRef(r.end))) continue;
+      const flat = m.text.replace(/\s+/g, " ").trim();
+      const clipped = flat.length > perMessageChars ? `${flat.slice(0, perMessageChars - 1)}…` : flat;
+      parts.push(`[#${m.ref}] ${m.role}: ${clipped}`);
+    }
+    return parts.join("\n");
+  }
+
+  /**
+   * Unfold an active block. Its direct children become active again (one level).
+   * With `deep`, every restored descendant is unfolded too, so the raw messages return.
+   */
+  executeUnfold(
+    id: string,
+    opts: { deep?: boolean } = {},
+  ): { ok: true; block: Block; refs: string[]; unfolded: string[] } | { ok: false; error: string } {
+    const tree = this.state.tree;
+    const block = tree.get(id);
     if (!block) return { ok: false, error: `unknown block: ${id}` };
-    if (block.superseded) return { ok: false, error: `block already unfolded: ${id}` };
+    if (block.status === "unfolded") return { ok: false, error: `block already unfolded: ${id}` };
+    if (block.status === "consumed") {
+      return { ok: false, error: `block ${id} is consumed by ${block.consumedBy}; unfold ${block.consumedBy} first` };
+    }
     const refs: string[] = [];
     for (const r of block.ranges) refs.push(...expandRefRange(r.start, r.end));
-    this.host.appendEvent(makeUnfoldOp(id));
-    this.state.tree.apply({ op: "unfold", id });
-    return { ok: true, block, refs };
+    const unfolded: string[] = [];
+    const queue = [id];
+    while (queue.length > 0) {
+      const next = tree.get(queue.shift()!)!;
+      this.host.appendEvent(makeUnfoldOp(next.id));
+      tree.apply({ op: "unfold", id: next.id });
+      unfolded.push(next.id);
+      this.persistStatus(next.id);
+      for (const c of next.children) {
+        const child = tree.get(c);
+        if (!child) continue;
+        this.persistStatus(c);
+        if (opts.deep && child.status === "active") queue.push(c);
+      }
+    }
+    return { ok: true, block, refs, unfolded };
+  }
+
+  /** Original text for refs: current branch first, durable archive for the rest. */
+  recall(refs: readonly string[]): { ref: string; role: string | null; text: string | null; source: "context" | "archive" | "missing" }[] {
+    const byRef = new Map(this.state.bound.map((m) => [m.ref, m]));
+    const missing = refs.filter((r) => !byRef.has(r));
+    const archived = new Map(
+      this.db && missing.length > 0 ? this.db.messagesForRefs(this.host.sessionId(), missing).map((r) => [r.ref, r]) : [],
+    );
+    return refs.map((ref) => {
+      const m = byRef.get(ref);
+      if (m) return { ref, role: m.role, text: m.text, source: "context" as const };
+      const a = archived.get(ref);
+      if (a) return { ref, role: a.role, text: a.text, source: "archive" as const };
+      return { ref, role: null, text: null, source: "missing" as const };
+    });
+  }
+
+  /** Structural violations; off-branch checks only once a branch view is bound. */
+  invariants(): InvariantViolation[] {
+    const bound = this.state.bound;
+    return checkInvariants(this.state.tree.all(), bound.length > 0 ? new Set(bound.map((m) => m.ref)) : undefined);
   }
 
   executeTier(id: string, tier: 1 | 2 | 3, topic: string, summary: string): { ok: true; block: Block } | { ok: false; error: string } {
@@ -438,7 +668,7 @@ export class OrigamiEngine {
     const occupancyPct =
       windowTokens > 0 ? Math.min(100, Math.round((usedTokens / windowTokens) * 100)) : 0;
 
-    const rawZones = protectedZoneMap(bound, this.activeTurn, foldedRefs, this.pinnedHeadRef);
+    const rawZones = protectedZoneMap(bound, this.protectedFromTurn, foldedRefs, this.pinnedHeadRef);
     const zones: StatusZoneRow[] = rawZones.map((z) => {
       const validStart = /^m\d{5,}$/.test(z.start);
       const validEnd = /^m\d{5,}$/.test(z.end);
@@ -484,6 +714,7 @@ export class OrigamiEngine {
       };
     });
 
+    const ages = this.state.tree.foldAges();
     return {
       occupancyPct,
       windowTokens,
@@ -498,9 +729,9 @@ export class OrigamiEngine {
         live: liveTokens,
         foldedSavings,
       },
-      growthSinceFold: this.state.growthSinceFold(this.activeTurn),
+      growthSinceFold: this.state.growthSinceFold(this.activeTurn, this.hiddenRefs),
       growthStep: this.config.growthStep,
-      compressibleTokens: this.state.compressibleTokens(this.activeTurn),
+      compressibleTokens: this.state.compressibleTokens(this.protectedFromTurn, this.hiddenRefs),
       compressibleFloor: this.config.compressibleFloor,
       blocks: this.state.tree.all().map((b) => ({
         id: b.id,
@@ -513,13 +744,18 @@ export class OrigamiEngine {
         topic: b.topic,
         summary: b.summary,
         children: [...b.children],
-        superseded: b.superseded,
+        status: b.status,
+        consumedBy: b.consumedBy,
+        survivedFolds: ages.get(b.id) ?? 0,
+        generation: (ages.get(b.id) ?? 0) >= this.config.blockMatureFolds ? ("old" as const) : ("young" as const),
         createdAt: b.createdAt,
       })),
       zones,
       folded: coverage.folded,
       live: coverage.live,
       nudgeKind: this.lastNudge.kind ?? "none",
+      protectedFromTurn: this.protectedFromTurn,
+      invariantViolations: this.invariants(),
     };
   }
 
@@ -555,8 +791,24 @@ export class OrigamiEngine {
       sessionId: r.session_id,
       tier: r.tier,
       topic: r.topic,
+      status: r.status,
       snippet: r.snippet,
       rank: r.rank,
+    }));
+  }
+
+  /** Ranked full-text search over archived original messages (populated when folds archive their sources). */
+  searchMessages(query: string, limit = 10): FoldMessageHit[] {
+    if (!this.db) return [];
+    const own = this.host.sessionId();
+    return this.db.searchMessages(query, limit).map((r) => ({
+      sessionId: r.session_id,
+      ref: r.ref,
+      role: r.role,
+      turn: r.turn,
+      snippet: r.snippet,
+      rank: r.rank,
+      ownSession: r.session_id === own,
     }));
   }
 
@@ -566,9 +818,11 @@ export class OrigamiEngine {
     const refs: string[] = [];
     for (const r of block.ranges) refs.push(...expandRefRange(r.start, r.end));
     const lines: string[] = [`# ${block.id} — ${block.topic}`, ""];
+    const recalled = new Map(this.recall(refs).map((r) => [r.ref, r]));
     for (const ref of refs) {
-      const m = this.state.bound.find((x) => x.ref === ref);
-      lines.push(`## ${ref}${m ? ` (${m.role})` : ""}`, m ? m.text : "<not in current branch view>", "");
+      const r = recalled.get(ref);
+      const label = r?.source === "archive" ? `${r.role}, archived` : r?.role;
+      lines.push(`## ${ref}${label ? ` (${label})` : ""}`, r?.text ?? "<not in current branch view or archive>", "");
     }
     const path = await this.host.saveArtifact(lines.join("\n"), `origami-unfold-${id}`);
     return {
@@ -630,8 +884,9 @@ export class OrigamiEngine {
 
     const ops: RenderOp[] = planRender({
       bound,
-      blocks: this.state.tree.live(),
+      blocks: renderableBlocks(this.state.tree.live()),
       pinnedHeadIndex,
+      hiddenRefs: this.hiddenRefs,
     });
     return applyRender(source, ops, makeFoldMessage);
   }
@@ -639,6 +894,18 @@ export class OrigamiEngine {
   renderBlock(block: Block): string {
     return renderBlockText(block);
   }
+}
+
+/** Compress sorted-or-not refs into contiguous ordinal ranges. */
+function rangesFromRefs(refs: readonly string[]): RefRange[] {
+  const nums = [...new Set(refs.map(parseRef))].sort((a, b) => a - b);
+  const out: RefRange[] = [];
+  for (const n of nums) {
+    const last = out[out.length - 1];
+    if (last && parseRef(last.end) === n - 1) last.end = formatRef(n);
+    else out.push({ start: formatRef(n), end: formatRef(n) });
+  }
+  return out;
 }
 
 function formatCoverage(ranges: readonly RefRange[]): string {

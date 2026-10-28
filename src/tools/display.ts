@@ -350,6 +350,7 @@ export function renderInlineToolResult(
 const callMemos = {
   fold: new OwnerMemo<NativeToolView>(),
   unfold: new OwnerMemo<NativeToolView>(),
+  recall: new OwnerMemo<NativeToolView>(),
   search: new OwnerMemo<NativeToolView>(),
   status: new OwnerMemo<NativeToolView>(),
   cache: new OwnerMemo<NativeToolView>(),
@@ -358,6 +359,7 @@ const callMemos = {
 const resultMemos = {
   fold: new OwnerMemo<NativeToolView>(),
   unfold: new OwnerMemo<NativeToolView>(),
+  recall: new OwnerMemo<NativeToolView>(),
   search: new OwnerMemo<NativeToolView>(),
   status: new OwnerMemo<NativeToolView>(),
   cache: new OwnerMemo<NativeToolView>(),
@@ -440,6 +442,35 @@ export function unfoldResultView(
         rows.length > 0
           ? [list(rows.map((r, i) => item(`ref-${i}`, { label: plainText(r) })))]
           : [],
+    };
+  });
+}
+
+export function recallCallView(args: { refs?: string }): NativeToolView {
+  return callMemos.recall.get(args, [args.refs ?? ""], () => ({
+    head: toolHead("Fold Recall", args.refs),
+    inline: true,
+    body: [],
+  }));
+}
+
+export function recallResultView(
+  resultObj: object,
+  details: ToolDetail | undefined,
+  isError: boolean,
+  refs?: string,
+): NativeToolView {
+  return resultMemos.recall.get(resultObj, [isError, refs ?? ""], () => {
+    if (isError) {
+      return { ...errorView("Fold Recall", details?.summary || "Recall failed", refs), inline: true };
+    }
+    const rows = details?.rows ?? [];
+    return {
+      head: toolHead("Fold Recall", refs, details?.summary),
+      tone: "success",
+      inline: true,
+      preview: { lines: PREVIEW_LIMITS.COLLAPSED_ITEMS },
+      body: rows.length > 0 ? [list(rows.map((r, i) => item(`ref-${i}`, { label: plainText(r) })))] : [],
     };
   });
 }
@@ -536,14 +567,19 @@ export function formatStatusReport(report: StatusReport): string {
     `tokens: used ${formatTokens(report.usedTokens)} · live ${formatTokens(report.tokenSplit.live)} · tools ${formatTokens(report.tokenSplit.tools)} · summaries ${formatTokens(report.tokenSplit.summaries)} · saved ${formatTokens(report.tokenSplit.foldedSavings)}`,
   );
   lines.push(
-    `growth ${formatTokens(report.growthSinceFold)} / ${formatTokens(report.growthStep)} · compressible ${formatTokens(report.compressibleTokens)} / ${formatTokens(report.compressibleFloor)}`,
+    `growth ${formatTokens(report.growthSinceFold)} / ${formatTokens(report.growthStep)} · compressible ${formatTokens(report.compressibleTokens)} / ${formatTokens(report.compressibleFloor)} · protected tail from turn ${report.protectedFromTurn}`,
   );
+  if (report.invariantViolations.length > 0) {
+    lines.push("");
+    lines.push("invariant violations:");
+    for (const v of report.invariantViolations) lines.push(`  ${v.kind}: ${v.detail}`);
+  }
   if (report.blocks.length > 0) {
     lines.push("");
     lines.push("blocks:");
     for (const b of report.blocks) {
       lines.push(
-        `  ${b.id} (tier ${b.tier}) ${b.coverage} · ${formatTokens(b.tokensBefore)}t → ${formatTokens(b.tokensAfter)}t · ${b.topic}${b.superseded ? " [superseded]" : ""}`,
+        `  ${b.id} (tier ${b.tier}) ${b.coverage} · ${formatTokens(b.tokensBefore)}t → ${formatTokens(b.tokensAfter)}t · ${b.generation} (${b.survivedFolds} later folds) · ${b.topic}${b.status === "consumed" ? ` [consumed → ${b.consumedBy}]` : b.status === "unfolded" ? " [unfolded]" : ""}`,
       );
     }
   }
@@ -574,14 +610,28 @@ export function formatCacheRounds(rounds: readonly CacheRound[]): string {
   return lines.join("\n");
 }
 
-export function formatSearchHits(hits: readonly { blockId: string; tier: number; topic: string; snippet: string }[]): string {
-  if (hits.length === 0) return "no matches";
-  return hits
-    .map((h) => {
-      const snip = h.snippet ? h.snippet.replace(/\n/g, " ") : "";
-      return `${h.blockId} (tier ${h.tier}) ${h.topic}${snip ? `\n  ${snip}` : ""}`;
-    })
-    .join("\n");
+export function formatSearchHits(
+  hits: readonly { blockId: string; tier: number; topic: string; status: string; snippet: string }[],
+  messages: readonly { ref: string; role: string; turn: number; snippet: string; ownSession: boolean; sessionId: string }[] = [],
+): string {
+  if (hits.length === 0 && messages.length === 0) return "no matches";
+  const oneLine = (s: string): string => s.replace(/\s*\n\s*/g, " ");
+  const lines: string[] = [];
+  if (hits.length > 0) {
+    lines.push("blocks:");
+    for (const h of hits) {
+      const state = h.status === "active" ? "" : ` [${h.status}]`;
+      lines.push(`${h.blockId} (tier ${h.tier})${state} ${h.topic}${h.snippet ? `\n  ${oneLine(h.snippet)}` : ""}`);
+    }
+  }
+  if (messages.length > 0) {
+    lines.push("archived messages (exact text via fold_recall):");
+    for (const m of messages) {
+      const where = m.ownSession ? "" : ` [session ${m.sessionId}]`;
+      lines.push(`${m.ref} ${m.role} · turn ${m.turn}${where}${m.snippet ? `\n  ${oneLine(m.snippet)}` : ""}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 export function formatFoldOutcome(outcome: FoldOutcome): string {
