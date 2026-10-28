@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.4 — 2026-10-28
+
+### Features
+- Running context and session vault storage telemetry: added `StatusVaultReport` tracking original archived tokens, in-context active summaries, reclaimed tokens, compression multiplier, and space reduction percentage across all surfaces.
+- Workbench Overview KPI stat tile row: 4-tile stat strip in both Tern TSP and ANSI TUI displaying Archived Stored tokens, Active Summaries, Compression Ratio, and Growth / Step threshold.
+- Persistent status chip compression indicator: footer status bar now reports the running compression ratio alongside live blocks and reclaimed tokens (`8b -803.7K (45.4×)`).
+- Web UI Origami Vault Storage: added an Overview card and updated top KPI metrics with live vault storage and compression ratio details.
+- Discrete 1:1 bar trajectory chart with bounded visible window (`slice(-maxBars)`) and recent-peak Y-axis ceiling in Tern TSP, eliminating chart overflow while preserving turn-by-turn granularity.
+- Ported billion-context context trajectory graph and linked prompt cache hit-rate chart with brush zoom into the Web UI.
+- Context Pleat brand kit: high-DPI vector lockups, adaptive dark/light headers, OpenGraph social previews, and web dashboard favicon.
+- Comprehensive user-facing `README.md` documentation covering installation, configuration presets, slash commands, workbench controls, and web dashboard usage.
+
+### Fixes
+- Fixed web dashboard window occupancy percentage calculation (preventing 100x over-scaling).
+- Corrected live token telemetry to account for prompt baseline overhead and active turn projection.
+- Handled Windows file-lock cleanup in test teardown without spurious unlink errors.
+
 ## 0.2.3 — 2026-10-28
 
 ### Fixes
