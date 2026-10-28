@@ -35,8 +35,8 @@ export interface FoldSpec {
   range: string;
   topic: string;
   summary: string;
+  tier?: 1 | 2 | 3;
 }
-
 export interface FoldParams {
   folds: FoldSpec[];
   tier?: 1 | 2 | 3;
@@ -402,11 +402,9 @@ export class OrigamiEngine {
   }
 
   executeFold(params: FoldParams): FoldResult {
-    const tier = params.tier ?? 1;
     if (params.folds.length === 0) return { ok: false, error: "no folds given", foldIndex: 0 };
     const tree = this.state.tree;
     const folded = this.state.foldedRefs();
-    const anchorRef = this.newestRef();
     const claimedRefs = new Map<string, number>();
     const claimedChildren = new Map<string, number>();
     let ordinal = this.nextBlockOrdinal();
@@ -422,11 +420,14 @@ export class OrigamiEngine {
       if (!topic) return fail("topic must not be empty");
       if (!summary) return fail("summary must not be empty");
 
+      // Per-spec tier allows mixed batches (e.g. compressing raw turns at tier 1 while distilling old blocks at tier 2)
+      const specTier: 1 | 2 | 3 = spec.tier ?? params.tier ?? 1;
+
       let projection: ProjectUnitResult;
       let children: string[] = [];
       try {
-        if (tier > 1) children = [...new Set(parseBlockRangeList(spec.range))];
-        projection = this.project(spec.range, tier);
+        if (specTier > 1) children = [...new Set(parseBlockRangeList(spec.range))];
+        projection = this.project(spec.range, specTier);
       } catch (e) {
         return fail(e instanceof Error ? e.message : String(e));
       }
@@ -436,7 +437,9 @@ export class OrigamiEngine {
       let ranges: RefRange[];
       let replacedTokens: number;
       let tokensBefore: number;
-      if (tier === 1) {
+      let anchorRef: string | null = null;
+
+      if (specTier === 1) {
         // Refs already owned by an active block stay with that block: the new block
         // covers only unfolded sources, so nothing is represented twice. Turn widening
         // can pull a turn shared by two disjoint requested ranges into both folds; the
@@ -458,19 +461,28 @@ export class OrigamiEngine {
         ranges = rangesFromRefs(refs);
         tokensBefore = this.state.tokensFor(refs.filter((r) => !this.bookkeepingRefs.has(r)));
         replacedTokens = tokensBefore;
+        // Tier 1 records frontier anchor to prevent the protected tail from immediately counting as growth
+        anchorRef = this.newestRef();
       } else {
         for (const childId of children) {
-          const child = tree.get(childId)!;
-          if (child.tier >= tier) return fail(`block ${childId} is tier ${child.tier}; a tier-${tier} fold only merges lower-tier blocks`);
+          const child = tree.get(childId);
+          if (!child) return fail(`child block ${childId} not found`);
+          if (child.tier >= specTier) return fail(`block ${childId} is tier ${child.tier}; a tier-${specTier} fold only merges lower-tier blocks`);
           const prior = claimedChildren.get(childId);
           if (prior !== undefined) return fail(`block ${childId} is already merged by fold ${prior} in this batch`);
         }
-        if (children.length < 2) return fail(`a tier-${tier} fold must merge at least 2 blocks`);
+        if (children.length < 2) return fail(`a tier-${specTier} fold must merge at least 2 blocks`);
         refs = projection.projected.refs;
         ranges = projection.projected.ranges;
         const kids = children.map((c) => tree.get(c)!);
         tokensBefore = kids.reduce((s, b) => s + b.tokensBefore, 0);
         replacedTokens = kids.reduce((s, b) => s + b.tokensAfter, 0);
+        // Distillations inherit the maximum anchor of their children; they must never advance
+        // the conversation frontier anchor or wipe turn growth of newer uncompressed turns.
+        anchorRef = kids.reduce((best, b) => {
+          if (!b.anchorRef) return best;
+          return !best || parseRef(b.anchorRef) > parseRef(best) ? b.anchorRef : best;
+        }, null as string | null);
       }
       for (const ref of refs) {
         const prior = claimedRefs.get(ref);
@@ -490,7 +502,7 @@ export class OrigamiEngine {
         refs,
         block: {
           id,
-          tier,
+          tier: specTier,
           ranges,
           topic,
           summary,
@@ -505,10 +517,12 @@ export class OrigamiEngine {
       });
     }
 
-    if (tier === 1) {
+    const tier1Planned = planned.filter((p) => p.block.tier === 1);
+    if (tier1Planned.length > 0) {
       const partnerMap = buildToolPairPartnerMap(this.state.bound);
       for (let i = 0; i < planned.length; i++) {
         const p = planned[i]!;
+        if (p.block.tier !== 1) continue;
         for (const r of p.refs) {
           const partners = partnerMap.get(r);
           if (!partners) continue;
@@ -525,13 +539,9 @@ export class OrigamiEngine {
           }
         }
       }
-    }
 
-    // Folding rewrites the cached prefix; a tiny tier-1 reclaim costs more than it saves.
-    // Merges are gated by the mass nudges instead, and an emergency always folds.
-    if (tier === 1) {
       const floor = this.minFoldBenefit();
-      const total = planned.reduce((s, p) => s + Math.max(0, p.block.tokensBefore - p.block.tokensAfter), 0);
+      const total = tier1Planned.reduce((s, p) => s + Math.max(0, p.block.tokensBefore - p.block.tokensAfter), 0);
       const window = this.host.windowTokens();
       const emergency = window > 0 && this.host.projectedTokens() / window >= this.config.emergencyFillPct;
       if (floor > 0 && total < floor && !emergency) {
@@ -542,7 +552,6 @@ export class OrigamiEngine {
         };
       }
     }
-
     // Coverage regression guard (#3322):
     // A committed fold must never leave a previously-covered message without any covering block.
     const coveredBefore = this.state.foldedRefs();
@@ -609,7 +618,9 @@ export class OrigamiEngine {
     // A fold answers the outstanding nudge: growth re-anchors, and a merge resets its tier's mass backoff.
     this.lastEfficiencyAtGrowth = null;
     this.lastFoldTurn = this.activeTurn;
-    if (tier > 1) this.lastPromotionAtMass[(tier - 1) as 1 | 2] = null;
+    for (const p of planned) {
+      if (p.block.tier > 1) this.lastPromotionAtMass[(p.block.tier - 1) as 1 | 2] = null;
+    }
     return {
       ok: true,
       outcome: { blocks: created, tokensReclaimed: reclaimed, foldCount: created.length },

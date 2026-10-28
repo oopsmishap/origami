@@ -27,7 +27,8 @@ Fold a contiguous span of older messages into one summary block. The summary rep
 - The pinned first user message, the current in-flight turn, and the protected recent tail cannot be folded.`;
 
 const TIER2_RULES = `## Tier 2 — Distillation (fold block ranges \`"b1..b5"\` or \`"b1,b4,b7"\`)
-Merge at least 2 active tier-1 blocks into one denser summary; the merged blocks are consumed (they leave context and return only if the tier-2 block is unfolded). A merged summary that does not shrink the combined mass of its children is rejected. Re-carry open objectives verbatim. Keep decisions and their rationale. This is the summary-of-summaries path: what survives here is what a reader needs after months.`;
+Merge at least 2 active tier-1 blocks into one denser summary; the merged blocks are consumed (they leave context and return only if the tier-2 block is unfolded). A merged summary that does not shrink the combined mass of its children is rejected. Re-carry open objectives verbatim. Keep decisions and their rationale. This is the summary-of-summaries path: what survives here is what a reader needs after months.
+- Token economics: Tier 1 folds reclaim high-volume raw message mass (50K–100K+ tokens). Tier 2/3 distillations reclaim summary overhead (2K–5K tokens) to declutter the block tree. Always wrap up pending candidate Tier 1 ranges alongside or before Tier 2 distillation to actually reduce prompt window size.`;
 const TIER3_RULES = `## Tier 3 — Ultra-condense (fold block ranges)
 Merge at least 2 active lower-tier blocks. Keep ONLY: the goal, open objectives, and the load-bearing constraints. Everything else is expendable.`;
 
@@ -41,7 +42,7 @@ const NUDE_RESPONSE = `## Responding to nudges
 Messages beginning with \`[origami]\` are folding reminders.
 - Emergency (context nearly full): fold before doing anything else. Not optional.
 - Efficiency: lists candidate ranges, largest first, with size and tool share. Fold the finished ones — all or a subset, using the advertised boundaries. Defer any range whose work is still in active use; the reminder returns after more growth.
-- Promotion: suggests merging tier-1 (or tier-2) blocks into the next tier. Merge related blocks; defer if they are unrelated threads you still need apart.
+- Promotion: suggests merging tier-1 (or tier-2) blocks into the next tier. Merge related blocks; if candidate tier-1 ranges are also pending, wrap them up in the same fold call to reclaim prompt space. Defer if they cover unrelated threads you still need apart.
 Do not restate the nudge; fold, then continue your work.`;
 
 export function doctrinePrompt(): string {

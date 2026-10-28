@@ -98,6 +98,7 @@ export function decideNudge(
     state.activeTurn !== undefined &&
     state.activeTurn < state.lastFoldTurn + cooldown;
   if (inCooldown) return NONE;
+
   const growthFloor =
     state.lastEfficiencyAtGrowth === null ? cfg.growthStep : state.lastEfficiencyAtGrowth + Math.ceil(cfg.growthStep / 2);
   const efficient =
@@ -105,6 +106,33 @@ export function decideNudge(
     total >= cfg.minFoldBenefit &&
     state.compressibleTokens >= cfg.compressibleFloor &&
     state.growthSinceFoldTokens >= growthFloor;
+  // Check if any tier promotion candidate is eligible
+  let activePromotion: { p: PromotionCandidate; toTier: 2 | 3 } | undefined;
+  for (const p of promotions) {
+    const mass = p.fromTier === 1 ? cfg.tier2MassTokens : cfg.tier3MassTokens;
+    const last = state.lastPromotionAtMass[p.fromTier];
+    const floor = last === null ? mass : last + Math.ceil(mass / 2);
+    if (p.blockIds.length < 2 || p.tokens < floor) continue;
+    activePromotion = { p, toTier: (p.fromTier + 1) as 2 | 3 };
+    break;
+  }
+
+  // Case 1: Compound Nudge (Both efficiency candidate ranges AND tier promotion are eligible)
+  if (efficient && activePromotion) {
+    const { p, toTier } = activePromotion;
+    return {
+      kind: "efficiency",
+      text:
+        `[origami] ${formatTokens(state.growthSinceFoldTokens)} tokens have accumulated since the last fold; ` +
+        `${formatTokens(state.compressibleTokens)} are foldable.\n` +
+        `Candidate ranges (largest first, ~${formatTokens(total)} tokens total):\n` +
+        `${formatRanges(ranges)}\n` +
+        `Additionally, ${p.blockIds.length} tier-${p.fromTier} blocks hold ${formatTokens(p.tokens)} tokens of summaries (${p.blockIds.join(", ")}) and are eligible for tier-${toTier} distillation.\n` +
+        `Wrap up candidate tier-1 ranges first to reclaim prompt space (or fold both in the same call).`,
+    };
+  }
+
+  // Case 2: Standard Efficiency Nudge
   if (efficient) {
     return {
       kind: "efficiency",
@@ -119,19 +147,20 @@ export function decideNudge(
     };
   }
 
-  for (const p of promotions) {
-    const mass = p.fromTier === 1 ? cfg.tier2MassTokens : cfg.tier3MassTokens;
-    const last = state.lastPromotionAtMass[p.fromTier];
-    const floor = last === null ? mass : last + Math.ceil(mass / 2);
-    if (p.blockIds.length < 2 || p.tokens < floor) continue;
-    const toTier = p.fromTier + 1;
+  // Case 3: Tier Promotion Nudge (with warning if pending raw candidate ranges exist)
+  if (activePromotion) {
+    const { p, toTier } = activePromotion;
+    const pendingNote = ranges.length > 0 && total >= cfg.minFoldBenefit
+      ? `\nNotice: ~${formatTokens(total)} tokens of raw history are also foldable in candidate ranges (${ranges.map((r) => `${r.start}..${r.end}`).join(", ")}). Tier-1 folds reclaim prompt space, whereas tier-${toTier} distillation only consolidates summaries; consider wrapping up tier-1 ranges alongside or before promotion.`
+      : "";
     return {
       kind: "promotion",
       promotion: { fromTier: p.fromTier, tokens: p.tokens },
       text:
         `[origami] ${p.blockIds.length} tier-${p.fromTier} blocks hold ${formatTokens(p.tokens)} tokens of summaries: ${p.blockIds.join(", ")}.\n` +
-        `Consider merging related ones with \`fold\` tier ${toTier} (range \`"${p.blockIds.join(",")}"\` or a related subset of at least 2). ` +
-        `Defer if they cover unrelated threads you still need apart.`,
+        `Consider merging related ones with \`fold\` tier ${toTier} (range \`"${p.blockIds.join(",")}"\` or a related subset of at least 2).` +
+        pendingNote +
+        ` Defer if they cover unrelated threads you still need apart.`,
     };
   }
   return NONE;

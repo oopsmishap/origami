@@ -23,11 +23,13 @@ Origami enforces structural safety checks before committing any context changes:
 - Fold loop circuit breaker: Telemetry tracks consecutive fold errors per session. The circuit breaker arms at 3 consecutive failures with an explicit stop warning, and collapses subsequent calls into a short refusal to prevent token-burning retry loops. It clears on any successful fold or after 10 minutes of quiet.
 - Frontier clamp diagnostics: Requests citing message references beyond the session's newest stored reference are caught early. Out-of-bounds spans are diagnosed as stale-generation hallucinations, while partially-exceeded spans return concrete ceiling clamps (`retry with endRef ≤ mXXXXX`).
 - Coverage regression guard: Distillation merges verify that every message ref covered by active blocks before a fold remains covered after the fold, preventing accidental decompression.
+- Pre-commit invariant check: Blocks with duplicate message coverage, active-child inconsistencies, or missing consumed references are rejected prior to state mutation.
+- Safe anchor attribution: Distillation merges inherit the maximum anchor of their consumed children rather than advancing to the newest conversation ref, ensuring uncompressed turn growth is never erased.
+- Mixed-tier batch folding: A single `fold` execution can combine Tier 1 raw message compression and Tier 2 summary distillation, letting agents reclaim prompt space and declutter block trees in one turn.
 - Cache collapse alerts: Telemetry monitors large prompt rounds (≥8K tokens) and flags when cache read rates drop below 10% after earlier healthy performance.
 - Nudge anti-amplification: Bookkeeping tool calls across all turns are excluded from growth tracking. Advisory efficiency and promotion nudges observe a 2-turn post-fold cooldown, preventing repetitive reminders while keeping emergency window protection active.
 - Recall federation: Queries directed to cross-session memory (`recall`) are automatically cross-checked against the active session's SQLite index, appending matching fold blocks and message references without altering external memory.
 - Plan-aware retrieval: Full-text search extracts active tasks and planning state from the recent message window, boosting relevant candidate blocks above unrelated matches.
-## Vault storage and payback economics
 
 Origami tracks the long-term economics of context management:
 

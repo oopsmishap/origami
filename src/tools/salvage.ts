@@ -71,7 +71,17 @@ export function salvageFoldParams(raw: unknown): SalvageResult {
       const summary = cleanStr(itemObj.summary);
       if (!range) return { ok: false, error: `fold spec at index ${i} is missing 'range'` };
       if (!summary) return { ok: false, error: `fold spec at index ${i} is missing 'summary'` };
-      folds.push({ range, topic: topic || "Summary", summary });
+
+      const rawItemTier = itemObj.tier;
+      let itemTier: 1 | 2 | 3 | undefined;
+      if (rawItemTier !== undefined && rawItemTier !== null && rawItemTier !== "") {
+        const num = typeof rawItemTier === "string" ? parseInt(rawItemTier.trim(), 10) : Number(rawItemTier);
+        if (num === 1 || num === 2 || num === 3) itemTier = num as 1 | 2 | 3;
+      } else if (tier === undefined) {
+        if (/^\s*b\d+/i.test(range)) itemTier = 2;
+        else if (/^\s*m\d+/i.test(range)) itemTier = 1;
+      }
+      folds.push({ range, topic: topic || "Summary", summary, ...(itemTier !== undefined ? { tier: itemTier } : {}) });
     }
   } else if (typeof obj.range === "string" || typeof obj.summary === "string") {
     // Case 2: Shorthand top-level { range, topic, summary }

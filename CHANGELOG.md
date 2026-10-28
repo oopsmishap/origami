@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.8 — 2026-10-28
+
+### Features & Invariant Fixes
+- **Safe Anchor Attribution for Distillations**: Tier 2 and Tier 3 distillation merges now inherit the highest anchor reference among their consumed children rather than stamping the newest conversation ref. This preserves growth tracking across uncompressed turns and ensures efficiency reminders continue to fire on schedule.
+- **Per-Fold Spec Tier Support & Auto-Inference**: `FoldSpec` now accepts an optional `tier` field (`1 | 2 | 3`). The salvage engine auto-infers `tier: 2` for block ranges (`b1..b5`) and `tier: 1` for message spans (`m00001..m00010`) within the same call, enabling mixed-tier batch folding where raw turns are compressed alongside summary distillation.
+- **Backlog-Aware Compound Nudges**: When efficiency candidate ranges and block promotion candidates are both eligible, `decideNudge` emits a compound reminder advising agents to wrap up pending Tier 1 raw ranges first to reclaim prompt space, or fold both together. Standard promotion nudges also include a concrete notice when pending raw history candidate ranges exist.
+- **Pre-Commit Structural Invariant Verification**: `executeFold` checks duplicate coverage, active-child state, and consumed reference consistency before mutating the session tree, preventing invalid block trees from landing.
+
 ## 0.2.7 — 2026-10-28
 
 ### Features

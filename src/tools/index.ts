@@ -69,6 +69,11 @@ export function registerTools(
             range: t.String({ description: 'Range spec: "m00012..m00048" (tier 1) or "b1..b5" (tier 2/3)' }),
             topic: t.String({ description: "One-line domain topic (≤60 chars), e.g. 'Auth token refresh refactor'" }),
             summary: t.String({ description: "Distilled summary adhering to origami doctrine (lossless on decisions)" }),
+            tier: t.Optional(
+              t.Union([t.Literal(1), t.Literal(2), t.Literal(3), t.Literal("1"), t.Literal("2"), t.Literal("3")], {
+                description: "Optional per-fold tier: 1=message compression, 2=distillation, 3=ultra-dense",
+              }),
+            ),
           }),
           { description: "One or more disjoint fold ranges" },
         ),
