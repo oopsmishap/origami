@@ -36,7 +36,7 @@ function refValue(ref: string): number {
   return parseRef(ref);
 }
 
-function spanHits(ref: string, ranges: readonly RefRange[]): boolean {
+export function spanHits(ref: string, ranges: readonly RefRange[]): boolean {
   const n = refValue(ref);
   for (const r of ranges) {
     if (n >= refValue(r.start) && n <= refValue(r.end)) return true;

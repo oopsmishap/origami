@@ -3,7 +3,7 @@ import { formatRef, parseRangeSpec, parseRef } from "./kernel/types.ts";
 import { messageFacts } from "./kernel/message-facts.ts";
 import { SessionState } from "./kernel/state.ts";
 import type { SessionEntryLike } from "./kernel/state.ts";
-import { projectUnit, protectedTailTurn, protectedZoneMap } from "./kernel/project-unit.ts";
+import { projectUnit, protectedTailTurn, protectedZoneMap, spanHits } from "./kernel/project-unit.ts";
 import { checkInvariants, renderableBlocks } from "./kernel/invariants.ts";
 import { hiddenFoldCalls } from "./kernel/fold-calls.ts";
 import type { InvariantViolation } from "./kernel/invariants.ts";
@@ -393,9 +393,23 @@ export class OrigamiEngine {
       let tokensBefore: number;
       if (tier === 1) {
         // Refs already owned by an active block stay with that block: the new block
-        // covers only unfolded sources, so nothing is represented twice.
-        refs = projection.projected.refs.filter((r) => !folded.has(r));
-        if (refs.length === 0) return fail("range covers only already-folded messages");
+        // covers only unfolded sources, so nothing is represented twice. Turn widening
+        // can pull a turn shared by two disjoint requested ranges into both folds; the
+        // earlier fold keeps it. Only requested spans that intersect are an overlap.
+        const requested = parseRangeList(spec.range);
+        refs = [];
+        for (const r of projection.projected.refs) {
+          if (folded.has(r)) continue;
+          const prior = claimedRefs.get(r);
+          if (prior === undefined) {
+            refs.push(r);
+            continue;
+          }
+          if (spanHits(r, requested) && spanHits(r, parseRangeList(params.folds[prior]!.range))) {
+            return fail(`overlaps fold ${prior} in this batch at ${r}; fold ranges in one call must be disjoint`);
+          }
+        }
+        if (refs.length === 0) return fail("range covers only messages already folded or claimed by an earlier fold in this batch");
         ranges = rangesFromRefs(refs);
         tokensBefore = this.state.tokensFor(refs.filter((r) => !this.hiddenRefs.has(r)));
         replacedTokens = tokensBefore;

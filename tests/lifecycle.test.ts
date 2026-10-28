@@ -55,6 +55,25 @@ describe("fold batch validation", () => {
     expect(engine.state.tree.all()).toHaveLength(0);
   });
 
+  it("assigns a turn shared by two disjoint ranges to the earlier fold", () => {
+    // m00005/m00006 form one turn; both ranges widen to cover it.
+    const { engine } = harness();
+    const res = engine.executeFold({ folds: [fold("m00003..m00005"), fold("m00006..m00008")] });
+    expect(res.ok).toBe(true);
+    expect(engine.state.tree.all().map((b) => [b.id, b.ranges])).toEqual([
+      ["b1", [{ start: "m00003", end: "m00006" }]],
+      ["b2", [{ start: "m00007", end: "m00008" }]],
+    ]);
+    expect(engine.invariants()).toEqual([]);
+  });
+
+  it("rejects a later range lying entirely inside a turn claimed earlier", () => {
+    const { engine } = harness();
+    const res = engine.executeFold({ folds: [fold("m00003..m00005"), fold("m00006")] });
+    expect(res).toMatchObject({ ok: false, foldIndex: 1 });
+    if (!res.ok) expect(res.error).toContain("claimed by an earlier fold");
+  });
+
   it("rejects empty and non-shrinking summaries", () => {
     const { engine } = harness();
     expect(engine.executeFold({ folds: [{ range: "m00003..m00004", topic: "t", summary: "   " }] })).toMatchObject({ ok: false, error: "summary must not be empty" });
