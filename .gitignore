@@ -2,7 +2,7 @@ node_modules
 *.db
 *.db-wal
 *.db-shm
-tools/
+/tools/
 .*-VF.ttf
 .*.woff2
 .preview*

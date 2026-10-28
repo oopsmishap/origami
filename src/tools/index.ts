@@ -159,6 +159,7 @@ export function registerTools(
         }),
       ),
       deep: t.Optional(t.Boolean({ description: "inline only: also unfold every restored child block, down to raw messages" })),
+      force: t.Optional(t.Boolean({ description: "inline only: bypass context window preflight safety check" })),
     }),
     loadMode: "discoverable",
     approval: "read",
@@ -168,7 +169,10 @@ export function registerTools(
       rt.sync();
       const inputSummary = `${params.id} (${params.mode ?? "file"}${params.deep ? ", deep" : ""})`;
       if (params.mode === "inline") {
-        const result = rt.engine.executeUnfold(params.id, { deep: params.deep === true });
+        const result = rt.engine.executeUnfold(params.id, {
+          deep: params.deep === true,
+          force: params.force === true,
+        });
         const durationMs = performance.now() - t0;
         if (!result.ok) {
           const row = recordToolTelemetry(rt, {

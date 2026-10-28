@@ -6,6 +6,7 @@ import type { SessionEntryLike } from "./kernel/state.ts";
 import { projectUnit, protectedTailTurn, protectedZoneMap, spanHits } from "./kernel/project-unit.ts";
 import { checkInvariants, renderableBlocks } from "./kernel/invariants.ts";
 import { historicalFoldCallRefs } from "./kernel/fold-calls.ts";
+import { buildToolPairPartnerMap } from "./kernel/tool-pairs.ts";
 import type { InvariantViolation } from "./kernel/invariants.ts";
 import type { ProjectUnitResult } from "./kernel/project-unit.ts";
 import { planRender, applyRender, expandRefRange, foldCoverageStats, renderBlockText } from "./kernel/render.ts";
@@ -193,10 +194,13 @@ export function parseBlockRangeList(spec: string): string[] {
 
 interface MessageRow {
   ref: string;
+  role?: string;
   ephemeral: boolean;
   turn: number;
   tokens: number;
   tool: boolean;
+  toolCalls?: { id: string; name: string }[];
+  toolCallId?: string;
 }
 
 export class OrigamiEngine {
@@ -281,10 +285,13 @@ export class OrigamiEngine {
   messageRows(): MessageRow[] {
     return this.state.bound.map((m) => ({
       ref: m.ref,
+      role: m.role,
       ephemeral: m.ephemeral,
       turn: m.turn,
       tokens: this.bookkeepingRefs.has(m.ref) ? 0 : this.state.ledger.countMessage(m),
       tool: m.role === "toolResult",
+      toolCalls: m.toolCalls,
+      toolCallId: m.toolCallId,
     }));
   }
 
@@ -480,6 +487,28 @@ export class OrigamiEngine {
       });
     }
 
+    if (tier === 1) {
+      const partnerMap = buildToolPairPartnerMap(this.state.bound);
+      for (let i = 0; i < planned.length; i++) {
+        const p = planned[i]!;
+        for (const r of p.refs) {
+          const partners = partnerMap.get(r);
+          if (!partners) continue;
+          for (const partner of partners) {
+            if (folded.has(partner)) continue;
+            const partnerFoldIdx = claimedRefs.get(partner);
+            if (partnerFoldIdx !== i) {
+              return {
+                ok: false,
+                error: `tool pair split: ${r} is in fold ${i} but its partner ${partner} is ${partnerFoldIdx === undefined ? "unfolded" : `in fold ${partnerFoldIdx}`}; tool call and its results must fold into the same block`,
+                foldIndex: i,
+              };
+            }
+          }
+        }
+      }
+    }
+
     // Folding rewrites the cached prefix; a tiny tier-1 reclaim costs more than it saves.
     // Merges are gated by the mass nudges instead, and an emergency always folds.
     if (tier === 1) {
@@ -635,7 +664,7 @@ export class OrigamiEngine {
    */
   executeUnfold(
     id: string,
-    opts: { deep?: boolean } = {},
+    opts: { deep?: boolean; force?: boolean } = {},
   ): { ok: true; block: Block; refs: string[]; unfolded: string[] } | { ok: false; error: string } {
     const tree = this.state.tree;
     const block = tree.get(id);
@@ -643,6 +672,22 @@ export class OrigamiEngine {
     if (block.status === "unfolded") return { ok: false, error: `block already unfolded: ${id}` };
     if (block.status === "consumed") {
       return { ok: false, error: `block ${id} is consumed by ${block.consumedBy}; unfold ${block.consumedBy} first` };
+    }
+
+    const window = this.host.windowTokens();
+    const projected = this.host.projectedTokens();
+    if (!opts.force && window > 0) {
+      const netTokens = opts.deep || block.tier === 1
+        ? block.tokensBefore - block.tokensAfter
+        : block.children.reduce((s, c) => s + (tree.get(c)?.tokensAfter ?? 0), 0) - block.tokensAfter;
+      const projectedAfter = projected + Math.max(0, netTokens);
+      const limitPct = Math.max(0.85, this.config.emergencyFillPct);
+      if (projectedAfter > window * limitPct) {
+        return {
+          ok: false,
+          error: `inline unfold would push context to ~${formatTokens(projectedAfter)}t (${Math.round((projectedAfter / window) * 100)}% of ${formatTokens(window)}t window, emergency limit is ${Math.round(limitPct * 100)}%); use mode: "file" to inspect artifact safely without inflating context`,
+        };
+      }
     }
     const refs: string[] = [];
     for (const r of block.ranges) refs.push(...expandRefRange(r.start, r.end));

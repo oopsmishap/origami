@@ -1,6 +1,6 @@
 import type { BoundMessage, RefRange } from "./types.ts";
 import { parseRef } from "./types.ts";
-
+import { widenSelectedToolPairs } from "./tool-pairs.ts";
 export interface ProjectUnitInput {
   bound: readonly BoundMessage[];
   ranges: readonly RefRange[];
@@ -113,6 +113,23 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
   if (tailHit) return { ok: false, error: `range includes protected recent tail (turn ${protectedFromTurn} onward)` };
   if (selected.size === 0) return { ok: false, error: "range matches no messages" };
 
+  const headTurn = pinnedHeadRef !== null ? pinnedHeadTurn(bound, pinnedHeadRef) : -1;
+  const isEligible = (idx: number) => {
+    const m = bound[idx];
+    if (!m || m.ephemeral) return false;
+    if (m.turn === headTurn) return false;
+    if (m.turn === activeTurn) return false;
+    if (m.turn >= protectedFromTurn) return false;
+    return true;
+  };
+
+  const toolPairOutcome = widenSelectedToolPairs({ selected, bound, isEligible });
+  if (toolPairOutcome.split) {
+    return {
+      ok: false,
+      error: `range splits tool pair: caller ${toolPairOutcome.split.callerRef} and partner ${toolPairOutcome.split.partnerRef} (${toolPairOutcome.split.reason})`,
+    };
+  }
   const indices = [...selected].sort((a, b) => a - b);
   const anyNew = indices.some((i) => !foldedRefs.has(bound[i]!.ref));
   if (!anyNew) return { ok: false, error: "range matches no messages" };
@@ -131,7 +148,7 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
       ranges: compressToRanges(bound, indices),
       tokens: 0,
     },
-    widened: selected.size > foldable.size,
+    widened: selected.size > foldable.size || toolPairOutcome.widened,
     turnCount: touchedTurns.size,
   };
 }

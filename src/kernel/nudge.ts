@@ -1,3 +1,5 @@
+import { buildToolPairPartnerMap } from "./tool-pairs.ts";
+
 export interface NudgeRange {
   start: string;
   end: string;
@@ -128,8 +130,19 @@ export function decideNudge(
   return NONE;
 }
 
+export interface RecommendBoundMessage {
+  ref: string;
+  ephemeral: boolean;
+  turn: number;
+  tokens: number;
+  tool: boolean;
+  role?: string;
+  toolCalls?: { id: string; name: string }[];
+  toolCallId?: string;
+}
+
 export function recommendRanges(input: {
-  bound: readonly { ref: string; ephemeral: boolean; turn: number; tokens: number; tool: boolean }[];
+  bound: readonly RecommendBoundMessage[];
   foldedRefs: ReadonlySet<string>;
   /** First protected turn: only messages from strictly earlier turns are candidates. */
   protectedFromTurn: number;
@@ -138,26 +151,88 @@ export function recommendRanges(input: {
 }): NudgeRange[] {
   const { bound, foldedRefs, protectedFromTurn, pinnedHeadRef } = input;
   const pinnedTurn = pinnedHeadRef ? bound.find((m) => m.ref === pinnedHeadRef)?.turn ?? -1 : -1;
-  const runs: NudgeRange[] = [];
-  let run: NudgeRange | null = null;
+  const partnerMap = buildToolPairPartnerMap(bound);
 
-  for (const m of bound) {
+  const rawRuns: { startIdx: number; endIdx: number }[] = [];
+  let currentStart = -1;
+
+  for (let i = 0; i < bound.length; i++) {
+    const m = bound[i]!;
     const foldable = !m.ephemeral && !foldedRefs.has(m.ref) && m.turn < protectedFromTurn && m.turn !== pinnedTurn;
-    if (!foldable) {
-      if (run) runs.push(run);
-      run = null;
-      continue;
+    if (foldable) {
+      if (currentStart === -1) currentStart = i;
+    } else {
+      if (currentStart !== -1) {
+        rawRuns.push({ startIdx: currentStart, endIdx: i - 1 });
+        currentStart = -1;
+      }
     }
-    run ??= { start: m.ref, end: m.ref, tokens: 0, messages: 0, toolTokens: 0 };
-    run.end = m.ref;
-    run.tokens += m.tokens;
-    run.messages++;
-    if (m.tool) run.toolTokens += m.tokens;
   }
-  if (run) runs.push(run);
+  if (currentStart !== -1) {
+    rawRuns.push({ startIdx: currentStart, endIdx: bound.length - 1 });
+  }
+
+  const cleanRuns: NudgeRange[] = [];
+
+  for (const { startIdx: origStart, endIdx: origEnd } of rawRuns) {
+    let start = origStart;
+    let end = origEnd;
+    let changed = true;
+
+    while (changed && start <= end) {
+      changed = false;
+      const runRefs = new Set<string>();
+      for (let k = start; k <= end; k++) runRefs.add(bound[k]!.ref);
+
+      // Check if end needs trimming (e.g. caller missing its later result)
+      for (let k = end; k >= start; k--) {
+        const partners = partnerMap.get(bound[k]!.ref);
+        if (!partners) continue;
+        const missing = [...partners].some((p) => !runRefs.has(p) && !foldedRefs.has(p));
+        if (missing) {
+          end = k - 1;
+          changed = true;
+          break;
+        }
+      }
+
+      if (!changed) {
+        // Check if start needs trimming (e.g. result missing its earlier caller)
+        for (let k = start; k <= end; k++) {
+          const partners = partnerMap.get(bound[k]!.ref);
+          if (!partners) continue;
+          const missing = [...partners].some((p) => !runRefs.has(p) && !foldedRefs.has(p));
+          if (missing) {
+            start = k + 1;
+            changed = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (start <= end) {
+      let tokens = 0;
+      let messages = 0;
+      let toolTokens = 0;
+      for (let k = start; k <= end; k++) {
+        const m = bound[k]!;
+        tokens += m.tokens;
+        messages++;
+        if (m.tool) toolTokens += m.tokens;
+      }
+      cleanRuns.push({
+        start: bound[start]!.ref,
+        end: bound[end]!.ref,
+        tokens,
+        messages,
+        toolTokens,
+      });
+    }
+  }
 
   const max = input.maxRanges ?? 8;
-  return runs.sort((a, b) => b.tokens - a.tokens).slice(0, max);
+  return cleanRuns.sort((a, b) => b.tokens - a.tokens).slice(0, max);
 }
 
 /**
