@@ -65,6 +65,16 @@ describe("Standalone Web Dashboard Server", () => {
       fold_event_id: "b1",
     });
 
+    db.archiveMessages([{
+      session_id: "dash-session-1",
+      ref: "m00042",
+      role: "assistant",
+      text: "The archived dragonfruit decision uses SQLite FTS.",
+      turn: 3,
+      tokens: 12,
+      captured_at: Date.now(),
+    }]);
+
     const registry = new SessionRegistry();
     registry.register({
       sessionId: "dash-session-1",
@@ -127,6 +137,22 @@ describe("Standalone Web Dashboard Server", () => {
       });
       expect(queryOnlyPostRes.status).toBe(401);
 
+      for (const [path, body, error] of [
+        ["fold", "{", "request body must be valid JSON"],
+        ["fold", "null", "request body must be a JSON object"],
+        ["fold", JSON.stringify({ range: "x", topic: "t", summary: "s", tier: 4 }), "tier must be 1, 2, or 3"],
+        ["unfold", JSON.stringify({ id: "b1", mode: "deep" }), "mode must be file or inline"],
+        ["unfold", JSON.stringify({}), "id must be a non-empty string"],
+      ] as const) {
+        const response = await fetch(`${baseUrl}/api/${path}`, {
+          method: "POST",
+          headers: { ...authHeaders, "Content-Type": "application/json" },
+          body,
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ error });
+      }
+
       // 2. GET /api/status -> JSON
       const statusRes = await fetch(`${baseUrl}/api/status`, { headers: authHeaders });
       expect(statusRes.status).toBe(200);
@@ -150,12 +176,15 @@ describe("Standalone Web Dashboard Server", () => {
       expect(rounds[0]!.total_in).toBe(10_000);
       expect(rounds[0]!.cache_read).toBe(8_000);
 
-      // 5. GET /api/search -> FTS5 search
+      // 5. GET /api/search -> block and archived-message FTS5 results
       const searchRes = await fetch(`${baseUrl}/api/search?q=caching`, { headers: authHeaders });
       expect(searchRes.status).toBe(200);
-      const hits = (await searchRes.json()) as { blockId: string; topic: string }[];
-      expect(hits.length).toBe(1);
-      expect(hits[0]!.blockId).toBe("b1");
+      const search = (await searchRes.json()) as { blocks: { blockId: string }[]; messages: { ref: string }[] };
+      expect(search.blocks.map((hit) => hit.blockId)).toEqual(["b1"]);
+      const messageSearchRes = await fetch(`${baseUrl}/api/search?q=dragonfruit`, { headers: authHeaders });
+      const messageSearch = (await messageSearchRes.json()) as { blocks: unknown[]; messages: { ref: string }[] };
+      expect(messageSearch.blocks).toEqual([]);
+      expect(messageSearch.messages.map((hit) => hit.ref)).toEqual(["m00042"]);
 
       // 6. POST /api/unfold (artifact file mode)
       // First ensure block is registered in engine fold tree for unfold

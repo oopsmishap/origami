@@ -252,15 +252,34 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
             const q = url.searchParams.get("q") ?? "";
             const limit = Number.parseInt(url.searchParams.get("limit") ?? "20", 10);
             const searcher = rt ?? registry.primary()?.runtime ?? null;
-            if (!searcher) return Response.json([]);
-            return Response.json(searcher.engine.search(q, limit));
+            if (!searcher) return Response.json({ blocks: [], messages: [] });
+            return Response.json({
+              blocks: searcher.engine.search(q, limit),
+              messages: searcher.engine.searchMessages(q, limit),
+            });
           }
+
+          const jsonObject = async (): Promise<Record<string, unknown> | Response> => {
+            let value: unknown;
+            try {
+              value = await req.json();
+            } catch {
+              return jsonError(400, "request body must be valid JSON");
+            }
+            if (value === null || typeof value !== "object" || Array.isArray(value)) {
+              return jsonError(400, "request body must be a JSON object");
+            }
+            return value as Record<string, unknown>;
+          };
 
           // 7. Action: Unfold
           if (path === "/api/unfold" && req.method === "POST") {
             if (!rt) return jsonError(409, "session is not running");
+            const body = await jsonObject();
+            if (body instanceof Response) return body;
+            if (typeof body.id !== "string" || body.id.trim() === "") return jsonError(400, "id must be a non-empty string");
+            if (body.mode !== undefined && body.mode !== "file" && body.mode !== "inline") return jsonError(400, "mode must be file or inline");
             rt.sync();
-            const body = (await req.json()) as { id: string; mode?: "file" | "inline" };
             if (body.mode === "inline") {
               const res = rt.engine.executeUnfold(body.id);
               registry.emit("unfold", sessionId, { id: body.id, mode: "inline", res });
@@ -274,11 +293,16 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
           // 8. Action: Manual Fold
           if (path === "/api/fold" && req.method === "POST") {
             if (!rt) return jsonError(409, "session is not running");
+            const body = await jsonObject();
+            if (body instanceof Response) return body;
+            for (const field of ["range", "topic", "summary"] as const) {
+              if (typeof body[field] !== "string" || body[field].trim() === "") return jsonError(400, `${field} must be a non-empty string`);
+            }
+            if (body.tier !== undefined && body.tier !== 1 && body.tier !== 2 && body.tier !== 3) return jsonError(400, "tier must be 1, 2, or 3");
             rt.sync();
-            const body = (await req.json()) as { range: string; topic: string; summary: string; tier?: 1 | 2 | 3 };
             const res = rt.engine.executeFold({
-              folds: [{ range: body.range, topic: body.topic, summary: body.summary }],
-              tier: body.tier,
+              folds: [{ range: body.range as string, topic: body.topic as string, summary: body.summary as string }],
+              tier: body.tier as 1 | 2 | 3 | undefined,
             });
             registry.emit("fold", sessionId, { res });
             return Response.json(res);
@@ -2101,18 +2125,29 @@ function renderDashboardHtml(): string {
       }
       const res = await apiFetch('/api/search?q=' + encodeURIComponent(q));
       if (!res.ok) return;
-      const hits = await res.json();
-      if (!hits.length) {
+      const result = await res.json();
+      const blocks = result.blocks || [];
+      const messages = result.messages || [];
+      if (!blocks.length && !messages.length) {
         tbody.innerHTML = '<tr><td colspan="4" class="chart-empty">No matches for "' + escapeHtml(q) + '".</td></tr>';
       } else {
-        tbody.innerHTML = hits.map((h) =>
-          '<tr class="clickable" onclick="openBlockDrawer(\\'' + escapeHtml(h.blockId) + '\\')">' +
+        const blockRows = blocks.map((h) =>
+          '<tr class="clickable" onclick="openBlockDrawer(\'' + escapeHtml(h.blockId) + '\')">' +
             '<td class="mono"><strong>' + escapeHtml(h.blockId) + '</strong></td>' +
             '<td><span class="tag-tier tag-tier' + h.tier + '">Tier ' + h.tier + '</span></td>' +
             '<td>' + escapeHtml(h.topic) + '</td>' +
             '<td class="mono" style="font-size:12px;color:var(--text-secondary)">' + escapeHtml(h.snippet || '') + '</td>' +
           '</tr>'
-        ).join('');
+        );
+        const messageRows = messages.map((h) =>
+          '<tr>' +
+            '<td class="mono"><strong>' + escapeHtml(h.ref) + '</strong></td>' +
+            '<td><span class="status-pill">' + escapeHtml(h.role) + '</span></td>' +
+            '<td>' + escapeHtml(h.sessionId) + '</td>' +
+            '<td class="mono" style="font-size:12px;color:var(--text-secondary)">' + escapeHtml(h.snippet || '') + '</td>' +
+          '</tr>'
+        );
+        tbody.innerHTML = blockRows.concat(messageRows).join('');
       }
     }
 
