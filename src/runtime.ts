@@ -78,18 +78,3 @@ export class OrigamiRuntime {
     this.engine.ingest(kernelMessagesFromEntries(entries));
   }
 }
-
-let current: OrigamiRuntime | null = null;
-
-export function setRuntime(rt: OrigamiRuntime | null): void {
-  current = rt;
-}
-
-export function getRuntime(): OrigamiRuntime | null {
-  return current;
-}
-
-export function requireRuntime(): OrigamiRuntime {
-  if (!current) throw new Error("origami: runtime not initialized");
-  return current;
-}

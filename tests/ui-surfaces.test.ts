@@ -9,6 +9,7 @@ import { configFromPreset } from "../src/config.ts";
 import { openDb } from "../src/persist/db.ts";
 import type { JournalOp } from "../src/persist/journal.ts";
 import { OrigamiRuntime } from "../src/runtime.ts";
+import { SessionRegistry } from "../src/sessions.ts";
 import { OrigamiFoldMessageComponent } from "../src/tools/display.ts";
 import { registerTools } from "../src/tools/index.ts";
 import { startDashboardServer } from "../src/ui/dashboard-server.ts";
@@ -68,14 +69,25 @@ describe("Occupancy telemetry & /api/status regression", () => {
     expect(st.tokenSplit.conversation).toBe(241);
     expect(st.tokenSplit.overhead + st.tokenSplit.system + st.tokenSplit.live + st.tokenSplit.summaries).toBe(90_000);
 
+    const registry = new SessionRegistry();
+    registry.register({
+      sessionId: "occ-session",
+      agent: { kind: "main", id: "Main", name: "main", depth: 0, parentId: null },
+      runtime,
+      config: configFromPreset("balanced"),
+      ctx: null,
+    });
     const dashboard = await startDashboardServer({
       port: 3910,
-      getRuntime: () => runtime,
+      registry,
       openBrowser: false,
     });
 
     try {
-      const res = await fetch(`${dashboard.url}/api/status`);
+      const apiUrl = new URL("/api/status", dashboard.url);
+      const res = await fetch(apiUrl, {
+        headers: { Host: `127.0.0.1:${dashboard.port}`, "X-Origami-Token": dashboard.token },
+      });
       const body = (await res.json()) as {
         occupancyPct: number;
         liveTokens: number;
@@ -128,7 +140,10 @@ describe("billion-context Trajectory & Cache Hit Rate", () => {
       topic: "Auth session refactor",
       summary: "Refactored token validation.",
       children: [],
-      superseded: false,
+      status: "active" as const,
+      consumedBy: null,
+      survivedFolds: 0,
+      generation: "young" as const,
       createdAt: baseTs + 28_000,
     },
   ];
@@ -232,6 +247,7 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
           Union: (value: unknown) => value,
           Literal: (value: unknown) => value,
           Integer: (value: unknown) => value,
+          Boolean: (value: unknown) => value,
         },
       },
       registerTool: () => {},
@@ -243,7 +259,7 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
 
     origamiExtension(fakeApi);
     const complete = commands.get("fold")?.getArgumentCompletions;
-    expect(complete?.("")?.map((item) => item.value)).toEqual(["trajectory", "blocks", "zones", "web"]);
+    expect(complete?.("")?.map((item) => item.value)).toEqual(["trajectory", "blocks", "zones", "web", "export"]);
     expect(complete?.("bl")?.map((item) => item.value)).toEqual(["blocks"]);
     expect(complete?.("blocks ")).toBeNull();
   });
@@ -253,7 +269,7 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
     const pass = <T>(v: T) => v;
     const fakeApi = {
       typebox: {
-        Type: { Object: pass, Array: pass, String: pass, Optional: pass, Union: pass, Literal: pass, Integer: pass },
+        Type: { Object: pass, Array: pass, String: pass, Optional: pass, Union: pass, Literal: pass, Integer: pass, Boolean: pass },
       },
       registerTool: (t: ToolDefinition) => tools.set(t.name, t),
     } as unknown as Parameters<typeof registerTools>[0];
@@ -262,7 +278,7 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
       throw new Error("not executed");
     });
 
-    for (const name of ["fold", "unfold", "fold_search", "fold_status", "fold_cache"]) {
+    for (const name of ["fold", "unfold", "fold_recall", "fold_search", "fold_status", "fold_cache"]) {
       const tool = tools.get(name)!;
       expect(tool).toBeDefined();
       expect(tool.inline).toBe(true);
@@ -287,7 +303,10 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
       topic: "Query planner optimization",
       summary: "### Summary\n- Eliminated N+1 joins",
       children: [],
-      superseded: false,
+      status: "active" as const,
+      consumedBy: null,
+      survivedFolds: 0,
+      generation: "young" as const,
       createdAt: Date.now() - 5000,
     };
 
@@ -318,6 +337,8 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
       folded: 9,
       live: 7,
       nudgeKind: "none",
+      protectedFromTurn: 3,
+      invariantViolations: [],
     };
 
     const rounds = [
@@ -333,7 +354,7 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
       model,
       actions: {
         model: () => model,
-        refresh: () => buildWorkbenchModel({ ...report, blocks: [{ ...block, superseded: true }] }, rounds, 200_000),
+        refresh: () => buildWorkbenchModel({ ...report, blocks: [{ ...block, status: "unfolded" as const }] }, rounds, 200_000),
         previewFold: () => ["m00011..m00016 (13.4K)"],
         unfoldSelected: async (id, mode) => {
           unfoldedCalls.push({ id, mode });

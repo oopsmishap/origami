@@ -200,7 +200,7 @@ export function buildTrajectoryData(input: {
       : 0;
 
   const reclaimedTotal = input.blocks
-    .filter((b) => !b.superseded)
+    .filter((b) => b.status === "active")
     .reduce((s, b) => s + Math.max(0, b.tokensBefore - b.tokensAfter), 0);
 
   return {

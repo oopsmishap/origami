@@ -1,6 +1,7 @@
 import type { CacheRound, StatusBlockRow, StatusReport, StatusZoneRow } from "../engine.ts";
 import type { NudgeRange } from "../kernel/nudge.ts";
 import { formatTokens } from "../kernel/nudge.ts";
+import type { SessionPhase } from "../sessions.ts";
 import { buildTrajectoryData, type TrajectoryData } from "./trajectory.ts";
 
 export type BlockRow = StatusBlockRow;
@@ -16,6 +17,16 @@ export interface WorkbenchCategory {
   pct: number;
   color: "syntaxKeyword" | "accent" | "warning" | "success" | "dim";
   symbol: "context.content" | "context.messages" | "context.buffer" | "context.compaction" | "context.free";
+}
+
+/** One row of the session tree (depth-first order) shown in the workbench header. */
+export interface WorkbenchSession {
+  sessionId: string;
+  label: string;
+  /** Depth in the session tree (0 = root). */
+  level: number;
+  phase: SessionPhase;
+  occupancyPct: number;
 }
 
 export interface WorkbenchModel {
@@ -42,6 +53,9 @@ export interface WorkbenchModel {
   rounds: CacheRound[];
   recommended: NudgeRange[];
   trajectory: TrajectoryData;
+  /** Session tree; the model's numbers describe `sessionId`. */
+  sessions: WorkbenchSession[];
+  sessionId: string;
 }
 
 export function buildWorkbenchModel(
@@ -51,6 +65,8 @@ export function buildWorkbenchModel(
   tab = 0,
   selected = 0,
   recommended: readonly NudgeRange[] = [],
+  sessions: readonly WorkbenchSession[] = [],
+  sessionId = "",
 ): WorkbenchModel {
   const effectiveWindow = Math.max(0, windowTokens || report.windowTokens || 0);
   const usedTokens = report.usedTokens;
@@ -133,6 +149,8 @@ export function buildWorkbenchModel(
     rounds: [...rounds],
     recommended: [...recommended],
     trajectory,
+    sessions: [...sessions],
+    sessionId,
   };
 }
 
@@ -168,12 +186,18 @@ export function workbenchLines(model: WorkbenchModel): string[] {
       ? `${formatTokens(model.usedTokens)} / ${formatTokens(model.windowTokens)} (${model.occupancyPct}%)`
       : `${formatTokens(model.usedTokens)} tokens`;
   const growth = `${formatTokens(model.growthSinceFold)}↑/${formatTokens(model.growthStep)}`;
-  const liveBlocks = model.blocks.filter((b) => !b.superseded).length;
-  const lines = [
+  const liveBlocks = model.blocks.filter((b) => b.status === "active").length;
+  const lines: string[] = [];
+  const focusIdx = model.sessions.findIndex((s) => s.sessionId === model.sessionId);
+  if (model.sessions.length > 1 && focusIdx >= 0) {
+    const s = model.sessions[focusIdx]!;
+    lines.push(`session ${s.label} · ${s.phase} (${focusIdx + 1}/${model.sessions.length}) · s/S switch`);
+  }
+  lines.push(
     `window ${winStr} · reclaimed ${formatTokens(model.foldedSavings)} across ${liveBlocks} block(s)`,
     `growth ${growth} · compressible ${formatTokens(model.compressibleTokens)} / floor ${formatTokens(model.compressibleFloor)}`,
     "",
-  ];
+  );
   if (model.tab === 0) {
     for (const c of model.categories) {
       lines.push(`  ${c.label.padEnd(24)} ${formatTokens(c.tokens).padStart(8)}  ${c.pct.toFixed(1).padStart(5)}%`);
@@ -195,7 +219,7 @@ export function workbenchLines(model: WorkbenchModel): string[] {
         const b = model.blocks[i]!;
         const marker = i === model.selected ? "▶ " : "  ";
         lines.push(
-          `${marker}${b.id}  T${b.tier}  ${b.coverage}  ${formatTokens(b.tokensBefore)}→${formatTokens(b.tokensAfter)}  ${b.topic}${b.superseded ? " [superseded]" : ""}`,
+          `${marker}${b.id}  T${b.tier}  ${b.coverage}  ${formatTokens(b.tokensBefore)}→${formatTokens(b.tokensAfter)}  ${b.topic}${b.status === "consumed" ? ` [consumed → ${b.consumedBy}]` : b.status === "unfolded" ? " [unfolded]" : ""}`,
         );
       }
     }
@@ -217,6 +241,8 @@ export interface WorkbenchActions {
   previewFold(): string[];
   unfoldSelected(id: string, mode?: "file" | "inline"): Promise<string>;
   drill(id: string): string[];
+  /** Rebuild the model for another session in the tree; null if it cannot be shown. */
+  focusSession?(sessionId: string): WorkbenchModel | null;
 }
 
 export interface WorkbenchKeyOutcome {
@@ -264,6 +290,29 @@ export function handleWorkbenchKey(
   }
 
   if (data === "\x1b" || data === "q") return { handled: true, close: true };
+  if ((data === "s" || data === "S") && actions.focusSession) {
+    const n = model.sessions.length;
+    if (n < 2) {
+      model.statusMessage = "No other sessions to switch to.";
+      return { handled: true };
+    }
+    const cur = Math.max(0, model.sessions.findIndex((s) => s.sessionId === model.sessionId));
+    const target = model.sessions[(cur + (data === "s" ? 1 : n - 1)) % n]!;
+    const next = actions.focusSession(target.sessionId);
+    if (!next) {
+      model.statusMessage = `Session ${target.label} is not available.`;
+      return { handled: true };
+    }
+    const tab = model.tab;
+    Object.assign(model, next);
+    model.tab = tab;
+    model.selected = 0;
+    model.drillBlockId = null;
+    model.scroll = 0;
+    model.showPreview = false;
+    model.statusMessage = `Focused ${target.label} (${target.phase}).`;
+    return { handled: true };
+  }
   if (data === "\x1b[D" || data === "h" || data === "\x1b[Z") {
     model.tab = (model.tab + WORKBENCH_TABS.length - 1) % WORKBENCH_TABS.length;
     return { handled: true };
@@ -309,8 +358,9 @@ export function handleWorkbenchKey(
       return { handled: true };
     }
     const mode = data === "i" ? "inline" : "file";
-    if (mode === "inline" && block.superseded) {
-      model.statusMessage = `Block ${block.id} is already superseded/unfolded.`;
+    if (mode === "inline" && block.status !== "active") {
+      const reason = block.status === "consumed" ? `consumed by ${block.consumedBy}` : "unfolded";
+      model.statusMessage = `Block ${block.id} is not active (${reason}).`;
       return { handled: true };
     }
     return { handled: true, pendingUnfold: { id: block.id, mode } };

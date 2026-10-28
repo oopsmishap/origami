@@ -36,7 +36,8 @@ describe("Real-session smoke (tools + SQLite)", () => {
       entries: () => entries,
     };
 
-    const config = configFromPreset("balanced");
+    // Recent-tail protection off: the fixture is too short to have an unprotected middle.
+    const config = { ...configFromPreset("balanced"), protectedTailMessages: 0, protectedTailTokens: 0, minFoldBenefitTokens: 0, minFoldBenefitWindowPct: 0 };
     const runtime = new OrigamiRuntime({
       host,
       modelId: "test-model",
@@ -59,6 +60,7 @@ describe("Real-session smoke (tools + SQLite)", () => {
           Union: pass,
           Literal: pass,
           Integer: pass,
+          Boolean: pass,
         },
       },
       registerTool: (t: ToolDefinition) => tools.set(t.name, t),

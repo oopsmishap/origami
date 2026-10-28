@@ -11,13 +11,15 @@ import { join } from "node:path";
 import { loadOrigamiConfig } from "./config-load.ts";
 import { configFromPreset, type OrigamiConfig } from "./config.ts";
 import { doctrinePrompt } from "./kernel/doctrine.ts";
-import { openDb, type OrigamiDb } from "./persist/db.ts";
-import { getRuntime, OrigamiRuntime, setRuntime, type HostBinding } from "./runtime.ts";
+import type { StatusReport } from "./engine.ts";
+import type { OrigamiDb } from "./persist/db.ts";
+import { OrigamiRuntime, type HostBinding } from "./runtime.ts";
+import { agentInfoFrom, sessionDisplayName, sessionRegistry, type SessionRecord } from "./sessions.ts";
 import { OrigamiFoldMessageComponent, type OrigamiFoldMessageDetails } from "./tools/display.ts";
 import { registerTools } from "./tools/index.ts";
-import { startDashboardServer, type DashboardInstance } from "./ui/dashboard-server.ts";
+import { startDashboardServer } from "./ui/dashboard-server.ts";
 import { formatStatusChip } from "./ui/status.ts";
-import { buildWorkbenchModel, type WorkbenchKeyOutcome } from "./ui/workbench-model.ts";
+import { buildWorkbenchModel, type WorkbenchKeyOutcome, type WorkbenchModel, type WorkbenchSession } from "./ui/workbench-model.ts";
 import { WorkbenchComponent } from "./ui/workbench.ts";
 
 const NATIVE_ENCODINGS: Readonly<Record<string, NativeEncoding>> = {
@@ -57,17 +59,16 @@ function disarmCompaction(): void {
   disarmed = true;
 }
 
-interface SessionRuntimeEntry {
-  sessionId: string;
-  runtime: OrigamiRuntime;
-  db: OrigamiDb;
-  config: OrigamiConfig;
+/** A registered session that is still running. */
+interface LiveSession {
+  record: SessionRecord;
+  rt: OrigamiRuntime;
 }
 
 export default function origamiExtension(api: ExtensionAPI): void {
-  const sessions = new Map<string, SessionRuntimeEntry>();
-  let lastContext: ExtensionContext | null = null;
-  let dashboard: DashboardInstance | null = null;
+  // Process-global: every extension instance (main + subagents) shares one view,
+  // so UIs never follow "whichever session fired a hook last".
+  const registry = sessionRegistry();
 
   function makeHost(ctx: ExtensionContext): HostBinding {
     return {
@@ -82,11 +83,17 @@ export default function origamiExtension(api: ExtensionAPI): void {
     };
   }
 
-  function updateUiStatus(rt: OrigamiRuntime, ctx?: ExtensionContext | null): void {
-    const target = ctx ?? lastContext;
-    if (!target?.hasUI) return;
+  /**
+   * The status chip always describes the root main session (plus a live-subagent
+   * count). Subagent activity refreshes the root's chip; it never replaces it.
+   */
+  function refreshStatusChip(sessionId: string, known?: { sessionId: string; status: StatusReport }): void {
+    const root = registry.rootOf(sessionId);
+    if (!root?.runtime || root.agent.kind !== "main" || !root.ctx?.hasUI) return;
     try {
-      target.ui.setStatus("origami", formatStatusChip(rt.engine.status(), target.ui.theme));
+      const status = known?.sessionId === root.sessionId ? known.status : root.runtime.engine.status();
+      const subagents = registry.descendants(root.sessionId).filter((r) => r.endedAt === null).length;
+      root.ctx.ui.setStatus("origami", formatStatusChip(status, root.ctx.ui.theme, subagents));
     } catch {
       // UI status update optional
     }
@@ -98,13 +105,12 @@ export default function origamiExtension(api: ExtensionAPI): void {
     return tokens < config.subagentActivateTokens;
   }
 
-  function getOrInitRuntime(ctx: ExtensionContext): SessionRuntimeEntry {
-    lastContext = ctx;
+  function getOrInitRuntime(ctx: ExtensionContext): LiveSession {
     const sessionId = ctx.sessionManager.getSessionId();
-    let entry = sessions.get(sessionId);
-    if (entry) {
-      setRuntime(entry.runtime);
-      return entry;
+    const existing = registry.live(sessionId);
+    if (existing?.runtime) {
+      registry.touch(sessionId, { ctx });
+      return { record: existing, rt: existing.runtime };
     }
 
     let config: OrigamiConfig;
@@ -127,48 +133,61 @@ export default function origamiExtension(api: ExtensionAPI): void {
       disarmCompaction();
     }
 
-    const host = makeHost(ctx);
-    const modelId = ctx.model?.id ?? "";
-    const runtime = new OrigamiRuntime({
-      host,
-      modelId,
+    const rt = new OrigamiRuntime({
+      host: makeHost(ctx),
+      modelId: ctx.model?.id ?? "",
       config,
       countFn: countTokensFn,
     });
 
-    const dbPath = join(getAgentDir(), "origami.db");
-    const db = openDb(dbPath);
-    runtime.attachDb(db);
+    // One handle per process; recovery notice and retention pruning run only when it is first opened.
+    // A database that cannot be opened (newer schema, I/O error) must not take the host down:
+    // folding keeps working, only the archive/search persistence is lost for this process.
+    let db: OrigamiDb | null = null;
+    try {
+      db = registry.acquireDb(join(getAgentDir(), "origami.db"), (opened) => {
+        if (opened.recovered && ctx.hasUI) {
+          ctx.ui.notify(`origami: fold database was corrupt; moved to ${opened.recovered} and recreated`, "warning");
+        }
+        if (config.retentionDays > 0) {
+          opened.prune(Date.now() - config.retentionDays * 86_400_000);
+        }
+      });
+    } catch (err) {
+      if (ctx.hasUI) {
+        ctx.ui.notify(
+          `origami: fold database unavailable, running without persistence: ${err instanceof Error ? err.message : String(err)}`,
+          "error",
+        );
+      }
+    }
+    rt.attachDb(db);
 
-    entry = { sessionId, runtime, db, config };
-    sessions.set(sessionId, entry);
-    setRuntime(runtime);
-    return entry;
+    const record = registry.register({ sessionId, agent: agentInfoFrom(ctx), runtime: rt, config, ctx });
+    return { record, rt };
   }
 
   function resolveRuntimeForTool(ctx?: ExtensionContext): OrigamiRuntime {
-    const c = ctx ?? lastContext;
-    if (!c) {
-      const active = getRuntime();
-      if (!active) throw new Error("origami: runtime not initialized");
-      return active;
+    if (!ctx) {
+      const primary = registry.primary()?.runtime;
+      if (!primary) throw new Error("origami: runtime not initialized");
+      return primary;
     }
-
-    const entry = getOrInitRuntime(c);
-    if (isSubagentDormant(c, entry.config)) {
+    const { record, rt } = getOrInitRuntime(ctx);
+    if (isSubagentDormant(ctx, record.config)) {
       throw new Error("origami inactive below 40K in subagents");
     }
-    return entry.runtime;
+    return rt;
   }
 
-  // 1. Register inline tools + live SSE/status broadcast hook
+  // 1. Register inline tools; mutations are published per session through the registry.
   registerTools(
     api,
     (ctx) => resolveRuntimeForTool(ctx),
     (event, payload, ctx) => {
-      const activeRt = getRuntime();
-      if (activeRt) updateUiStatus(activeRt, ctx);
-      dashboard?.broadcast(event, payload);
+      const sessionId = ctx?.sessionManager.getSessionId() ?? registry.primary()?.sessionId ?? null;
+      registry.emit(event, sessionId, payload);
+      if (sessionId) refreshStatusChip(sessionId);
     },
   );
 
@@ -180,8 +199,12 @@ export default function origamiExtension(api: ExtensionAPI): void {
 
   // 3. Hooks
   api.on("before_agent_start", (event, ctx) => {
-    lastContext = ctx;
-    getOrInitRuntime(ctx);
+    const { record } = getOrInitRuntime(ctx);
+    const dormant = isSubagentDormant(ctx, record.config);
+    registry.touch(record.sessionId, { dormant });
+    // Dormant subagents pay no doctrine tokens; if one wakes up, the context hook adds it.
+    record.doctrineInSystemPrompt = !dormant;
+    if (dormant) return;
     const existing = event.systemPrompt ?? [];
     return {
       systemPrompt: [...existing, doctrinePrompt()],
@@ -189,22 +212,21 @@ export default function origamiExtension(api: ExtensionAPI): void {
   });
 
   api.on("turn_start", (_event, ctx) => {
-    lastContext = ctx;
-    const entry = getOrInitRuntime(ctx);
-    entry.runtime.engine.onTurnStart();
+    getOrInitRuntime(ctx).rt.engine.onTurnStart();
   });
 
   api.on("context", (event, ctx) => {
-    lastContext = ctx;
-    const entry = getOrInitRuntime(ctx);
-
-    if (isSubagentDormant(ctx, entry.config)) {
+    const { record, rt } = getOrInitRuntime(ctx);
+    const dormant = isSubagentDormant(ctx, record.config);
+    registry.touch(record.sessionId, { dormant });
+    if (dormant) {
       return { messages: event.messages };
     }
 
-    const rt = entry.runtime;
     rt.sync();
-    updateUiStatus(rt, ctx);
+    const status = rt.engine.status();
+    registry.touch(record.sessionId, { status });
+    refreshStatusChip(record.sessionId, { sessionId: record.sessionId, status });
 
     const rendered = rt.engine.render(event.messages, (text: string, blockId: string, refTag?: string) => {
       const block = rt.engine.state.tree.get(blockId);
@@ -230,6 +252,14 @@ export default function origamiExtension(api: ExtensionAPI): void {
       };
     });
 
+    if (!record.doctrineInSystemPrompt) {
+      rendered.push({
+        role: "developer",
+        content: [{ type: "text", text: doctrinePrompt() }],
+        timestamp: Date.now(),
+      } as never);
+    }
+
     const decision = rt.engine.decideNudge();
     const nudgeText = decision.text ?? rt.engine.nudgeText;
     if (nudgeText) {
@@ -244,18 +274,16 @@ export default function origamiExtension(api: ExtensionAPI): void {
   });
 
   api.on("auto_compaction_start", (_event, ctx) => {
-    lastContext = ctx;
-    const entry = getOrInitRuntime(ctx);
-    if (isSubagentDormant(ctx, entry.config)) return;
+    const { record, rt } = getOrInitRuntime(ctx);
+    if (isSubagentDormant(ctx, record.config)) return;
 
-    const rt = entry.runtime;
     rt.sync();
 
     const ranges = rt.engine.recommendedRanges(64);
     if (ranges.length === 0) return;
 
     const refRanges = ranges.map((r) => ({ start: r.start, end: r.end }));
-    const summary = rt.engine.archiveText(refRanges);
+    const summary = rt.engine.archiveDigest(refRanges);
     const specs = [
       {
         range: ranges.map((r) => `${r.start}..${r.end}`).join(","),
@@ -265,16 +293,16 @@ export default function origamiExtension(api: ExtensionAPI): void {
     ];
     const res = rt.engine.executeFold({ folds: specs, tier: 1 });
     if (res.ok) {
-      updateUiStatus(rt, ctx);
-      dashboard?.broadcast("fold", res.outcome);
+      refreshStatusChip(record.sessionId);
+      registry.emit("fold", record.sessionId, res.outcome);
     }
   });
 
   api.on("assistant_message", (event, ctx) => {
-    lastContext = ctx;
     const sessionId = ctx.sessionManager.getSessionId();
-    const entry = sessions.get(sessionId);
-    if (!entry) return;
+    const record = registry.live(sessionId);
+    if (!record?.runtime) return;
+    registry.touch(sessionId, { ctx });
 
     const usage = event.message.usage;
     if (!usage) return;
@@ -290,47 +318,66 @@ export default function origamiExtension(api: ExtensionAPI): void {
       cacheWrite,
       foldEventId: null,
     };
-    entry.runtime.engine.recordRound(round);
-    updateUiStatus(entry.runtime, ctx);
-    dashboard?.broadcast("round", round);
+    record.runtime.engine.recordRound(round);
+    refreshStatusChip(sessionId);
+    registry.emit("round", sessionId, round);
   });
 
   api.on("session_shutdown", (_event, ctx) => {
     const sessionId = ctx.sessionManager.getSessionId();
-    const entry = sessions.get(sessionId);
-    if (entry) {
-      try {
-        entry.db.close();
-      } catch {
-        // ignore close error on shutdown
-      }
-      sessions.delete(sessionId);
-      if (getRuntime() === entry.runtime) {
-        setRuntime(null);
-      }
-      if (sessions.size === 0 && dashboard) {
-        dashboard.stop();
-        dashboard = null;
-      }
+    const record = registry.live(sessionId);
+    if (!record) return;
+    const root = registry.rootOf(sessionId);
+    const db = record.runtime?.db;
+    registry.end(sessionId);
+    if (db) registry.releaseDb(db);
+    if (root && root.sessionId !== sessionId) refreshStatusChip(root.sessionId);
+    if (!registry.hasLive() && registry.dashboard) {
+      registry.dashboard.stop();
+      registry.dashboard = null;
     }
   });
 
-  // 4. Workbench overlay
+  // 4. Workbench overlay: opens on the invoking session; `s`/`S` walks the session tree.
   async function openWorkbench(ctx: ExtensionContext, initialTab = 0): Promise<void> {
     if (!ctx.hasUI) return;
-    const entry = getOrInitRuntime(ctx);
-    const rt = entry.runtime;
+    let focusId = getOrInitRuntime(ctx).record.sessionId;
 
-    const buildCurrentModel = () => {
-      rt.sync();
-      const report = rt.engine.status();
-      const rounds = rt.engine.cacheRounds();
-      const windowTokens = ctx.getContextUsage()?.contextWindow ?? 0;
-      const recommended = rt.engine.recommendedRanges();
-      return buildWorkbenchModel(report, rounds, windowTokens, initialTab, 0, recommended);
+    const sessionRows = (): WorkbenchSession[] =>
+      registry.flatTree().map((s) => ({
+        sessionId: s.sessionId,
+        label: sessionDisplayName(s.agent),
+        level: s.level,
+        phase: s.phase,
+        occupancyPct: s.occupancyPct,
+      }));
+
+    const buildFor = (sessionId: string): WorkbenchModel | null => {
+      const record = registry.get(sessionId);
+      if (!record) return null;
+      const rt = record.runtime;
+      if (rt) {
+        rt.sync();
+        const report = rt.engine.status();
+        return buildWorkbenchModel(
+          report,
+          rt.engine.cacheRounds(),
+          report.windowTokens,
+          initialTab,
+          0,
+          rt.engine.recommendedRanges(),
+          sessionRows(),
+          sessionId,
+        );
+      }
+      // Ended session: last snapshot, read-only.
+      if (!record.lastStatus) return null;
+      return buildWorkbenchModel(record.lastStatus, [], record.lastStatus.windowTokens, initialTab, 0, [], sessionRows(), sessionId);
     };
 
-    const model = buildCurrentModel();
+    const model = buildFor(focusId);
+    if (!model) return;
+    const focusedRuntime = () => registry.live(focusId)?.runtime ?? null;
 
     await ctx.ui.custom<WorkbenchKeyOutcome>(
       (tui, _theme, _kb, done) =>
@@ -338,26 +385,35 @@ export default function origamiExtension(api: ExtensionAPI): void {
           model,
           actions: {
             model: () => model,
-            refresh: () => buildCurrentModel(),
+            refresh: () => buildFor(focusId) ?? model,
+            focusSession: (sessionId) => {
+              const next = buildFor(sessionId);
+              if (next) focusId = sessionId;
+              return next;
+            },
             previewFold: () =>
-              rt.engine.recommendedRanges().map((r) => `${r.start}..${r.end} (${formatStatusTokens(r.tokens)})`),
+              (focusedRuntime()?.engine.recommendedRanges() ?? []).map(
+                (r) => `${r.start}..${r.end} (${formatStatusTokens(r.tokens)})`,
+              ),
             unfoldSelected: async (id, mode = "file") => {
+              const rt = focusedRuntime();
+              if (!rt) return "Unfold failed: session has ended";
               rt.sync();
               if (mode === "inline") {
                 const res = rt.engine.executeUnfold(id);
                 if (!res.ok) return `Unfold failed: ${res.error}`;
-                updateUiStatus(rt, ctx);
-                dashboard?.broadcast("unfold", { id, mode: "inline" });
-                return `Unfolded ${id} inline (${res.refs.length} messages reactivated)`;
+                refreshStatusChip(focusId);
+                registry.emit("unfold", focusId, { id, mode: "inline" });
+                return `Unfolded ${res.unfolded.join(", ")} inline (${res.refs.length} refs)`;
               }
               const res = await rt.engine.unfoldArtifact(id);
               if (!res.ok) return `Unfold failed: ${res.error}`;
-              dashboard?.broadcast("unfold", { id, mode: "file", path: res.path });
+              registry.emit("unfold", focusId, { id, mode: "file", path: res.path });
               return `Unfolded ${id} → ${res.path}`;
             },
             drill: (id) => {
-              const block = rt.engine.state.tree.get(id);
-              if (!block) return [`block ${id} not found`];
+              const block = focusedRuntime()?.engine.state.tree.get(id);
+              if (!block) return [`block ${id} not found in a running session`];
               return [
                 `${block.id} · tier ${block.tier} · ${block.topic}`,
                 `ranges: ${block.ranges.map((r) => `${r.start}..${r.end}`).join(", ")}`,
@@ -378,15 +434,13 @@ export default function origamiExtension(api: ExtensionAPI): void {
   }
 
   async function openWebDashboard(ctx: ExtensionContext): Promise<void> {
-    if (!dashboard) {
-      dashboard = await startDashboardServer({
-        getRuntime: () => getRuntime(),
-        openBrowser: true,
-      });
-      if (ctx.hasUI) ctx.ui.notify(`Origami dashboard running at ${dashboard.url}`, "info");
+    getOrInitRuntime(ctx);
+    if (!registry.dashboard) {
+      registry.dashboard = await startDashboardServer({ registry, openBrowser: true });
+      if (ctx.hasUI) ctx.ui.notify(`Origami dashboard running at ${registry.dashboard.url}`, "info");
     } else {
-      dashboard.broadcast("refresh", {});
-      if (ctx.hasUI) ctx.ui.notify(`Origami dashboard live at ${dashboard.url}`, "info");
+      registry.emit("refresh", null, {});
+      if (ctx.hasUI) ctx.ui.notify(`Origami dashboard live at ${registry.dashboard.url}`, "info");
     }
   }
 
@@ -395,10 +449,11 @@ export default function origamiExtension(api: ExtensionAPI): void {
     { label: "blocks", value: "blocks", description: "Open the fold block browser" },
     { label: "zones", value: "zones", description: "Open the context zones view" },
     { label: "web", value: "web", description: "Open the browser dashboard" },
+    { label: "export", value: "export", description: "Write this session's blocks, rounds, and archived messages to a JSON artifact" },
   ];
 
   api.registerCommand("fold", {
-    description: "Open the Origami context workbench ('/fold trajectory' for graph, '/fold web' for browser UI)",
+    description: "Open the Origami context workbench ('/fold trajectory' for graph, '/fold web' for browser UI, '/fold export' for JSON)",
     getArgumentCompletions(argumentPrefix) {
       if (argumentPrefix.trimStart().includes(" ")) return null;
       const normalized = argumentPrefix.trim().toLowerCase();
@@ -409,6 +464,17 @@ export default function origamiExtension(api: ExtensionAPI): void {
       const sub = args.trim().toLowerCase();
       if (sub === "web" || sub === "dashboard") {
         await openWebDashboard(ctx);
+        return;
+      }
+      if (sub === "export") {
+        const { record, rt } = getOrInitRuntime(ctx);
+        if (!rt.db) {
+          if (ctx.hasUI) ctx.ui.notify("Origami export failed: no fold database", "error");
+          return;
+        }
+        const dump = rt.db.exportSession(record.sessionId);
+        const path = await ctx.sessionManager.saveArtifact(JSON.stringify(dump, null, 2), "origami-export");
+        if (ctx.hasUI) ctx.ui.notify(path ? `Origami export written to ${path}` : "Origami export failed: no artifact path", path ? "info" : "error");
         return;
       }
       if (sub === "trajectory" || sub === "graph" || sub === "chart") {

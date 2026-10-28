@@ -1,17 +1,37 @@
 import type { Server } from "bun";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
-import { openDb } from "../persist/db.ts";
-import type { OrigamiRuntime } from "../runtime.ts";
+import { openDb, type DbBlockRow, type OrigamiDb } from "../persist/db.ts";
+import type { SessionRecord, SessionRegistry } from "../sessions.ts";
+const TOKEN_HEADER = "X-Origami-Token";
+
+function randomToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function constantTimeEqual(left: string | null, right: string): boolean {
+  const candidate = left ?? "";
+  let difference = candidate.length ^ right.length;
+  const length = Math.max(candidate.length, right.length);
+  for (let index = 0; index < length; index++) {
+    difference |= (candidate.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
+  }
+  return difference === 0;
+}
+
 
 export interface DashboardServerOptions {
   port?: number;
   host?: string;
-  getRuntime: () => OrigamiRuntime | null;
+  /** Every session in the process; the UI picks one via `?session=` (default: primary). */
+  registry: SessionRegistry;
   openBrowser?: boolean;
 }
 
 export interface DashboardInstance {
   url: string;
+  token: string;
   port: number;
   server: Server<unknown>;
   broadcast: (event: string, data: unknown) => void;
@@ -32,10 +52,36 @@ function openUrl(targetUrl: string): void {
   }
 }
 
+function parseJsonArray(text: string): unknown[] {
+  try {
+    const v = JSON.parse(text) as unknown;
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Persisted block row in the client's shape (coverage string, children array). */
+function dbBlockView(row: DbBlockRow) {
+  const ranges = parseJsonArray(row.ranges) as { start: string; end: string }[];
+  return {
+    ...row,
+    coverage: ranges.map((r) => `${r.start}..${r.end}`).join(", "),
+    children: parseJsonArray(row.children) as string[],
+  };
+}
+
+function sessionMeta(record: SessionRecord | undefined, registry: SessionRegistry) {
+  if (!record) return { session: null };
+  return { session: registry.summary(record) };
+}
+
 export async function startDashboardServer(opts: DashboardServerOptions): Promise<DashboardInstance> {
   const initialPort = opts.port ?? 3780;
   const host = opts.host ?? "127.0.0.1";
+  const token = randomToken();
   const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  const registry = opts.registry;
 
   function broadcast(event: string, data: unknown): void {
     const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -46,6 +92,23 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
       } catch {
         clients.delete(client);
       }
+    }
+  }
+
+  // Every session's events reach every tab, tagged with their session; clients filter.
+  const unsubscribe = registry.subscribe((event, sessionId, data) => {
+    broadcast(event, { sessionId, data });
+  });
+
+  /** History reads: live session's db, else the process-shared handle, else a private one. */
+  function withDb<T>(record: SessionRecord | undefined, fn: (db: OrigamiDb) => T): T {
+    const shared = record?.runtime?.db ?? registry.sharedDb();
+    if (shared) return fn(shared);
+    const own = openDb(`${getAgentDir()}/origami.db`);
+    try {
+      return fn(own);
+    } finally {
+      own.close();
     }
   }
 
@@ -61,16 +124,29 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
         async fetch(req) {
           const url = new URL(req.url);
           const path = url.pathname;
-          const rt = opts.getRuntime();
+          const requested = url.searchParams.get("session");
+          const record = requested ? registry.get(requested) : registry.primary();
+          const rt = record?.runtime ?? null;
+          const sessionId = record?.sessionId ?? requested ?? "";
 
-          const corsHeaders: Record<string, string> = {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-          };
+          const allowedHosts = new Set([`127.0.0.1:${tryPort}`, `localhost:${tryPort}`]);
+          const allowedOrigins = new Set([`http://127.0.0.1:${tryPort}`, `http://localhost:${tryPort}`]);
+          const jsonError = (status: number, error: string) => Response.json({ error }, { status });
 
-          if (req.method === "OPTIONS") {
-            return new Response(null, { headers: corsHeaders });
+          if (!allowedHosts.has(req.headers.get("host") ?? "")) return jsonError(403, "forbidden host");
+          const origin = req.headers.get("origin");
+          if (origin !== null && !allowedOrigins.has(origin)) return jsonError(403, "forbidden origin");
+          if (req.method === "OPTIONS") return jsonError(403, "cross-origin preflight forbidden");
+
+          if (path.startsWith("/api/")) {
+            const suppliedToken = path === "/api/events" ? url.searchParams.get("token") : req.headers.get(TOKEN_HEADER);
+            if (!constantTimeEqual(suppliedToken, token)) return jsonError(401, "unauthorized");
+          }
+
+          if ((path === "/api/unfold" || path === "/api/fold") && req.method === "POST") {
+            if (req.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+              return jsonError(415, "content type must be application/json");
+            }
           }
 
           // 1. SSE Stream
@@ -88,7 +164,6 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
 
             return new Response(stream, {
               headers: {
-                ...corsHeaders,
                 "Content-Type": "text/event-stream",
                 "Cache-Control": "no-cache",
                 Connection: "keep-alive",
@@ -96,121 +171,117 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
             });
           }
 
-          // 2. Status API
+          // 2. Session tree
+          if (path === "/api/sessions") {
+            return Response.json({ primary: registry.primary()?.sessionId ?? null, tree: registry.tree() });
+          }
+
+          if (requested && !record && path !== "/api/blocks" && path !== "/api/rounds") {
+            return jsonError(404, `unknown session ${requested}`);
+          }
+
+          // 3. Status API (ended sessions serve their last snapshot)
           if (path === "/api/status") {
-            if (!rt) return Response.json({ error: "no active session" }, { status: 503, headers: corsHeaders });
-            rt.sync();
-            const report = rt.engine.status();
-            const recommended = rt.engine.recommendedRanges();
-            return Response.json(
-              {
-                sessionId: rt.engine.sessionId,
-                liveTokens: report.usedTokens,
-                conversationTokens: report.tokenSplit.live,
-                baselineTokens: report.tokenSplit.overhead + report.tokenSplit.system,
-                savedTokens: report.tokenSplit.foldedSavings,
-                recommended,
-                ...report,
-              },
-              { headers: corsHeaders },
-            );
+            let report = record?.lastStatus ?? null;
+            let recommended: unknown[] = [];
+            if (rt) {
+              rt.sync();
+              report = rt.engine.status();
+              recommended = rt.engine.recommendedRanges();
+            }
+            if (!report) return jsonError(503, "no active session");
+            return Response.json({
+              sessionId,
+              ...sessionMeta(record, registry),
+              liveTokens: report.usedTokens,
+              conversationTokens: report.tokenSplit.live,
+              baselineTokens: report.tokenSplit.overhead + report.tokenSplit.system,
+              savedTokens: report.tokenSplit.foldedSavings,
+              recommended,
+              ...report,
+            });
           }
 
-          // 3. Blocks API (merged SQLite + live fold tree state)
+          // 4. Blocks API (persisted rows, overlaid with the live fold tree when the session is running)
           if (path === "/api/blocks") {
-            const ownDb = !rt?.db;
-            const db = rt?.db ?? openDb(`${getAgentDir()}/origami.db`);
-            try {
-              const sessionId = url.searchParams.get("session") || rt?.engine.sessionId || "";
-              const dbBlocks = sessionId ? db.blocksForSession(sessionId) : [];
-
-              if (rt && sessionId === rt.engine.sessionId) {
-                rt.sync();
-                const treeMap = new Map(rt.engine.state.tree.all().map((b) => [b.id, b]));
-                const merged = dbBlocks.map((row) => {
-                  const live = treeMap.get(row.block_id);
-                  treeMap.delete(row.block_id);
-                  return {
-                    ...row,
-                    coverage: live ? live.ranges.map((r) => `${r.start}..${r.end}`).join(", ") : "",
-                    children: live ? [...live.children] : [],
-                    superseded: live ? live.superseded : false,
-                  };
-                });
-                for (const leftover of treeMap.values()) {
-                  merged.push({
-                    session_id: sessionId,
-                    block_id: leftover.id,
-                    tier: leftover.tier,
-                    topic: leftover.topic,
-                    summary: leftover.summary,
-                    body: `${leftover.topic}\n${leftover.summary}`,
-                    tokens_before: leftover.tokensBefore,
-                    tokens_after: leftover.tokensAfter,
-                    created_at: leftover.createdAt,
-                    coverage: leftover.ranges.map((r) => `${r.start}..${r.end}`).join(", "),
-                    children: [...leftover.children],
-                    superseded: leftover.superseded,
-                  });
-                }
-                merged.sort((a, b) => a.created_at - b.created_at);
-                return Response.json(merged, { headers: corsHeaders });
-              }
-
-              return Response.json(dbBlocks, { headers: corsHeaders });
-            } finally {
-              if (ownDb) db.close();
+            const rows = sessionId ? withDb(record, (db) => db.blocksForSession(sessionId)).map(dbBlockView) : [];
+            if (!rt) return Response.json(rows);
+            rt.sync();
+            const treeMap = new Map(rt.engine.state.tree.all().map((b) => [b.id, b]));
+            const merged = rows.map((row) => {
+              const live = treeMap.get(row.block_id);
+              treeMap.delete(row.block_id);
+              if (!live) return row;
+              return {
+                ...row,
+                coverage: live.ranges.map((r) => `${r.start}..${r.end}`).join(", "),
+                children: [...live.children],
+                status: live.status,
+                consumed_by: live.consumedBy,
+              };
+            });
+            for (const leftover of treeMap.values()) {
+              merged.push({
+                session_id: sessionId,
+                block_id: leftover.id,
+                tier: leftover.tier,
+                topic: leftover.topic,
+                summary: leftover.summary,
+                body: `${leftover.topic}\n${leftover.summary}`,
+                tokens_before: leftover.tokensBefore,
+                tokens_after: leftover.tokensAfter,
+                created_at: leftover.createdAt,
+                ranges: JSON.stringify(leftover.ranges),
+                coverage: leftover.ranges.map((r) => `${r.start}..${r.end}`).join(", "),
+                children: [...leftover.children],
+                status: leftover.status,
+                consumed_by: leftover.consumedBy,
+              });
             }
+            merged.sort((a, b) => a.created_at - b.created_at);
+            return Response.json(merged);
           }
 
-          // 4. Cache Rounds API
+          // 5. Cache Rounds API
           if (path === "/api/rounds") {
-            const ownDb = !rt?.db;
-            const db = rt?.db ?? openDb(`${getAgentDir()}/origami.db`);
-            try {
-              const sessionId = url.searchParams.get("session") || rt?.engine.sessionId || "";
-              const rounds = sessionId ? db.roundsForSession(sessionId) : [];
-              return Response.json(rounds, { headers: corsHeaders });
-            } finally {
-              if (ownDb) db.close();
-            }
+            return Response.json(sessionId ? withDb(record, (db) => db.roundsForSession(sessionId)) : []);
           }
 
-          // 5. Search API
+          // 6. Search API (all sessions)
           if (path === "/api/search") {
             const q = url.searchParams.get("q") ?? "";
             const limit = Number.parseInt(url.searchParams.get("limit") ?? "20", 10);
-            if (!rt) return Response.json([], { headers: corsHeaders });
-            const hits = rt.engine.search(q, limit);
-            return Response.json(hits, { headers: corsHeaders });
+            const searcher = rt ?? registry.primary()?.runtime ?? null;
+            if (!searcher) return Response.json([]);
+            return Response.json(searcher.engine.search(q, limit));
           }
 
-          // 6. Action: Unfold
+          // 7. Action: Unfold
           if (path === "/api/unfold" && req.method === "POST") {
-            if (!rt) return Response.json({ error: "no active session" }, { status: 503, headers: corsHeaders });
+            if (!rt) return jsonError(409, "session is not running");
             rt.sync();
             const body = (await req.json()) as { id: string; mode?: "file" | "inline" };
             if (body.mode === "inline") {
               const res = rt.engine.executeUnfold(body.id);
-              broadcast("unfold", { id: body.id, mode: "inline", res });
-              return Response.json(res, { headers: corsHeaders });
+              registry.emit("unfold", sessionId, { id: body.id, mode: "inline", res });
+              return Response.json(res);
             }
             const res = await rt.engine.unfoldArtifact(body.id);
-            broadcast("unfold", { id: body.id, mode: "file", res });
-            return Response.json(res, { headers: corsHeaders });
+            registry.emit("unfold", sessionId, { id: body.id, mode: "file", res });
+            return Response.json(res);
           }
 
-          // 7. Action: Manual Fold
+          // 8. Action: Manual Fold
           if (path === "/api/fold" && req.method === "POST") {
-            if (!rt) return Response.json({ error: "no active session" }, { status: 503, headers: corsHeaders });
+            if (!rt) return jsonError(409, "session is not running");
             rt.sync();
             const body = (await req.json()) as { range: string; topic: string; summary: string; tier?: 1 | 2 | 3 };
             const res = rt.engine.executeFold({
               folds: [{ range: body.range, topic: body.topic, summary: body.summary }],
               tier: body.tier,
             });
-            broadcast("fold", { res });
-            return Response.json(res, { headers: corsHeaders });
+            registry.emit("fold", sessionId, { res });
+            return Response.json(res);
           }
 
           // 8. Serve Dashboard SPA
@@ -230,20 +301,23 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
   }
 
   if (!server) {
+    unsubscribe();
     throw new Error(`Failed to bind origami dashboard server on ports ${initialPort}..${initialPort + 9}`);
   }
 
-  const url = `http://${host}:${activePort}`;
+  const url = `http://${host}:${activePort}/?token=${token}`;
   if (opts.openBrowser !== false) {
     openUrl(url);
   }
 
   return {
     url,
+    token,
     port: activePort,
     server,
     broadcast,
     stop() {
+      unsubscribe();
       for (const client of clients) {
         try {
           client.close();
@@ -433,6 +507,11 @@ function renderDashboardHtml(): string {
       background: var(--bg-elevated);
       border: 1px solid var(--border-default);
       color: var(--text-secondary);
+    }
+    select.chip {
+      appearance: none;
+      cursor: pointer;
+      max-width: 420px;
     }
     .status-dot {
       width: 7px;
@@ -695,7 +774,7 @@ function renderDashboardHtml(): string {
     tr:last-child td { border-bottom: none; }
     tbody tr.clickable { cursor: pointer; transition: background 0.12s; }
     tbody tr.clickable:hover td { background: var(--bg-hover); }
-    tbody tr.superseded-row td { opacity: 0.6; }
+    tbody tr.inactive-row td { opacity: 0.6; }
 
     /* Pills & Buttons */
     .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
@@ -721,7 +800,8 @@ function renderDashboardHtml(): string {
       font-family: var(--font-mono);
     }
     .status-live { background: rgba(16, 185, 129, 0.14); color: var(--accent-green); }
-    .status-superseded { background: var(--bg-elevated); color: var(--text-muted); }
+    .status-consumed { background: var(--bg-elevated); color: var(--text-muted); }
+    .status-unfolded { background: rgba(245, 158, 11, 0.14); color: var(--accent-amber); }
 
     .btn {
       display: inline-flex;
@@ -916,7 +996,9 @@ function renderDashboardHtml(): string {
     </nav>
 
     <div class="header-meta">
-      <span class="chip" id="session-badge">session: —</span>
+      <select class="chip" id="session-select" title="Session (subagents are nested under their parent)" onchange="selectSession(this.value)">
+        <option value="">session: —</option>
+      </select>
       <span class="chip"><span class="status-dot" id="sse-dot"></span> <span id="sse-label">Live</span></span>
       <button class="btn btn-sm" onclick="toggleTheme()" id="theme-btn" title="Switch light/dark theme">Theme</button>
     </div>
@@ -1174,6 +1256,75 @@ function renderDashboardHtml(): string {
 
   <script>
     const $ = (id) => document.getElementById(id);
+    const tokenParams = new URLSearchParams(location.search);
+    const queryToken = tokenParams.get('token');
+    const dashboardToken = queryToken || sessionStorage.getItem('origami-dashboard-token') || '';
+    if (queryToken) sessionStorage.setItem('origami-dashboard-token', queryToken);
+    if (location.search) history.replaceState(null, '', location.pathname + location.hash);
+    const authHeaders = () => ({ 'X-Origami-Token': dashboardToken });
+    const apiFetch = (url, options) => {
+      const request = options ? { ...options } : {};
+      request.headers = { ...authHeaders(), ...(request.headers || {}) };
+      return fetch(url, request);
+    };
+
+    // Session focus: '' follows the primary (main) session; otherwise pinned to one id.
+    let pinnedSession = sessionStorage.getItem('origami-session') || '';
+    let primarySession = '';
+    let sessionSignature = '';
+    let refreshSeq = 0;
+    const targetSession = () => pinnedSession || primarySession;
+    const withSession = (path) => {
+      const id = targetSession();
+      if (!id) return path;
+      return path + (path.includes('?') ? '&' : '?') + 'session=' + encodeURIComponent(id);
+    };
+    function sessionLabel(s) {
+      const who = s.agent.kind === 'main' ? 'main' : (s.agent.name || s.agent.id);
+      const indent = s.level > 0 ? '\u00a0\u00a0'.repeat(s.level) + '└ ' : '';
+      return indent + who + ' · ' + s.phase + ' · ' + Math.round(Number(s.occupancyPct) || 0) + '% · ' + s.sessionId.slice(0, 8);
+    }
+    function flattenSessions(nodes, out) {
+      for (const n of nodes) {
+        out.push(n);
+        flattenSessions(n.children || [], out);
+      }
+      return out;
+    }
+    function renderSessions(payload) {
+      primarySession = payload.primary || '';
+      const flat = flattenSessions(payload.tree || [], []);
+      if (pinnedSession && !flat.some((s) => s.sessionId === pinnedSession)) {
+        pinnedSession = '';
+        sessionStorage.removeItem('origami-session');
+      }
+      const select = $('session-select');
+      const primary = flat.find((s) => s.sessionId === primarySession);
+      const autoLabel = 'follow main' + (primary ? ' (' + primary.sessionId.slice(0, 8) + ')' : '');
+      const signature = flat.map((s) => s.sessionId).join(',');
+      // Rebuild only when membership changes, so an open dropdown is not reset by polling.
+      if (signature !== sessionSignature) {
+        sessionSignature = signature;
+        select.replaceChildren();
+        const auto = document.createElement('option');
+        auto.value = '';
+        select.appendChild(auto);
+        for (const s of flat) {
+          const opt = document.createElement('option');
+          opt.value = s.sessionId;
+          select.appendChild(opt);
+        }
+      }
+      select.options[0].textContent = autoLabel;
+      for (let i = 0; i < flat.length; i++) select.options[i + 1].textContent = sessionLabel(flat[i]);
+      select.value = pinnedSession;
+    }
+    function selectSession(id) {
+      pinnedSession = id || '';
+      if (pinnedSession) sessionStorage.setItem('origami-session', pinnedSession);
+      else sessionStorage.removeItem('origami-session');
+      refreshData();
+    }
 
     // Theme persistence
     (function initTheme() {
@@ -1621,6 +1772,12 @@ function renderDashboardHtml(): string {
     let cachedBlocks = [];
     let selectedDrawerId = null;
 
+    function blockStatus(block) {
+      if (block.status === 'consumed') return { css: 'status-consumed', label: 'Consumed → ' + (block.consumed_by || '?') };
+      if (block.status === 'unfolded') return { css: 'status-unfolded', label: 'Unfolded' };
+      return { css: 'status-live', label: 'Live' };
+    }
+
     function openBlockDrawer(blockId) {
       const b = cachedBlocks.find((x) => x.block_id === blockId);
       if (!b) return;
@@ -1628,9 +1785,10 @@ function renderDashboardHtml(): string {
       $('drawer-title').innerHTML = '<span class="mono">' + escapeHtml(b.block_id) + '</span> · ' + escapeHtml(b.topic);
       const saved = Math.max(0, (b.tokens_before || 0) - (b.tokens_after || 0));
       const pct = b.tokens_before > 0 ? Math.round((saved / b.tokens_before) * 100) : 0;
+      const status = blockStatus(b);
       $('drawer-kv').innerHTML =
         '<div class="k">Tier</div><div><span class="tag-tier tag-tier' + b.tier + '">Tier ' + b.tier + '</span></div>' +
-        '<div class="k">Status</div><div><span class="status-pill ' + (b.superseded ? 'status-superseded' : 'status-live') + '">' + (b.superseded ? 'Superseded' : 'Live in window') + '</span></div>' +
+        '<div class="k">Status</div><div><span class="status-pill ' + status.css + '">' + escapeHtml(status.label) + '</span></div>' +
         (b.coverage ? '<div class="k">Coverage</div><div class="mono">' + escapeHtml(b.coverage) + '</div>' : '') +
         '<div class="k">Compression</div><div class="mono">' + formatK(b.tokens_before) + 't → ' + formatK(b.tokens_after) + 't (-' + formatK(saved) + 't, ' + pct + '%)</div>' +
         (b.children && b.children.length ? '<div class="k">Distilled From</div><div class="mono">' + escapeHtml(b.children.join(', ')) + '</div>' : '') +
@@ -1638,7 +1796,7 @@ function renderDashboardHtml(): string {
       $('drawer-summary').textContent = b.summary || '(empty summary)';
       $('drawer-foot').innerHTML =
         '<button class="btn btn-primary" id="drawer-unfold-file" onclick="unfoldBlock(\\'' + escapeHtml(b.block_id) + '\\', \\'file\\')">Unfold to Artifact File</button>' +
-        (!b.superseded ? '<button class="btn" id="drawer-unfold-inline" onclick="unfoldBlock(\\'' + escapeHtml(b.block_id) + '\\', \\'inline\\')">Unfold Inline</button>' : '');
+        (b.status === 'active' ? '<button class="btn" id="drawer-unfold-inline" onclick="unfoldBlock(\\'' + escapeHtml(b.block_id) + '\\', \\'inline\\')">Unfold Inline</button>' : '');
       $('drawer-backdrop').classList.add('open');
       $('block-drawer').classList.add('open');
     }
@@ -1657,19 +1815,24 @@ function renderDashboardHtml(): string {
     });
 
     async function refreshData() {
+      const seq = ++refreshSeq;
       try {
+        const sRes = await apiFetch('/api/sessions');
+        if (sRes.ok) renderSessions(await sRes.json());
         const [stRes, bRes, rRes] = await Promise.all([
-          fetch('/api/status'),
-          fetch('/api/blocks'),
-          fetch('/api/rounds'),
+          apiFetch(withSession('/api/status')),
+          apiFetch(withSession('/api/blocks')),
+          apiFetch(withSession('/api/rounds')),
         ]);
+        // A newer refresh (e.g. the user switched sessions) owns the view.
+        if (seq !== refreshSeq) return;
         if (!stRes.ok) return;
         const st = await stRes.json();
         const blocks = bRes.ok ? await bRes.json() : [];
         const rounds = rRes.ok ? await rRes.json() : [];
+        if (seq !== refreshSeq) return;
         cachedBlocks = blocks;
 
-        $('session-badge').textContent = 'session: ' + (st.sessionId ? st.sessionId.slice(0, 14) : 'active');
         $('cnt-blocks').textContent = String(blocks.length);
         $('cnt-rounds').textContent = String(rounds.length);
 
@@ -1734,7 +1897,7 @@ function renderDashboardHtml(): string {
             }).join('') + '</div>';
 
         // 3. Reclaimed KPI
-        const liveBlockCount = blocks.filter((b) => !b.superseded).length;
+        const liveBlockCount = blocks.filter((b) => b.status === 'active').length;
         const savedTokens = Number(st.savedTokens) || 0;
         $('kpi-saved').textContent = formatK(savedTokens) + 't';
         $('kpi-saved-sub').textContent = 'Across ' + liveBlockCount + ' live' + (blocks.length > liveBlockCount ? ' / ' + blocks.length + ' total' : '') + ' block(s)';
@@ -1855,11 +2018,12 @@ function renderDashboardHtml(): string {
             const tierCls = 'tag-tier tag-tier' + b.tier;
             const saved = Math.max(0, (b.tokens_before || 0) - (b.tokens_after || 0));
             const pctSaved = b.tokens_before > 0 ? Math.round((saved / b.tokens_before) * 100) : 0;
-            const statusCls = b.superseded ? 'status-pill status-superseded' : 'status-pill status-live';
-            return '<tr class="clickable ' + (b.superseded ? 'superseded-row' : '') + '" data-block-id="' + escapeHtml(b.block_id) + '" onclick="openBlockDrawer(\\'' + escapeHtml(b.block_id) + '\\')">' +
+            const status = blockStatus(b);
+            const statusCls = 'status-pill ' + status.css;
+            return '<tr class="clickable ' + (b.status === 'active' ? '' : 'inactive-row') + '" data-block-id="' + escapeHtml(b.block_id) + '" onclick="openBlockDrawer(\\'' + escapeHtml(b.block_id) + '\\')">' +
               '<td class="mono"><strong>' + escapeHtml(b.block_id) + '</strong></td>' +
               '<td><span class="' + tierCls + '">Tier ' + b.tier + '</span></td>' +
-              '<td><span class="' + statusCls + '">' + (b.superseded ? 'Superseded' : 'Live') + '</span></td>' +
+              '<td><span class="' + statusCls + '">' + escapeHtml(status.label) + '</span></td>' +
               '<td class="mono" style="color:var(--text-secondary)">' + escapeHtml(b.coverage || '—') + '</td>' +
               '<td>' + escapeHtml(b.topic) + '</td>' +
               '<td class="num">' + formatK(b.tokens_before) + ' → <span style="color:var(--accent-green)">' + formatK(b.tokens_after) + '</span> <span style="color:var(--text-muted)">(-' + pctSaved + '%)</span></td>' +
@@ -1900,7 +2064,7 @@ function renderDashboardHtml(): string {
 
     async function unfoldBlock(id, mode) {
       try {
-        const res = await fetch('/api/unfold', {
+        const res = await apiFetch(withSession('/api/unfold'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id, mode: mode || 'file' }),
@@ -1935,7 +2099,7 @@ function renderDashboardHtml(): string {
         tbody.innerHTML = '<tr><td colspan="4" class="chart-empty">Enter search terms above to query SQLite FTS5 index.</td></tr>';
         return;
       }
-      const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+      const res = await apiFetch('/api/search?q=' + encodeURIComponent(q));
       if (!res.ok) return;
       const hits = await res.json();
       if (!hits.length) {
@@ -1953,7 +2117,7 @@ function renderDashboardHtml(): string {
     }
 
     // Live SSE connection
-    const events = new EventSource('/api/events');
+    const events = new EventSource('/api/events?token=' + encodeURIComponent(dashboardToken));
     events.addEventListener('open', () => {
       $('sse-dot').classList.remove('offline');
       $('sse-label').textContent = 'Live';
@@ -1962,8 +2126,15 @@ function renderDashboardHtml(): string {
       $('sse-dot').classList.add('offline');
       $('sse-label').textContent = 'Reconnecting';
     });
-    ['fold', 'unfold', 'round', 'refresh'].forEach((ev) => {
-      events.addEventListener(ev, () => refreshData());
+    // Only the focused session's events matter; session-tree changes always do.
+    ['fold', 'unfold', 'round', 'refresh', 'sessions'].forEach((ev) => {
+      events.addEventListener(ev, (e) => {
+        let sessionId = null;
+        try {
+          sessionId = JSON.parse(e.data).sessionId;
+        } catch {}
+        if (ev === 'sessions' || ev === 'refresh' || !sessionId || sessionId === targetSession()) refreshData();
+      });
     });
 
     refreshData();

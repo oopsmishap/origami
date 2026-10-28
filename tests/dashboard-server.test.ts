@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { startDashboardServer } from "../src/ui/dashboard-server.ts";
+import { SessionRegistry } from "../src/sessions.ts";
 import { OrigamiRuntime } from "../src/runtime.ts";
 import { openDb } from "../src/persist/db.ts";
 import { configFromPreset } from "../src/config.ts";
@@ -48,6 +49,10 @@ describe("Standalone Web Dashboard Server", () => {
       tokens_before: 5000,
       tokens_after: 500,
       created_at: Date.now(),
+      status: "unfolded",
+      consumed_by: null,
+      ranges: "[]",
+      children: "[]",
     });
 
     // Seed a round into DB
@@ -60,35 +65,77 @@ describe("Standalone Web Dashboard Server", () => {
       fold_event_id: "b1",
     });
 
+    const registry = new SessionRegistry();
+    registry.register({
+      sessionId: "dash-session-1",
+      agent: { kind: "main", id: "Main", name: "main", depth: 0, parentId: null },
+      runtime,
+      config: configFromPreset("balanced"),
+      ctx: null,
+    });
+
     // Start dashboard server on ephemeral port (openBrowser false)
     const dashboard = await startDashboardServer({
       port: 3890,
-      getRuntime: () => runtime,
+      registry,
       openBrowser: false,
     });
 
     try {
       expect(dashboard.url).toContain("http://127.0.0.1:");
       expect(dashboard.port).toBeGreaterThanOrEqual(3890);
+      expect(dashboard.token).toMatch(/^[0-9a-f]{64}$/);
+      expect(dashboard.url).toContain(`?token=${dashboard.token}`);
+      const baseUrl = `http://127.0.0.1:${dashboard.port}`;
+      const authHeaders = { "X-Origami-Token": dashboard.token };
+
 
       // 1. GET / -> HTML
-      const htmlRes = await fetch(`${dashboard.url}/`);
+      const htmlRes = await fetch(`${baseUrl}/`);
       expect(htmlRes.status).toBe(200);
       expect(htmlRes.headers.get("content-type")).toContain("text/html");
       const html = await htmlRes.text();
       expect(html).toContain("Origami Context Dashboard");
       expect(html).toContain("Prompt Cache Read Rate");
       expect(html).toContain("FTS5 Search");
+      expect(htmlRes.headers.get("Access-Control-Allow-Origin")).toBeNull();
+
+      const missingTokenRes = await fetch(`${baseUrl}/api/status`);
+      expect(missingTokenRes.status).toBe(401);
+
+      const badOriginRes = await fetch(`${baseUrl}/api/status`, {
+        headers: { ...authHeaders, Origin: "https://attacker.example" },
+      });
+      expect(badOriginRes.status).toBe(403);
+
+      const badHostRes = await fetch(`${baseUrl}/api/status`, {
+        headers: { ...authHeaders, Host: `attacker.example:${dashboard.port}` },
+      });
+      expect(badHostRes.status).toBe(403);
+
+      const noContentTypeRes = await fetch(`${baseUrl}/api/fold`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({ range: "m00001..m00002", topic: "x", summary: "y" }),
+      });
+      expect(noContentTypeRes.status).toBe(415);
+
+      const queryOnlyPostRes = await fetch(`${baseUrl}/api/fold?token=${dashboard.token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ range: "m00001..m00002", topic: "x", summary: "y" }),
+      });
+      expect(queryOnlyPostRes.status).toBe(401);
 
       // 2. GET /api/status -> JSON
-      const statusRes = await fetch(`${dashboard.url}/api/status`);
+      const statusRes = await fetch(`${baseUrl}/api/status`, { headers: authHeaders });
       expect(statusRes.status).toBe(200);
       const status = (await statusRes.json()) as { sessionId: string; windowTokens: number; liveTokens: number };
       expect(status.sessionId).toBe("dash-session-1");
       expect(status.windowTokens).toBe(100_000);
 
       // 3. GET /api/blocks -> JSON array
-      const blocksRes = await fetch(`${dashboard.url}/api/blocks?session=dash-session-1`);
+      const blocksRes = await fetch(`${baseUrl}/api/blocks?session=dash-session-1`, { headers: authHeaders });
       expect(blocksRes.status).toBe(200);
       const blocks = (await blocksRes.json()) as { block_id: string; topic: string }[];
       expect(blocks.length).toBe(1);
@@ -96,7 +143,7 @@ describe("Standalone Web Dashboard Server", () => {
       expect(blocks[0]!.topic).toContain("Caching layer");
 
       // 4. GET /api/rounds -> JSON array
-      const roundsRes = await fetch(`${dashboard.url}/api/rounds?session=dash-session-1`);
+      const roundsRes = await fetch(`${baseUrl}/api/rounds?session=dash-session-1`, { headers: authHeaders });
       expect(roundsRes.status).toBe(200);
       const rounds = (await roundsRes.json()) as { total_in: number; cache_read: number }[];
       expect(rounds.length).toBe(1);
@@ -104,7 +151,7 @@ describe("Standalone Web Dashboard Server", () => {
       expect(rounds[0]!.cache_read).toBe(8_000);
 
       // 5. GET /api/search -> FTS5 search
-      const searchRes = await fetch(`${dashboard.url}/api/search?q=caching`);
+      const searchRes = await fetch(`${baseUrl}/api/search?q=caching`, { headers: authHeaders });
       expect(searchRes.status).toBe(200);
       const hits = (await searchRes.json()) as { blockId: string; topic: string }[];
       expect(hits.length).toBe(1);
@@ -121,16 +168,18 @@ describe("Standalone Web Dashboard Server", () => {
           topic: "Caching layer architecture",
           summary: "Implemented two-tier cache with redis fallback.",
           children: [],
-          superseded: false,
+          status: "active",
+          consumedBy: null,
+          anchorRef: null,
           tokensBefore: 5000,
           tokensAfter: 500,
           createdAt: Date.now(),
         },
       });
 
-      const unfoldRes = await fetch(`${dashboard.url}/api/unfold`, {
+      const unfoldRes = await fetch(`${baseUrl}/api/unfold`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { ...authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ id: "b1", mode: "file" }),
       });
       expect(unfoldRes.status).toBe(200);
@@ -139,7 +188,7 @@ describe("Standalone Web Dashboard Server", () => {
       expect(unfoldData.path).toBeDefined();
 
       // 7. GET /api/events -> SSE connection test
-      const eventsRes = await fetch(`${dashboard.url}/api/events`);
+      const eventsRes = await fetch(`${baseUrl}/api/events?token=${dashboard.token}`);
       expect(eventsRes.status).toBe(200);
       expect(eventsRes.headers.get("content-type")).toContain("text/event-stream");
       // Read initial connection event

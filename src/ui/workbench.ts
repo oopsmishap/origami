@@ -85,7 +85,7 @@ export class WorkbenchComponent implements Component {
       return this.#describeBlockDetail(block);
     }
 
-    const liveBlockCount = m.blocks.filter((b) => !b.superseded).length;
+    const liveBlockCount = m.blocks.filter((b) => b.status === "active").length;
     const tabItems = WORKBENCH_TABS.map((label, idx) => {
       const suffix =
         idx === 1 && m.trajectory.lines.length > 0
@@ -97,6 +97,7 @@ export class WorkbenchComponent implements Component {
     });
 
     const children: NativeChild[] = [
+      ...this.#describeSessions(),
       ...this.#describeContextGauge(),
       node(
         "tabs",
@@ -124,7 +125,7 @@ export class WorkbenchComponent implements Component {
     if (selectedBlock) {
       buttons.push(actionButton(`Inspect ${selectedBlock.id}`, "drill", { keys: "enter", tone: "accent" }));
       buttons.push(actionButton("Unfold to File", "unfold", { keys: "u" }));
-      if (!selectedBlock.superseded) {
+      if (selectedBlock.status === "active") {
         buttons.push(actionButton("Unfold Inline", "unfold-inline", { keys: "i" }));
       }
     }
@@ -141,11 +142,29 @@ export class WorkbenchComponent implements Component {
         { keys: ["u"], label: "unfold file" },
         { keys: ["i"], label: "unfold inline" },
         { keys: ["f"], label: "fold preview" },
+        ...(m.sessions.length > 1 ? [{ keys: ["s"] as const, label: "session" }] : []),
         { keys: ["escape"], label: "close" },
       ]),
     );
 
     return overlayCard("omp.overlay.origami", "Origami Context", children);
+  }
+
+  /** Session tree strip (only when subagents exist); the focused session is highlighted. */
+  #describeSessions(): NativeChild[] {
+    const m = this.model;
+    if (m.sessions.length < 2) return [];
+    const spans = m.sessions.flatMap((s, idx) => {
+      const focused = s.sessionId === m.sessionId;
+      const name = `${s.level > 0 ? `${"└".repeat(s.level)} ` : ""}${s.label}`;
+      const detail = s.phase === "active" ? ` ${s.occupancyPct}%` : ` ${s.phase}`;
+      return [
+        ...(idx > 0 ? [span("  ", "dim")] : []),
+        span(plainText(`${focused ? "▶ " : ""}${name}`), focused ? "accent" : s.phase === "ended" ? "dim" : "muted"),
+        span(plainText(detail), "dim"),
+      ];
+    });
+    return [text(spans, { role: "omp.origami.sessions", wrap: "word" })];
   }
 
   handleInput(data: string): void {
@@ -240,6 +259,8 @@ export class WorkbenchComponent implements Component {
       matchesKey(data, "escape") ||
       data === "\x7f" ||
       data === "\b" ||
+      data === "s" ||
+      data === "S" ||
       data === "q" ||
       data === "f" ||
       data === "u" ||
@@ -274,7 +295,7 @@ export class WorkbenchComponent implements Component {
 
   #renderAnsiHeader(width: number): string[] {
     const m = this.model;
-    const liveBlockCount = m.blocks.filter((b) => !b.superseded).length;
+    const liveBlockCount = m.blocks.filter((b) => b.status === "active").length;
     const segments = WORKBENCH_TABS.map((label, idx) => {
       const count =
         idx === 1 && m.trajectory.lines.length > 0
@@ -297,10 +318,23 @@ export class WorkbenchComponent implements Component {
       `${theme.fg("dim", " · ")}` +
       `${theme.fg(m.growthSinceFold >= m.growthStep ? "warning" : "muted", `growth ${growth}`)}`;
 
-    return [
+    const lines = [
       truncateToWidth(track, width, Ellipsis.Omit),
       truncateToWidth(`${winLabel}   ${rightSummary}`, width, Ellipsis.Unicode),
     ];
+    if (m.sessions.length > 1) {
+      const strip = m.sessions
+        .map((s) => {
+          const focused = s.sessionId === m.sessionId;
+          const name = `${s.level > 0 ? `${"└".repeat(s.level)} ` : ""}${s.label}`;
+          const detail = s.phase === "active" ? `${s.occupancyPct}%` : s.phase;
+          const label = `${focused ? "▶ " : ""}${name} ${detail}`;
+          return focused ? theme.fg("accent", label) : theme.fg(s.phase === "ended" ? "dim" : "muted", label);
+        })
+        .join(theme.fg("dim", "  "));
+      lines.unshift(truncateToWidth(`${theme.fg("dim", "sessions (s/S) ")}${strip}`, width, Ellipsis.Unicode));
+    }
+    return lines;
   }
 
   #renderAnsiBody(width: number): string[] {
@@ -421,15 +455,21 @@ export class WorkbenchComponent implements Component {
       const idStr = selected ? theme.bold(theme.fg("accent", b.id.padEnd(4))) : theme.fg("text", b.id.padEnd(4));
       const covStr = theme.fg("dim", b.coverage.padEnd(16));
       const ratioStr = `${theme.fg("muted", formatTokens(b.tokensBefore))}${theme.fg("dim", "→")}${theme.fg("success", formatTokens(b.tokensAfter))}`;
-      const stateTag = b.superseded ? ` ${theme.fg("dim", "[superseded]")}` : "";
+      const stateTag =
+        b.status === "consumed"
+          ? ` ${theme.fg("warning", `[consumed → ${b.consumedBy}]`)}`
+          : b.status === "unfolded"
+            ? ` ${theme.fg("warning", "[unfolded]")}`
+            : "";
       const prefix = `${cursor} ${idStr} ${tierTag} ${covStr} ${ratioStr}  `;
       const topicBudget = Math.max(8, width - visibleWidth(prefix) - visibleWidth(stateTag));
       const topicStr = truncateToWidth(b.topic, topicBudget, Ellipsis.Unicode);
-      const paintedTopic = b.superseded
-        ? theme.fg("dim", topicStr)
-        : selected
-          ? theme.bold(theme.fg("text", topicStr))
-          : theme.fg("muted", topicStr);
+      const paintedTopic =
+        b.status !== "active"
+          ? theme.fg("dim", topicStr)
+          : selected
+            ? theme.bold(theme.fg("text", topicStr))
+            : theme.fg("muted", topicStr);
       lines.push(truncateToWidth(`${prefix}${paintedTopic}${stateTag}`, width, Ellipsis.Omit));
     }
     return lines;
@@ -447,7 +487,7 @@ export class WorkbenchComponent implements Component {
     const header = [
       truncateToWidth(
         `${theme.bold(theme.fg("accent", block.id))} · ${theme.fg("syntaxKeyword", `Tier ${block.tier}`)} · ` +
-          `${block.superseded ? theme.fg("warning", "SUPERSEDED") : theme.fg("success", "LIVE")} · ` +
+          `${block.status === "active" ? theme.fg("success", "LIVE") : theme.fg("warning", block.status === "consumed" ? "CONSUMED" : "UNFOLDED")} · ` +
           `${theme.bold(theme.fg("text", block.topic))}`,
         width,
         Ellipsis.Unicode,
@@ -548,7 +588,7 @@ export class WorkbenchComponent implements Component {
     const m = this.model;
     const windowTotal = m.windowTokens > 0 ? m.windowTokens : Math.max(1, m.usedTokens);
     const usedRatio = Math.min(1, m.usedTokens / windowTotal);
-    const liveBlockCount = m.blocks.filter((b) => !b.superseded).length;
+    const liveBlockCount = m.blocks.filter((b) => b.status === "active").length;
 
     const parts = m.categories
       .filter((c) => c.tokens > 0)
@@ -668,9 +708,10 @@ export class WorkbenchComponent implements Component {
         const labelSpans: TspSpan[] = [
           span(`${b.id} `, selected ? "accent mono strong" : "mono strong"),
           span(`T${b.tier} `, tierToken),
-          span(plainText(b.topic), b.superseded ? "dim" : selected ? "strong" : undefined),
+          span(plainText(b.topic), b.status !== "active" ? "dim" : selected ? "strong" : undefined),
         ];
-        if (b.superseded) labelSpans.push(span(" · superseded", "dim"));
+        if (b.status === "consumed") labelSpans.push(span(` · consumed → ${b.consumedBy}`, "warning"));
+        if (b.status === "unfolded") labelSpans.push(span(" · unfolded", "warning"));
         return item(`block${i}`, {
           label: labelSpans,
           detail: b.coverage,
@@ -756,7 +797,7 @@ export class WorkbenchComponent implements Component {
         : 0;
 
     const meta = kv([
-      ["Block", `${block.id} · Tier ${block.tier} · ${block.superseded ? "Superseded" : "Live"}`],
+      ["Block", `${block.id} · Tier ${block.tier} · ${block.status === "active" ? "LIVE" : block.status === "consumed" ? "CONSUMED" : "UNFOLDED"}`],
       ["Topic", block.topic],
       ["Coverage", block.coverage],
       [
@@ -769,7 +810,7 @@ export class WorkbenchComponent implements Component {
     const actions: (NativeNode | null)[] = [
       actionButton("Back to Blocks", "back", { keys: "escape" }),
       actionButton("Unfold to File", "unfold", { keys: "u", tone: "accent" }),
-      ...(!block.superseded ? [actionButton("Unfold Inline", "unfold-inline", { keys: "i" })] : []),
+      ...(block.status === "active" ? [actionButton("Unfold Inline", "unfold-inline", { keys: "i" })] : []),
       null,
       actionButton("Close", "close"),
     ];

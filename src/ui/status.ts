@@ -3,18 +3,21 @@ import type { StatusReport } from "../engine.ts";
 import { formatTokens } from "../kernel/nudge.ts";
 
 /**
- * Compact status-line chip: `origami 9% · 12.4K↑/50K · 2b -50.8K`.
+ * Compact status-line chip: `origami 9% · 12.4K↑/50K · 2b -50.8K · 1 sub`.
+ * Always describes the root (main) session; `subagents` counts its live,
+ * folding-active descendants so their activity is visible without stealing the chip.
  * Supports optional omp Theme styling for footer status bars while remaining
  * clean plain text when no theme is supplied.
  */
-export function formatStatusChip(report: StatusReport, theme?: Theme): string {
-  const liveBlocks = report.blocks.filter((b) => !b.superseded).length;
+export function formatStatusChip(report: StatusReport, theme?: Theme, subagents = 0): string {
+  const liveBlocks = report.blocks.filter((b) => b.status === "active").length;
   const saved = report.tokenSplit.foldedSavings;
   const growth = `${formatTokens(report.growthSinceFold)}↑/${formatTokens(report.growthStep)}`;
   const blocksLabel = saved > 0 ? `${liveBlocks}b -${formatTokens(saved)}` : `${liveBlocks}b`;
+  const subLabel = subagents > 0 ? `${subagents} sub` : "";
 
   if (!theme) {
-    return `origami ${report.occupancyPct}% · ${growth} · ${blocksLabel}`;
+    return `origami ${report.occupancyPct}% · ${growth} · ${blocksLabel}${subLabel ? ` · ${subLabel}` : ""}`;
   }
 
   const icon = theme.styledSymbol("context.compaction", "accent");
@@ -28,5 +31,6 @@ export function formatStatusChip(report: StatusReport, theme?: Theme): string {
     saved > 0
       ? `${theme.fg("muted", `${liveBlocks}b`)} ${theme.fg("success", `-${formatTokens(saved)}`)}`
       : theme.fg("dim", `${liveBlocks}b`);
-  return `${icon} ${theme.fg("muted", "origami")} ${pctPart}${sep}${growthPart}${sep}${blocksPart}`;
+  const subPart = subLabel ? `${sep}${theme.fg("accent", subLabel)}` : "";
+  return `${icon} ${theme.fg("muted", "origami")} ${pctPart}${sep}${growthPart}${sep}${blocksPart}${subPart}`;
 }

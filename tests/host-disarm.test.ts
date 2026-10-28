@@ -37,6 +37,7 @@ describe("Host disarm proof", () => {
           Union: (u: unknown) => u,
           Literal: (l: unknown) => l,
           Integer: (i: unknown) => i,
+          Boolean: (b: unknown) => b,
         },
       },
       registerTool: () => {},
