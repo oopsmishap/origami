@@ -37,7 +37,7 @@ Open with `/fold` or `Alt+F`.
 
 ## Web dashboard
 
-`/fold web` starts a token-protected loopback server on port 3780, falling back through 3789. It shows context and cache trajectories, protected zones, fold candidates, block details, agent-session hierarchy, and FTS5 search over fold summaries and archived original messages.
+`/fold web` starts a token-protected loopback server on port 3780, falling back through 3789. It shows context and cache trajectories, protected zones, fold candidates, block details, agent-session hierarchy, FTS5 search over fold summaries and archived original messages, and a real-time tool execution audit log with frustration-loop diagnosis.
 
 The API rejects missing tokens, foreign origins, non-loopback hosts, and invalid mutation bodies.
 

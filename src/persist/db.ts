@@ -2,7 +2,7 @@ import { existsSync, renameSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import type { Block } from "../kernel/types.ts";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 export const MAX_SEARCH_HITS = 50;
 
 export interface DbBlockRow {
@@ -71,6 +71,37 @@ export interface DbMessageHit {
   snippet: string;
   rank: number;
 }
+export interface DbToolTelemetryRow {
+  id?: number;
+  session_id: string;
+  ts: number;
+  tool: string;
+  duration_ms: number;
+  ok: number;
+  error: string | null;
+  input_summary: string;
+  output_summary: string;
+  stumble: number;
+  stumble_reason: string | null;
+  metrics: string;
+}
+
+export interface ToolTelemetrySummary {
+  totalCalls: number;
+  errorCount: number;
+  stumbleCount: number;
+  avgDurationMs: number;
+  byTool: Record<
+    string,
+    {
+      calls: number;
+      errors: number;
+      stumbles: number;
+      avgDurationMs: number;
+    }
+  >;
+  recentStumbles: DbToolTelemetryRow[];
+}
 
 export interface OrigamiDb {
   readonly schemaVersion: number;
@@ -89,6 +120,9 @@ export interface OrigamiDb {
   searchMessages(query: string, limit: number): DbMessageHit[];
   roundsForSession(sessionId: string): DbRoundRow[];
   blocksForSession(sessionId: string): DbBlockRow[];
+  recordToolCall(row: DbToolTelemetryRow): void;
+  toolCallsForSession(sessionId: string, limit?: number): DbToolTelemetryRow[];
+  toolTelemetrySummary(sessionId: string): ToolTelemetrySummary;
   exportSession(sessionId: string): {
     schemaVersion: number;
     sessionId: string;
@@ -96,6 +130,7 @@ export interface OrigamiDb {
     blocks: DbBlockRow[];
     rounds: DbRoundRow[];
     messages: DbMessageRow[];
+    toolCalls?: DbToolTelemetryRow[];
   };
   prune(cutoffMs: number): { blocks: number; rounds: number; messages: number };
   close(): void;
@@ -199,6 +234,25 @@ CREATE TRIGGER messages_fts_au AFTER UPDATE OF text ON messages BEGIN
 END;
 INSERT INTO messages_fts(messages_fts) VALUES ('rebuild');
 `;
+const MIGRATION_4 = `
+CREATE TABLE IF NOT EXISTS tool_telemetry (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  tool TEXT NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  ok INTEGER NOT NULL,
+  error TEXT,
+  input_summary TEXT NOT NULL DEFAULT '',
+  output_summary TEXT NOT NULL DEFAULT '',
+  stumble INTEGER NOT NULL DEFAULT 0,
+  stumble_reason TEXT,
+  metrics TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS tool_telemetry_session_ts ON tool_telemetry(session_id, ts);
+CREATE INDEX IF NOT EXISTS tool_telemetry_tool ON tool_telemetry(tool, ts);
+`;
+
 
 interface ParsedQuery {
   terms: string[];
@@ -331,7 +385,7 @@ export function openDb(path: string): OrigamiDb {
     throw new Error(`origami.db schema v${version} is newer than supported v${SCHEMA_VERSION}`);
   }
 
-  const migrations = [MIGRATION_1, MIGRATION_2, MIGRATION_3];
+  const migrations = [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4];
   while (version < SCHEMA_VERSION) {
     const next = version + 1;
     transaction(sqlite, () => {
@@ -353,6 +407,82 @@ export function openDb(path: string): OrigamiDb {
     },
     updateBlockStatus(sessionId, blockId, status, consumedBy) {
       statusWriter(sqlite)({ session_id: sessionId, block_id: blockId, status, consumed_by: consumedBy });
+    },
+    recordToolCall(row) {
+      sqlite
+        .query(
+          `INSERT INTO tool_telemetry
+             (session_id, ts, tool, duration_ms, ok, error, input_summary, output_summary, stumble, stumble_reason, metrics)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          row.session_id,
+          row.ts,
+          row.tool,
+          row.duration_ms,
+          row.ok,
+          row.error,
+          row.input_summary,
+          row.output_summary,
+          row.stumble,
+          row.stumble_reason,
+          row.metrics,
+        );
+    },
+    toolCallsForSession(sessionId, limit = 100) {
+      return sqlite
+        .query<DbToolTelemetryRow, [string, number]>(
+          `SELECT id, session_id, ts, tool, duration_ms, ok, error, input_summary, output_summary, stumble, stumble_reason, metrics
+           FROM tool_telemetry
+           WHERE session_id = ?
+           ORDER BY ts DESC, id DESC
+           LIMIT ?`,
+        )
+        .all(sessionId, Math.max(1, Math.min(500, limit)));
+    },
+    toolTelemetrySummary(sessionId) {
+      const rows = sqlite
+        .query<DbToolTelemetryRow, [string]>(
+          `SELECT id, session_id, ts, tool, duration_ms, ok, error, input_summary, output_summary, stumble, stumble_reason, metrics
+           FROM tool_telemetry
+           WHERE session_id = ?
+           ORDER BY ts ASC`,
+        )
+        .all(sessionId);
+
+      let totalDuration = 0;
+      let errorCount = 0;
+      let stumbleCount = 0;
+      const byTool: ToolTelemetrySummary["byTool"] = {};
+
+      for (const r of rows) {
+        totalDuration += r.duration_ms;
+        if (!r.ok) errorCount++;
+        if (r.stumble) stumbleCount++;
+
+        if (!byTool[r.tool]) {
+          byTool[r.tool] = { calls: 0, errors: 0, stumbles: 0, avgDurationMs: 0 };
+        }
+        const t = byTool[r.tool]!;
+        t.calls++;
+        if (!r.ok) t.errors++;
+        if (r.stumble) t.stumbles++;
+        t.avgDurationMs = Math.round((t.avgDurationMs * (t.calls - 1) + r.duration_ms) / t.calls);
+      }
+
+      const recentStumbles = rows
+        .filter((r) => r.stumble || !r.ok)
+        .slice(-10)
+        .reverse();
+
+      return {
+        totalCalls: rows.length,
+        errorCount,
+        stumbleCount,
+        avgDurationMs: rows.length > 0 ? Math.round(totalDuration / rows.length) : 0,
+        byTool,
+        recentStumbles,
+      };
     },
     persistFoldBatch(batch) {
       const writeMessage = messageWriter(sqlite);
@@ -445,6 +575,7 @@ export function openDb(path: string): OrigamiDb {
         blocks: db.blocksForSession(sessionId),
         rounds: db.roundsForSession(sessionId),
         messages: sqlite.query<DbMessageRow, [string]>("SELECT * FROM messages WHERE session_id = ? ORDER BY ref").all(sessionId),
+        toolCalls: db.toolCallsForSession(sessionId, 500),
       };
     },
     prune(cutoffMs) {
@@ -460,6 +591,7 @@ export function openDb(path: string): OrigamiDb {
         sqlite.query("DELETE FROM blocks WHERE created_at < ?").run(cutoffMs);
         sqlite.query("DELETE FROM rounds WHERE ts < ?").run(cutoffMs);
         sqlite.query("DELETE FROM messages WHERE captured_at < ?").run(cutoffMs);
+        sqlite.query("DELETE FROM tool_telemetry WHERE ts < ?").run(cutoffMs);
       });
       return { blocks, rounds, messages };
     },

@@ -109,6 +109,9 @@ describe("Standalone Web Dashboard Server", () => {
       expect(html).toContain("Prompt Cache Read Rate");
       expect(html).toContain("FTS5 Search");
       expect(html).toContain("Origami Vault Storage");
+      expect(html).toContain("Audit &amp; Telemetry");
+      expect(html).toContain("tab-audit");
+      expect(html).toContain("Tool Execution Audit Log");
       // Every inline script must parse; one syntax error blanks the whole dashboard.
       const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
       expect(scripts.length).toBeGreaterThan(0);
@@ -197,6 +200,32 @@ describe("Standalone Web Dashboard Server", () => {
       const messageSearch = (await messageSearchRes.json()) as { blocks: unknown[]; messages: { ref: string }[] };
       expect(messageSearch.blocks).toEqual([]);
       expect(messageSearch.messages.map((hit) => hit.ref)).toEqual(["m00042"]);
+      // Record a tool telemetry event in db for audit testing
+      db.recordToolCall({
+        session_id: "dash-session-1",
+        ts: Date.now(),
+        tool: "fold_search",
+        duration_ms: 32,
+        ok: 1,
+        error: null,
+        input_summary: '"caching layer"',
+        output_summary: "1 block(s) · 0 message(s)",
+        stumble: 0,
+        stumble_reason: null,
+        metrics: "{}",
+      });
+
+      const auditRes = await fetch(`${baseUrl}/api/audit?session=dash-session-1`, { headers: authHeaders });
+      expect(auditRes.status).toBe(200);
+      const auditData = (await auditRes.json()) as {
+        events: { tool: string; input_summary: string }[];
+        summary: { totalCalls: number; avgDurationMs: number };
+      };
+      expect(auditData.events.length).toBe(1);
+      expect(auditData.events[0]!.tool).toBe("fold_search");
+      expect(auditData.events[0]!.input_summary).toBe('"caching layer"');
+      expect(auditData.summary.totalCalls).toBe(1);
+
 
       // 6. POST /api/unfold (artifact file mode)
       // First ensure block is registered in engine fold tree for unfold

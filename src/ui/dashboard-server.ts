@@ -258,6 +258,23 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
               messages: searcher.engine.searchMessages(q, limit),
             });
           }
+          // 7. Audit & Telemetry API
+          if (path === "/api/audit") {
+            const limit = Number.parseInt(url.searchParams.get("limit") ?? "100", 10);
+            const events = sessionId ? withDb(record, (db) => db.toolCallsForSession(sessionId, limit)) : [];
+            const summary = sessionId
+              ? withDb(record, (db) => db.toolTelemetrySummary(sessionId))
+              : {
+                  totalCalls: 0,
+                  errorCount: 0,
+                  stumbleCount: 0,
+                  avgDurationMs: 0,
+                  byTool: {},
+                  recentStumbles: [],
+                };
+            return Response.json({ events, summary });
+          }
+
 
           const jsonObject = async (): Promise<Record<string, unknown> | Response> => {
             let value: unknown;
@@ -693,6 +710,47 @@ function renderDashboardHtml(): string {
       color: var(--text-muted);
       margin-top: 3px;
     }
+    /* Audit & Alert Banner */
+    .alert-banner {
+      background: rgba(245, 158, 11, 0.08);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      border-radius: var(--radius-md);
+      padding: 12px 16px;
+    }
+    .alert-title {
+      font-size: 13px;
+      font-weight: 650;
+      color: var(--accent-amber);
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .alert-body {
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+    .badge-tag {
+      font-size: 10.5px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    .badge-ok {
+      background: rgba(16, 185, 129, 0.12);
+      color: var(--accent-green);
+    }
+    .badge-err {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--accent-red);
+    }
+    .badge-stumble {
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--accent-amber);
+    }
 
     /* billion-context Trajectory & Hit-Rate Charts */
     .chart-wrap { width: 100%; overflow-x: auto; position: relative; }
@@ -1077,6 +1135,7 @@ function renderDashboardHtml(): string {
       <button class="seg-tab" data-tab="cache" onclick="switchTab('cache')">Cache Economics <span class="tab-count" id="cnt-rounds">0</span></button>
       <button class="seg-tab" data-tab="zones" onclick="switchTab('zones')">Context Zones</button>
       <button class="seg-tab" data-tab="search" onclick="switchTab('search')">FTS5 Search</button>
+      <button class="seg-tab" data-tab="audit" onclick="switchTab('audit')">Audit &amp; Telemetry <span class="tab-count" id="cnt-audit">0</span></button>
     </nav>
 
     <div class="header-meta">
@@ -1351,6 +1410,70 @@ function renderDashboardHtml(): string {
         </div>
       </div>
     </section>
+    <!-- TAB 6: Audit & Telemetry -->
+    <section class="panel" id="tab-audit">
+      <!-- Telemetry KPI Summary Strip -->
+      <div class="kpi-grid" style="margin-bottom: 16px;">
+        <div class="kpi-card">
+          <div class="kpi-head"><span>Total Tool Calls</span></div>
+          <div class="kpi-value mono" id="audit-kpi-calls">0</div>
+          <div class="kpi-sub" id="audit-kpi-calls-sub">Recorded this session</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-head"><span>Errors &amp; Failures</span></div>
+          <div class="kpi-value mono" id="audit-kpi-errors" style="color:var(--accent-red)">0</div>
+          <div class="kpi-sub" id="audit-kpi-errors-sub">0% failure rate</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-head"><span>Detected Stumbles</span><span id="audit-stumble-badge" class="badge-tag" style="display:none;background:rgba(239,68,68,0.15);color:var(--accent-red)">Frustration Loop</span></div>
+          <div class="kpi-value mono" id="audit-kpi-stumbles" style="color:var(--accent-amber)">0</div>
+          <div class="kpi-sub" id="audit-kpi-stumbles-sub">Search misses, rejections &amp; retries</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-head"><span>Average Latency</span></div>
+          <div class="kpi-value mono" id="audit-kpi-lat">0ms</div>
+          <div class="kpi-sub" id="audit-kpi-lat-sub">Per tool invocation</div>
+        </div>
+      </div>
+
+      <!-- Stumble Alert Banner (shown when stumbles exist) -->
+      <div class="alert-banner" id="audit-stumble-banner" style="display:none;margin-bottom:16px;">
+        <div class="alert-title">Agent Stumbles Detected</div>
+        <div class="alert-body" id="audit-stumble-list"></div>
+      </div>
+
+      <!-- Main Audit Layout -->
+      <div class="card">
+        <div class="card-h">
+          <span class="card-title">Tool Execution Audit Log</span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="btn btn-sm active" id="audit-filter-all" onclick="filterAudit('all')">All</button>
+            <button class="btn btn-sm" id="audit-filter-errors" onclick="filterAudit('errors')">Errors Only</button>
+            <button class="btn btn-sm" id="audit-filter-stumbles" onclick="filterAudit('stumbles')">Stumbles Only</button>
+          </div>
+        </div>
+        <div class="card-b">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:85px">Time</th>
+                  <th style="width:110px">Tool</th>
+                  <th style="width:100px">Status</th>
+                  <th style="width:75px">Latency</th>
+                  <th>Input / Context</th>
+                  <th>Outcome / Output</th>
+                  <th>Stumble / Frustration Diagnosis</th>
+                </tr>
+              </thead>
+              <tbody id="audit-tbody">
+                <tr><td colspan="7" class="chart-empty">No tool invocations recorded yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <!-- Slide-Over Block Inspector Drawer -->
@@ -1491,12 +1614,20 @@ function renderDashboardHtml(): string {
     let activeTab = 'overview';
     function switchTab(tab) {
       activeTab = tab;
+      try {
+        if (location.hash !== '#' + tab) history.replaceState(null, '', location.pathname + location.search + '#' + tab);
+      } catch {}
       document.querySelectorAll('.seg-tab').forEach((b) => {
         b.classList.toggle('active', b.getAttribute('data-tab') === tab);
       });
       document.querySelectorAll('.panel').forEach((p) => {
         p.classList.toggle('active', p.id === 'tab-' + tab);
       });
+    }
+
+    const initialHashTab = (location.hash || '').replace(/^#/, '');
+    if (['overview', 'blocks', 'cache', 'zones', 'search', 'audit'].includes(initialHashTab)) {
+      switchTab(initialHashTab);
     }
 
     // ─── billion-context Trajectory + Hit-Rate Renderer & Linked Brush Zoom ───
@@ -1940,10 +2071,11 @@ function renderDashboardHtml(): string {
       try {
         const sRes = await apiFetch('/api/sessions');
         if (sRes.ok) renderSessions(await sRes.json());
-        const [stRes, bRes, rRes] = await Promise.all([
+        const [stRes, bRes, rRes, audRes] = await Promise.all([
           apiFetch(withSession('/api/status')),
           apiFetch(withSession('/api/blocks')),
           apiFetch(withSession('/api/rounds')),
+          apiFetch(withSession('/api/audit')),
         ]);
         // A newer refresh (e.g. the user switched sessions) owns the view.
         if (seq !== refreshSeq) return;
@@ -1953,6 +2085,10 @@ function renderDashboardHtml(): string {
         const rounds = rRes.ok ? await rRes.json() : [];
         if (seq !== refreshSeq) return;
         cachedBlocks = blocks;
+        const auditData = audRes && audRes.ok ? await audRes.json() : { events: [], summary: null };
+        if (seq !== refreshSeq) return;
+        renderAudit(auditData);
+
 
         $('cnt-blocks').textContent = String(blocks.length);
         $('cnt-rounds').textContent = String(rounds.length);
@@ -2273,6 +2409,109 @@ function renderDashboardHtml(): string {
         tbody.innerHTML = blockRows.concat(messageRows).join('');
       }
     }
+    let currentAuditData = { events: [], summary: null };
+    let currentAuditFilter = 'all';
+
+    function filterAudit(type) {
+      currentAuditFilter = type;
+      const btnAll = $('audit-filter-all');
+      const btnErr = $('audit-filter-errors');
+      const btnStum = $('audit-filter-stumbles');
+      if (btnAll) btnAll.classList.toggle('active', type === 'all');
+      if (btnErr) btnErr.classList.toggle('active', type === 'errors');
+      if (btnStum) btnStum.classList.toggle('active', type === 'stumbles');
+      renderAuditRows();
+    }
+
+    function renderAudit(data) {
+      currentAuditData = data || { events: [], summary: null };
+      const summary = currentAuditData.summary || {
+        totalCalls: 0,
+        errorCount: 0,
+        stumbleCount: 0,
+        avgDurationMs: 0,
+        byTool: {},
+        recentStumbles: [],
+      };
+      const events = currentAuditData.events || [];
+
+      const cntAudit = $('cnt-audit');
+      if (cntAudit) cntAudit.textContent = String(events.length);
+      const kpiCalls = $('audit-kpi-calls');
+      if (kpiCalls) kpiCalls.textContent = String(summary.totalCalls);
+      const kpiCallsSub = $('audit-kpi-calls-sub');
+      if (kpiCallsSub) kpiCallsSub.textContent = events.length + ' recorded in session';
+
+      const kpiErrors = $('audit-kpi-errors');
+      if (kpiErrors) kpiErrors.textContent = String(summary.errorCount);
+      const errPct = summary.totalCalls > 0 ? ((summary.errorCount / summary.totalCalls) * 100).toFixed(1) : '0';
+      const kpiErrorsSub = $('audit-kpi-errors-sub');
+      if (kpiErrorsSub) kpiErrorsSub.textContent = errPct + '% failure rate';
+
+      const kpiStumbles = $('audit-kpi-stumbles');
+      if (kpiStumbles) kpiStumbles.textContent = String(summary.stumbleCount);
+      const hasStumbles = summary.stumbleCount > 0;
+      const stumbleBadge = $('audit-stumble-badge');
+      if (stumbleBadge) stumbleBadge.style.display = hasStumbles ? 'inline-block' : 'none';
+      const kpiStumblesSub = $('audit-kpi-stumbles-sub');
+      if (kpiStumblesSub) kpiStumblesSub.textContent = hasStumbles ? summary.recentStumbles.length + ' stumble event(s)' : 'No frustration loops detected';
+
+      const kpiLat = $('audit-kpi-lat');
+      if (kpiLat) kpiLat.textContent = summary.avgDurationMs + 'ms';
+
+      // Stumble banner
+      const banner = $('audit-stumble-banner');
+      const stumbleList = $('audit-stumble-list');
+      if (banner && stumbleList) {
+        if (hasStumbles && summary.recentStumbles && summary.recentStumbles.length > 0) {
+          banner.style.display = 'block';
+          stumbleList.innerHTML = summary.recentStumbles.slice(0, 4).map((s) =>
+            '<div style="margin-top:4px;"><strong>[' + escapeHtml(s.tool) + ']</strong> ' + escapeHtml(s.stumble_reason || s.error || 'Stumble detected') + ' <span class="mono" style="font-size:11px;color:var(--text-muted);margin-left:6px;">' + fmtDT(s.ts) + '</span></div>'
+          ).join('');
+        } else {
+          banner.style.display = 'none';
+        }
+      }
+
+      renderAuditRows();
+    }
+
+    function renderAuditRows() {
+      const events = currentAuditData.events || [];
+      const tbody = $('audit-tbody');
+      if (!tbody) return;
+      const filtered = events.filter((ev) => {
+        if (currentAuditFilter === 'errors') return !ev.ok;
+        if (currentAuditFilter === 'stumbles') return Boolean(ev.stumble);
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="chart-empty">No matching telemetry events.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = filtered.map((ev) => {
+        const statusBadge = !ev.ok
+          ? '<span class="badge-tag badge-err">Failed</span>'
+          : ev.stumble
+            ? '<span class="badge-tag badge-stumble">Stumble</span>'
+            : '<span class="badge-tag badge-ok">OK</span>';
+        const stumbleCol = ev.stumble_reason
+          ? '<span style="color:var(--accent-amber);font-size:12px;">' + escapeHtml(ev.stumble_reason) + '</span>'
+          : (ev.error ? '<span style="color:var(--accent-red);font-size:12px;">' + escapeHtml(ev.error) + '</span>' : '<span style="color:var(--text-muted);font-size:12px;">—</span>');
+
+        return '<tr>' +
+          '<td class="mono" style="font-size:11.5px;color:var(--text-secondary)">' + fmtDT(ev.ts) + '</td>' +
+          '<td class="mono"><strong>' + escapeHtml(ev.tool) + '</strong></td>' +
+          '<td>' + statusBadge + '</td>' +
+          '<td class="mono" style="font-size:12px;">' + ev.duration_ms + 'ms</td>' +
+          '<td class="mono" style="font-size:12px;color:var(--text-primary);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(ev.input_summary || '') + '">' + escapeHtml(ev.input_summary || '—') + '</td>' +
+          '<td class="mono" style="font-size:12px;color:var(--text-secondary);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(ev.output_summary || '') + '">' + escapeHtml(ev.output_summary || '—') + '</td>' +
+          '<td>' + stumbleCol + '</td>' +
+        '</tr>';
+      }).join('');
+    }
 
     // Live SSE connection
     const events = new EventSource('/api/events?token=' + encodeURIComponent(dashboardToken));
@@ -2285,7 +2524,7 @@ function renderDashboardHtml(): string {
       $('sse-label').textContent = 'Reconnecting';
     });
     // Only the focused session's events matter; session-tree changes always do.
-    ['fold', 'unfold', 'round', 'refresh', 'sessions'].forEach((ev) => {
+    ['fold', 'unfold', 'round', 'refresh', 'sessions', 'telemetry'].forEach((ev) => {
       events.addEventListener(ev, (e) => {
         let sessionId = null;
         try {

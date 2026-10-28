@@ -271,4 +271,59 @@ describe("OrigamiDb", () => {
     expect(db.blocksForSession("session-1").map((b) => b.block_id)).toEqual(["atomic"]);
     db.close();
   });
+  test("persists tool telemetry, queries summaries, exports session, and prunes", () => {
+    const { path } = tempDb();
+    const db = openDb(path);
+
+    db.recordToolCall({
+      session_id: "s1",
+      ts: 100,
+      tool: "fold_status",
+      duration_ms: 10,
+      ok: 1,
+      error: null,
+      input_summary: "check",
+      output_summary: "ok",
+      stumble: 0,
+      stumble_reason: null,
+      metrics: "{}",
+    });
+
+    db.recordToolCall({
+      session_id: "s1",
+      ts: 200,
+      tool: "fold",
+      duration_ms: 50,
+      ok: 0,
+      error: "summary too large",
+      input_summary: "1 range",
+      output_summary: "fail",
+      stumble: 1,
+      stumble_reason: "Fold rejected: summary too large",
+      metrics: "{}",
+    });
+
+    const rows = db.toolCallsForSession("s1");
+    expect(rows.length).toBe(2);
+    expect(rows[0]!.ts).toBe(200); // latest first
+
+    const summary = db.toolTelemetrySummary("s1");
+    expect(summary.totalCalls).toBe(2);
+    expect(summary.errorCount).toBe(1);
+    expect(summary.stumbleCount).toBe(1);
+    expect(summary.avgDurationMs).toBe(30);
+    expect(summary.byTool.fold?.errors).toBe(1);
+    expect(summary.recentStumbles.length).toBe(1);
+
+    const exported = db.exportSession("s1");
+    expect(exported.toolCalls?.length).toBe(2);
+
+    // Prune before ts=150 should delete the first record
+    db.prune(150);
+    const remaining = db.toolCallsForSession("s1");
+    expect(remaining.length).toBe(1);
+    expect(remaining[0]!.ts).toBe(200);
+
+    db.close();
+  });
 });

@@ -65,6 +65,10 @@ export class OrigamiRuntime {
       countFn: opts.countFn,
     });
   }
+  get sessionId(): string {
+    return this.host.sessionId();
+  }
+
 
   attachDb(db: OrigamiDb | null, onPersistenceError?: (error: unknown) => void): void {
     this.db = db;

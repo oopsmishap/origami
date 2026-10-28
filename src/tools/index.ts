@@ -25,9 +25,10 @@ import {
   unfoldResultView,
 } from "./display.ts";
 import { nativeAvailable } from "../ui/native.ts";
+import { recordToolTelemetry } from "../telemetry.ts";
 
 export type ToolMutationListener = (
-  event: "fold" | "unfold",
+  event: "fold" | "unfold" | "telemetry",
   payload: unknown,
   ctx?: ExtensionContext,
 ) => void;
@@ -78,16 +79,43 @@ export function registerTools(
     loadMode: "essential",
     approval: "read",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const t0 = performance.now();
       const rt = getRuntime(ctx);
       rt.sync();
+      const inputSummary = `${params.folds.length} range(s) · T${params.tier ?? 1}`;
       const result = rt.engine.executeFold({ folds: params.folds as FoldSpec[], tier: params.tier });
+      const durationMs = performance.now() - t0;
       if (!result.ok) {
+        const row = recordToolTelemetry(rt, {
+          tool: "fold",
+          durationMs,
+          ok: false,
+          error: `${result.error} (fold ${result.foldIndex})`,
+          inputSummary,
+          outputSummary: `Fold rejected at index ${result.foldIndex}`,
+          metrics: { tier: params.tier ?? 1, requestedFolds: params.folds.length, foldIndex: result.foldIndex },
+        });
+        if (row) onMutation?.("telemetry", row, ctx);
         return textResult(`error: ${result.error} (fold ${result.foldIndex})`, { summary: result.error, rows: [] }, true);
       }
       onMutation?.("fold", result.outcome, ctx);
       const text = formatFoldOutcome(result.outcome);
+      const outSummary = `${result.outcome.foldCount} block(s) · -${formatTokens(result.outcome.tokensReclaimed)}t`;
+      const row = recordToolTelemetry(rt, {
+        tool: "fold",
+        durationMs,
+        ok: true,
+        inputSummary,
+        outputSummary: outSummary,
+        metrics: {
+          tier: params.tier ?? 1,
+          blocksCreated: result.outcome.blocks.length,
+          tokensReclaimed: result.outcome.tokensReclaimed,
+        },
+      });
+      if (row) onMutation?.("telemetry", row, ctx);
       return textResult(text, {
-        summary: `${result.outcome.foldCount} block(s) · -${formatTokens(result.outcome.tokensReclaimed)}t`,
+        summary: outSummary,
         rows: result.outcome.blocks.map(
           (b) => `${b.id} (T${b.tier}) ${formatTokens(b.tokensBefore)}t → ${formatTokens(b.tokensAfter)}t · ${b.topic}`,
         ),
@@ -135,22 +163,70 @@ export function registerTools(
     loadMode: "discoverable",
     approval: "read",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const t0 = performance.now();
       const rt = getRuntime(ctx);
       rt.sync();
+      const inputSummary = `${params.id} (${params.mode ?? "file"}${params.deep ? ", deep" : ""})`;
       if (params.mode === "inline") {
         const result = rt.engine.executeUnfold(params.id, { deep: params.deep === true });
-        if (!result.ok) return textResult(`error: ${result.error}`, { summary: result.error, rows: [] }, true);
+        const durationMs = performance.now() - t0;
+        if (!result.ok) {
+          const row = recordToolTelemetry(rt, {
+            tool: "unfold",
+            durationMs,
+            ok: false,
+            error: result.error,
+            inputSummary,
+            outputSummary: `Inline unfold failed for ${params.id}`,
+            metrics: { blockId: params.id, mode: "inline", deep: Boolean(params.deep) },
+          });
+          if (row) onMutation?.("telemetry", row, ctx);
+          return textResult(`error: ${result.error}`, { summary: result.error, rows: [] }, true);
+        }
         onMutation?.("unfold", { id: params.id, mode: "inline", unfolded: result.unfolded }, ctx);
+        const outSummary = `${result.unfolded.length} block(s) unfolded inline`;
+        const row = recordToolTelemetry(rt, {
+          tool: "unfold",
+          durationMs,
+          ok: true,
+          inputSummary,
+          outputSummary: outSummary,
+          metrics: { blockId: params.id, mode: "inline", unfoldedCount: result.unfolded.length, refsCovered: result.refs.length },
+        });
+        if (row) onMutation?.("telemetry", row, ctx);
         return textResult(`unfolded inline: ${result.unfolded.join(", ")} · ${result.refs.length} refs covered`, {
-          summary: `${result.unfolded.length} block(s) unfolded inline`,
+          summary: outSummary,
           rows: result.refs,
         });
       }
       const result = await rt.engine.unfoldArtifact(params.id);
-      if (!result.ok) return textResult(`error: ${result.error}`, { summary: result.error, rows: [] }, true);
+      const durationMs = performance.now() - t0;
+      if (!result.ok) {
+        const row = recordToolTelemetry(rt, {
+          tool: "unfold",
+          durationMs,
+          ok: false,
+          error: result.error,
+          inputSummary,
+          outputSummary: `Artifact unfold failed for ${params.id}`,
+          metrics: { blockId: params.id, mode: "file" },
+        });
+        if (row) onMutation?.("telemetry", row, ctx);
+        return textResult(`error: ${result.error}`, { summary: result.error, rows: [] }, true);
+      }
       onMutation?.("unfold", { id: params.id, mode: "file", path: result.path }, ctx);
+      const outSummary = `artifact ${result.path}`;
+      const row = recordToolTelemetry(rt, {
+        tool: "unfold",
+        durationMs,
+        ok: true,
+        inputSummary,
+        outputSummary: outSummary,
+        metrics: { blockId: params.id, mode: "file", artifactPath: result.path, refsCount: result.refs.length },
+      });
+      if (row) onMutation?.("telemetry", row, ctx);
       return textResult(`block ${params.id} written to ${result.path}\n${result.toc}`, {
-        summary: `artifact ${result.path}`,
+        summary: outSummary,
         rows: result.refs,
       });
     },
@@ -182,21 +258,62 @@ export function registerTools(
     loadMode: "discoverable",
     approval: "read",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const t0 = performance.now();
       const rt = getRuntime(ctx);
       rt.sync();
+      const inputSummary = `${params.refs}`;
       let refs: string[];
       try {
         refs = parseRangeList(params.refs).flatMap((r) => expandRefRange(r.start, r.end));
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e);
+        const durationMs = performance.now() - t0;
+        const row = recordToolTelemetry(rt, {
+          tool: "fold_recall",
+          durationMs,
+          ok: false,
+          error,
+          inputSummary,
+          outputSummary: `Failed to parse ref ranges`,
+          metrics: { rawRefs: params.refs },
+        });
+        if (row) onMutation?.("telemetry", row, ctx);
         return textResult(`error: ${error}`, { summary: error, rows: [] }, true);
       }
       if (refs.length === 0 || refs.length > RECALL_MAX_REFS) {
         const error = `expected 1-${RECALL_MAX_REFS} refs, got ${refs.length}`;
+        const durationMs = performance.now() - t0;
+        const row = recordToolTelemetry(rt, {
+          tool: "fold_recall",
+          durationMs,
+          ok: false,
+          error,
+          inputSummary,
+          outputSummary: `Ref count out of bounds (${refs.length})`,
+          metrics: { count: refs.length, max: RECALL_MAX_REFS },
+        });
+        if (row) onMutation?.("telemetry", row, ctx);
         return textResult(`error: ${error}`, { summary: error, rows: [] }, true);
       }
       const hits = rt.engine.recall(refs);
       const found = hits.filter((h) => h.source !== "missing").length;
+      const missing = hits.filter((h) => h.source === "missing").length;
+      const durationMs = performance.now() - t0;
+      const outSummary = `${found}/${refs.length} ref(s) recalled`;
+      const row = recordToolTelemetry(rt, {
+        tool: "fold_recall",
+        durationMs,
+        ok: true,
+        inputSummary,
+        outputSummary: outSummary,
+        metrics: {
+          requestedCount: refs.length,
+          foundCount: found,
+          missingRefs: missing,
+          missingRefList: hits.filter((h) => h.source === "missing").map((h) => h.ref),
+        },
+      });
+      if (row) onMutation?.("telemetry", row, ctx);
       const text = hits
         .map((h) =>
           h.source === "missing"
@@ -205,7 +322,7 @@ export function registerTools(
         )
         .join("\n\n");
       return textResult(text, {
-        summary: `${found}/${refs.length} ref(s) recalled`,
+        summary: outSummary,
         rows: hits.map((h) => `${h.ref} · ${h.source}`),
       });
     },
@@ -238,13 +355,31 @@ export function registerTools(
     loadMode: "discoverable",
     approval: "read",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const t0 = performance.now();
       const rt = getRuntime(ctx);
       rt.sync();
       const limit = params.limit ?? 10;
+      const inputSummary = `"${params.query}" (limit ${limit})`;
       const hits = rt.engine.search(params.query, limit);
       const messages = rt.engine.searchMessages(params.query, limit);
+      const durationMs = performance.now() - t0;
+      const outSummary = `${hits.length} block(s) · ${messages.length} message(s)`;
+      const row = recordToolTelemetry(rt, {
+        tool: "fold_search",
+        durationMs,
+        ok: true,
+        inputSummary,
+        outputSummary: outSummary,
+        metrics: {
+          query: params.query,
+          limit,
+          blockHits: hits.length,
+          messageHits: messages.length,
+        },
+      });
+      if (row) onMutation?.("telemetry", row, ctx);
       return textResult(formatSearchHits(hits, messages), {
-        summary: `${hits.length} block(s) · ${messages.length} message(s)`,
+        summary: outSummary,
         rows: [
           ...hits.map((h) => `${h.blockId} (T${h.tier}) · ${h.topic}`),
           ...messages.map((m) => `${m.ref} ${m.role} · turn ${m.turn}`),
@@ -276,13 +411,31 @@ export function registerTools(
     loadMode: "discoverable",
     approval: "read",
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const t0 = performance.now();
       const rt = getRuntime(ctx);
       rt.sync();
       const st = rt.engine.status();
       const text = formatStatusReport(st);
       const liveBlocks = st.blocks.filter((b) => b.status === "active").length;
+      const durationMs = performance.now() - t0;
+      const outSummary = `${st.occupancyPct}% (${formatTokens(st.usedTokens)}/${formatTokens(st.windowTokens)}) · ${liveBlocks}b -${formatTokens(st.tokenSplit.foldedSavings)}t`;
+      const row = recordToolTelemetry(rt, {
+        tool: "fold_status",
+        durationMs,
+        ok: true,
+        inputSummary: "Status check",
+        outputSummary: outSummary,
+        metrics: {
+          occupancyPct: st.occupancyPct,
+          usedTokens: st.usedTokens,
+          liveBlocks,
+          growthSinceFold: st.growthSinceFold,
+          compressibleTokens: st.compressibleTokens,
+        },
+      });
+      if (row) onMutation?.("telemetry", row, ctx);
       return textResult(text, {
-        summary: `${st.occupancyPct}% (${formatTokens(st.usedTokens)}/${formatTokens(st.windowTokens)}) · ${liveBlocks}b -${formatTokens(st.tokenSplit.foldedSavings)}t`,
+        summary: outSummary,
         kvPairs: [
           ["Occupancy", `${st.occupancyPct}% (${formatTokens(st.usedTokens)} / ${formatTokens(st.windowTokens)})`],
           ["Growth", `${formatTokens(st.growthSinceFold)} / ${formatTokens(st.growthStep)}`],
@@ -316,11 +469,24 @@ export function registerTools(
     loadMode: "discoverable",
     approval: "read",
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const t0 = performance.now();
       const rt = getRuntime(ctx);
       rt.sync();
       const rounds = rt.engine.cacheRounds();
       const text = formatCacheRounds(rounds);
       const firstLine = text.split("\n")[0] ?? "no cache rounds";
+      const durationMs = performance.now() - t0;
+      const row = recordToolTelemetry(rt, {
+        tool: "fold_cache",
+        durationMs,
+        ok: true,
+        inputSummary: "Cache check",
+        outputSummary: firstLine,
+        metrics: {
+          roundsCount: rounds.length,
+        },
+      });
+      if (row) onMutation?.("telemetry", row, ctx);
       return textResult(text, {
         summary: firstLine,
         rows: rounds.slice(-8).map((r, i) => {
