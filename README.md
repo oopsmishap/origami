@@ -27,11 +27,13 @@ Requires [`oh-my-pi`](https://omp.sh) (`omp`). Choose any installation method be
 
 ### Option 1: `omp plugin` CLI (Recommended)
 
-Clone the repository and link it globally with `omp`:
+Clone the repository, install its runtime dependencies, and link it globally with `omp`:
 
 ```bash
 git clone https://github.com/oopsmishap/origami.git
-omp plugin link ./origami
+cd origami
+bun install
+omp plugin link .
 ```
 
 Manage the plugin at any time with:
@@ -44,19 +46,23 @@ omp plugin enable origami
 
 ### Option 2: Auto-Discovered Extension Directory
 
-Clone or symlink Origami into `oh-my-pi`'s native extension directory:
+Clone Origami, install its runtime dependencies, then symlink it into `oh-my-pi`'s native extension directory:
 
 ```bash
+git clone https://github.com/oopsmishap/origami.git
+cd origami
+bun install
+
 # Global (enabled for all projects)
-git clone https://github.com/oopsmishap/origami.git ~/.omp/agent/extensions/origami
+ln -s "$PWD" ~/.omp/agent/extensions/origami
 
 # Project-local (enabled for a single workspace)
-git clone https://github.com/oopsmishap/origami.git .omp/extensions/origami
+ln -s "$PWD" /path/to/project/.omp/extensions/origami
 ```
 
 ### Option 3: Explicit Configuration or Single Session
 
-Reference the directory in `~/.omp/agent/config.yml`:
+After cloning Origami and running `bun install` in its directory, reference that directory in `~/.omp/agent/config.yml`:
 
 ```yaml
 extensions:
