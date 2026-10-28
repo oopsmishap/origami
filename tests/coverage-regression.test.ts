@@ -111,4 +111,59 @@ describe("Coverage Regression Guard (#3322)", () => {
     expect(journal.length).toBe(journalLenBefore);
     expect(engine.state.tree.get("b1")?.status).toBe("active");
   });
+
+  it("rejects any fold that would produce duplicate coverage or structural invariant violations", () => {
+    const { engine, journal } = harness();
+    // Fold 1: covers m00003..m00004
+    const res1 = engine.executeFold({
+      folds: [{ range: "m00003..m00004", topic: "T1", summary: "Summary of 3 and 4" }],
+    });
+    expect(res1.ok).toBe(true);
+
+    // Fold 2: covers m00005..m00006
+    const res2 = engine.executeFold({
+      folds: [{ range: "m00005..m00006", topic: "T2", summary: "Summary of 5 and 6" }],
+    });
+    expect(res2.ok).toBe(true);
+
+    // Fold 3: covers m00007..m00008
+    const res3 = engine.executeFold({
+      folds: [{ range: "m00007..m00008", topic: "T3", summary: "Summary of 7 and 8" }],
+    });
+    expect(res3.ok).toBe(true);
+
+    // In Tier 2, merge b2 and b3, but simulate a projection that illegally covers b1's ranges without consuming b1
+    const origProject = engine.project.bind(engine);
+    engine.project = (spec: string, tier: 1 | 2 | 3) => {
+      if (tier === 2) {
+        return {
+          ok: true,
+          projected: {
+            indices: [],
+            refs: ["m00003", "m00004", "m00005", "m00006", "m00007", "m00008"],
+            // Illegally claims m00003..m00004 which is owned by active block b1!
+            ranges: [{ start: "m00003", end: "m00008" }],
+            tokens: 50,
+          },
+          widened: false,
+          turnCount: 2,
+        };
+      }
+      return origProject(spec, tier);
+    };
+
+    const journalLen = journal.length;
+    const resTier2 = engine.executeFold({
+      folds: [{ range: "b2,b3", topic: "Merge b2 and b3", summary: "Summary of b2 and b3" }],
+      tier: 2,
+    });
+
+    expect(resTier2.ok).toBe(false);
+    if (!resTier2.ok) {
+      expect(resTier2.error).toContain("invariant violation (duplicate-coverage)");
+      expect(resTier2.error).toContain("overlaps active block b1");
+    }
+    expect(journal.length).toBe(journalLen);
+    expect(engine.state.tree.get("b4")).toBeUndefined();
+  });
 });

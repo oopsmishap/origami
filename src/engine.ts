@@ -569,6 +569,23 @@ export class OrigamiEngine {
       }
     }
 
+    // Pre-commit structural invariant verification: prevent duplicate coverage or broken hierarchy from ever landing.
+    const simulatedAll = tree.all().map((b) => {
+      if (simulatedConsumed.has(b.id)) {
+        return { ...b, status: "consumed" as const, consumedBy: planned[0]!.block.id };
+      }
+      return b;
+    }).concat(planned.map((p) => p.block));
+
+    const violations = checkInvariants(simulatedAll);
+    const fatal = violations.find((v) => v.kind === "duplicate-coverage" || v.kind === "missing-child" || v.kind === "active-child");
+    if (fatal) {
+      return {
+        ok: false,
+        error: `invariant violation (${fatal.kind}): ${fatal.detail}; fold aborted`,
+        foldIndex: 0,
+      };
+    }
     const created: FoldCreatedBlock[] = [];
     let reclaimed = 0;
     for (const p of planned) {
