@@ -31,11 +31,12 @@ Merge at least 2 active tier-1 blocks into one denser summary; the merged blocks
 const TIER3_RULES = `## Tier 3 — Ultra-condense (fold block ranges)
 Merge at least 2 active lower-tier blocks. Keep ONLY: the goal, open objectives, and the load-bearing constraints. Everything else is expendable.`;
 
-const RECOVERY_RULES = `## Getting detail back
+const RECOVERY_RULES = `## Getting detail back (in-session history)
+- THIS SESSION: When looking for earlier turns, previous decisions, instructions, or roadmap notes from THIS conversation, ALWAYS use \`fold_search\` and \`fold_recall\`. Do NOT use \`recall\` (Mnemopi) for in-session history.
+- CROSS-SESSION: \`recall\` / \`retain\` are for separate past sessions and cross-project knowledge.
 - \`fold_recall\` with refs (\`"m00042..m00045"\`) returns the exact original text without changing context. Use it whenever a summary is too thin for the task at hand — exact strings, numbers, code.
 - \`fold_search\` finds blocks and archived original messages by content when you don't know the refs; message hits list refs to pass to \`fold_recall\`.
 - \`unfold\` (\`mode: "file"\`) writes a block's originals to an artifact; \`mode: "inline"\` puts the block's contents back in context (one level; \`deep: true\` for raw messages). A consumed block is unfolded through its parent.`;
-
 const NUDE_RESPONSE = `## Responding to nudges
 Messages beginning with \`[origami]\` are folding reminders.
 - Emergency (context nearly full): fold before doing anything else. Not optional.

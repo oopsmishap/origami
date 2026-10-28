@@ -7,7 +7,7 @@ import { getAgentDir, settings } from "@oh-my-pi/pi-coding-agent";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { countTokens, Encoding as NativeEncoding } from "@oh-my-pi/pi-natives";
 import { join } from "node:path";
-
+import { handleRecallToolResult } from "./federation/recall-hook.ts";
 import { loadOrigamiConfig } from "./config-load.ts";
 import { configFromPreset, type OrigamiConfig } from "./config.ts";
 import { doctrinePrompt } from "./kernel/doctrine.ts";
@@ -329,6 +329,12 @@ export default function origamiExtension(api: ExtensionAPI): void {
     record.runtime.engine.recordRound(round);
     refreshStatusChip(sessionId);
     registry.emit("round", sessionId, round);
+  });
+  api.on("tool_result", (event, ctx) => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const record = registry.live(sessionId);
+    if (!record?.runtime || isSubagentDormant(ctx, record.config)) return;
+    return handleRecallToolResult(event, sessionId, record.runtime);
   });
 
   api.on("session_shutdown", (_event, ctx) => {

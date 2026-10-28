@@ -22,7 +22,7 @@ import { blockBodyForIndex } from "./persist/db.ts";
 import type { OrigamiConfig } from "./config.ts";
 import { configFromPreset } from "./config.ts";
 import { evaluateCacheRound, getCacheCollapseStatus } from "./telemetry.ts";
-
+import { extractPlanTerms, rerankHitsWithPlan } from "./kernel/plan-search.ts";
 export interface HostPort {
   sessionId(): string;
   appendEvent(op: JournalOp): void;
@@ -164,6 +164,7 @@ export interface FoldSearchHit {
   status: string;
   snippet: string;
   rank: number;
+  planScore?: number;
 }
 
 export interface FoldMessageHit {
@@ -233,6 +234,7 @@ export class OrigamiEngine {
   private onPersistenceError: ((error: unknown) => void) | null = null;
   private lastEfficiencyAtGrowth: number | null = null;
   private lastPromotionAtMass: { 1: number | null; 2: number | null } = { 1: null, 2: null };
+  private lastFoldTurn: number | null = null;
   get sessionId(): string {
     return this.host.sessionId();
   }
@@ -334,6 +336,8 @@ export class OrigamiEngine {
         compressibleTokens: this.state.compressibleTokens(this.protectedFromTurn, this.bookkeepingRefs),
         windowFillPct: window > 0 ? projected / window : 0,
         nudgedThisTurn: this.nudgedThisTurn,
+        activeTurn: this.activeTurn,
+        lastFoldTurn: this.lastFoldTurn,
         lastEfficiencyAtGrowth: this.lastEfficiencyAtGrowth,
         lastPromotionAtMass: this.lastPromotionAtMass,
       },
@@ -587,6 +591,7 @@ export class OrigamiEngine {
     this.activeNudge = null;
     // A fold answers the outstanding nudge: growth re-anchors, and a merge resets its tier's mass backoff.
     this.lastEfficiencyAtGrowth = null;
+    this.lastFoldTurn = this.activeTurn;
     if (tier > 1) this.lastPromotionAtMass[(tier - 1) as 1 | 2] = null;
     return {
       ok: true,
@@ -995,9 +1000,10 @@ export class OrigamiEngine {
     }
   }
 
-  search(query: string, limit = 10): FoldSearchHit[] {
+  search(query: string, limit = 10, options?: { planAware?: boolean }): FoldSearchHit[] {
     if (!this.db) return [];
-    return this.db.searchBlocks(query, limit).map((r) => ({
+    const poolLimit = options?.planAware === false ? limit : Math.max(limit * 2, 20);
+    const rawHits = this.db.searchBlocks(query, poolLimit).map((r) => ({
       blockId: r.block_id,
       sessionId: r.session_id,
       tier: r.tier,
@@ -1006,8 +1012,13 @@ export class OrigamiEngine {
       snippet: r.snippet,
       rank: r.rank,
     }));
-  }
 
+    if (options?.planAware === false) return rawHits.slice(0, limit);
+
+    const planTerms = extractPlanTerms(this.state.bound);
+    const reranked = rerankHitsWithPlan(rawHits, planTerms);
+    return reranked.slice(0, limit);
+  }
   /** Ranked full-text search over archived original messages (populated when folds archive their sources). */
   searchMessages(query: string, limit = 10): FoldMessageHit[] {
     if (!this.db) return [];

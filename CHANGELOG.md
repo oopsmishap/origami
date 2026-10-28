@@ -1,14 +1,21 @@
 # Changelog
 
-## 0.2.6 — 2026-10-28
+## 0.2.7 — 2026-10-28
 
+### Features
+- **Recall Federation Hook**: Intercepts cross-session memory queries (`recall` and `write xd://recall`) and cross-checks the active session's SQLite FTS5 index. Appends a clean `[Origami In-Session History]` section with matching fold blocks and original message references without modifying external memory.
+- **Nudge Self-Amplification Prevention (#5058)**: Excludes all Origami bookkeeping tools (`fold`, `unfold`, `fold_recall`, `fold_search`, `fold_status`, `fold_cache`) across all turns from `growthSinceFold`. Implements a 2-turn post-fold cooldown suppressing advisory efficiency and promotion nudges immediately after a fold while keeping emergency window overflow protection active.
+- **Plan-Aware Search Re-ranking (#5047)**: Implements plan-aware retrieval in `fold_search`. Scans recent messages for planning tool calls (`todo`, `task`, `update_plan`) and user instructions, tokenizes weighted signal terms, and re-ranks search hits to prioritize active plan-relevant blocks.
+- **Doctrine and Tool Clarification**: Updated Origami doctrine prompt and tool descriptions to explicitly distinguish in-session history retrieval (`fold_search`, `fold_recall`) from cross-session memory (`recall`, `retain`).
+
+## 0.2.6 — 2026-10-28
 ### Features
 - Upstream billion-context architectural alignment (round 2):
   1. **Fold Loop Circuit Breaker (#2146, #4812)**: Tracks consecutive fold failures in session telemetry. Arms at 3 consecutive failures with an explicit stop notice, and collapses into a short refusal on subsequent calls (`[Fold refused: circuit breaker still armed...]`), breaking infinite tool retry loops. Automatically disarms on any successful fold or after a 10-minute quiet window.
-  2. **Frontier Clamp Diagnostics (#2146, #4252)**: Detects requests referencing messages beyond the session's highest stored reference. Accurately diagnoses all-above-frontier ranges as stale-generation hallucinations (`range is above this session's highest ref (mXXXXX)`) and provides actionable ceiling clamp notes for partially-above-frontier ranges (`endRef is above the highest stored ref (mXXXXX); retry with endRef ≤ mXXXXX`).
+  2. **Frontier Clamp Diagnostics (#2146, #4252)**: Detects requests referencing messages beyond the session's highest stored reference. Accurately diagnoses all-above-frontier ranges as stale-generation hallucinations (`range is above this session's highest ref (mXXXXX)`) and provides concrete ceiling clamp notes for partially-above-frontier ranges (`endRef is above the highest stored ref (mXXXXX); retry with endRef ≤ mXXXXX`).
   3. **Coverage Regression Guard (#3322)**: Pre-commit invariant check in `executeFold` guaranteeing that every message covered by active blocks before a fold remains covered after the fold. Rejects any corrupted or partial merge that would decompress or orphan previously-covered messages without modifying session state.
   4. **Tool Call Assistant Message Fingerprinting (#4110)**: Deserializes top-level `tool_calls` and `toolCalls` on assistant messages when `content` is null or empty. Synthesizes canonical tool-call representation into message text and generates distinct, deterministic content hashes to eliminate cross-session and cross-message hash collisions.
-  5. **Payback Economics & Break-Even Turns (#4899, #4916, #4956)**: Real-time calculation of amortized fold payback based on one-time summary overhead vs subsequent prompt egress avoidance. Computes `breakEvenTurns`, `paidBack` status, `cumulativeSavedTokens`, and actionable payback strings, surfaced across the footer status chip (`✓` indicator), Workbench Overview KPI tiles, and Web UI Vault Storage card.
+  5. **Payback Economics & Break-Even Turns (#4899, #4916, #4956)**: Real-time calculation of amortized fold payback based on one-time summary overhead vs subsequent prompt egress avoidance. Computes `breakEvenTurns`, `paidBack` status, `cumulativeSavedTokens`, and concrete payback strings, surfaced across the footer status chip (`✓` indicator), Workbench Overview KPI tiles, and Web UI Vault Storage card.
 
 ## 0.2.5 — 2026-10-28
 

@@ -1,22 +1,28 @@
 import type { BoundMessage } from "./types.ts";
 
-/** Tools whose historical calls duplicate content already carried by their block. */
-export const FOLD_TOOL_NAMES: ReadonlySet<string> = new Set(["fold"]);
+/** Tools whose calls represent Origami bookkeeping rather than conversational payload. */
+export const FOLD_TOOL_NAMES: Record<string, true> = {
+  fold: true,
+  unfold: true,
+  fold_recall: true,
+  fold_search: true,
+  fold_status: true,
+  fold_cache: true,
+};
 
 /**
- * Refs of completed historical fold call/result pairs. They remain in outbound
+ * Refs of completed fold and bookkeeping call/result pairs. They remain in outbound
  * context so the host retains the durable record of executed tool actions, but
- * are excluded from fold economics because their block already carries the
- * useful content.
+ * are excluded from fold economics and growth calculations across all turns (#5058).
  */
-export function historicalFoldCallRefs(bound: readonly BoundMessage[], protectedFromTurn: number): Set<string> {
+export function historicalFoldCallRefs(bound: readonly BoundMessage[], _protectedFromTurn?: number): Set<string> {
   const refs = new Set<string>();
   const callIds = new Set<string>();
   for (const m of bound) {
-    if (m.role !== "assistant" || m.turn >= protectedFromTurn) continue;
+    if (m.role !== "assistant") continue;
     const calls = m.toolCalls;
     if (!calls || calls.length === 0) continue;
-    if (!calls.every((c) => FOLD_TOOL_NAMES.has(c.name))) continue;
+    if (!calls.every((c) => Boolean(FOLD_TOOL_NAMES[c.name]))) continue;
     refs.add(m.ref);
     for (const c of calls) callIds.add(c.id);
   }

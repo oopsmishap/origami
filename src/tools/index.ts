@@ -306,7 +306,7 @@ export function registerTools(
     name: "fold_recall",
     label: "Fold Recall",
     description:
-      "Read the original text of specific refs (e.g. \"m00042..m00045,m00051\") without changing context. Works for folded refs and for refs archived off the current branch. Use it to check exact wording a summary dropped.",
+      "Read the original text of specific refs (e.g. \"m00042..m00045,m00051\") without changing context. Use for recovering exact wording from earlier turns in this session. Works for folded refs and for refs archived off the current branch.",
     parameters: t.Object({
       refs: t.String({ description: `Ref ranges, comma-separated; at most ${RECALL_MAX_REFS} refs` }),
     }),
@@ -402,7 +402,7 @@ export function registerTools(
     name: "fold_search",
     label: "Fold Search",
     description:
-      'Search folded history with full-text ranking: block topics/summaries plus archived original messages (recall exact text with fold_recall). Supports "tier:" (blocks only) and "session:" filter prefixes.',
+      'Primary tool to search earlier history in this conversation. Full-text ranking across block topics/summaries and archived original messages (retrieve exact text with fold_recall). Supports "tier:" (blocks only) and "session:" filter prefixes.',
     parameters: t.Object({
       query: t.String({ description: "FTS5 search terms" }),
       limit: t.Optional(t.Integer({ description: "Max hits (default 10)" })),

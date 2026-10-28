@@ -23,12 +23,12 @@ export interface NudgeState {
   compressibleTokens: number;
   windowFillPct: number;
   nudgedThisTurn: boolean;
+  activeTurn?: number;
+  lastFoldTurn?: number | null;
   /** Growth at which the last efficiency nudge fired since the last fold; null if none. */
   lastEfficiencyAtGrowth: number | null;
-  /** Mass at which the last promotion nudge fired per source tier; null if none. */
   lastPromotionAtMass: { 1: number | null; 2: number | null };
 }
-
 export type NudgeKind = "efficiency" | "emergency" | "promotion";
 
 export interface NudgeDecision {
@@ -46,8 +46,8 @@ export interface NudgeConfig {
   tier3MassTokens: number;
   /** Resolved minimum reclaim (tokens) that makes an advisory fold worth its cache break. */
   minFoldBenefit: number;
+  cooldownTurns?: number;
 }
-
 export function formatRange(r: NudgeRange): string {
   const toolPct = r.tokens > 0 ? Math.round((r.toolTokens / r.tokens) * 100) : 0;
   return `${r.start}..${r.end} (${formatTokens(r.tokens)}t · ${r.messages} msg${r.messages === 1 ? "" : "s"} · ${toolPct}% tool)`;
@@ -91,6 +91,13 @@ export function decideNudge(
     };
   }
 
+  const cooldown = cfg.cooldownTurns ?? 2;
+  const inCooldown =
+    state.lastFoldTurn !== null &&
+    state.lastFoldTurn !== undefined &&
+    state.activeTurn !== undefined &&
+    state.activeTurn < state.lastFoldTurn + cooldown;
+  if (inCooldown) return NONE;
   const growthFloor =
     state.lastEfficiencyAtGrowth === null ? cfg.growthStep : state.lastEfficiencyAtGrowth + Math.ceil(cfg.growthStep / 2);
   const efficient =

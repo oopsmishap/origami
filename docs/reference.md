@@ -24,7 +24,9 @@ Origami enforces structural safety checks before committing any context changes:
 - Frontier clamp diagnostics: Requests citing message references beyond the session's newest stored reference are caught early. Out-of-bounds spans are diagnosed as stale-generation hallucinations, while partially-exceeded spans return concrete ceiling clamps (`retry with endRef ≤ mXXXXX`).
 - Coverage regression guard: Distillation merges verify that every message ref covered by active blocks before a fold remains covered after the fold, preventing accidental decompression.
 - Cache collapse alerts: Telemetry monitors large prompt rounds (≥8K tokens) and flags when cache read rates drop below 10% after earlier healthy performance.
-
+- Nudge anti-amplification: Bookkeeping tool calls across all turns are excluded from growth tracking. Advisory efficiency and promotion nudges observe a 2-turn post-fold cooldown, preventing repetitive reminders while keeping emergency window protection active.
+- Recall federation: Queries directed to cross-session memory (`recall`) are automatically cross-checked against the active session's SQLite index, appending matching fold blocks and message references without altering external memory.
+- Plan-aware retrieval: Full-text search extracts active tasks and planning state from the recent message window, boosting relevant candidate blocks above unrelated matches.
 ## Vault storage and payback economics
 
 Origami tracks the long-term economics of context management:
