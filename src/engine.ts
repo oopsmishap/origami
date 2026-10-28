@@ -84,6 +84,25 @@ export interface StatusZoneRow {
   tokens: number;
   messages: number;
 }
+export interface StatusVaultReport {
+  /** Total original tokens preserved in the archive across live fold blocks. */
+  archivedTokens: number;
+  /** Summary tokens currently active in prompt context. */
+  summaryTokens: number;
+  /** Net prompt tokens reclaimed by folding. */
+  reclaimedTokens: number;
+  /** Compression multiplier: archivedTokens / summaryTokens (e.g. 45.4 for 45.4x). */
+  compressionRatio: number;
+  /** Space reduction percentage (e.g. 97.8 for 97.8%). */
+  savingsPct: number;
+  /** Total messages preserved in the archive. */
+  archivedMessages: number;
+  /** Active fold blocks. */
+  activeBlocks: number;
+  /** Total blocks created across the session. */
+  totalBlocks: number;
+}
+
 
 export interface StatusReport {
   occupancyPct: number;
@@ -111,6 +130,7 @@ export interface StatusReport {
   /** First turn of the protected recent tail (never foldable). */
   protectedFromTurn: number;
   invariantViolations: InvariantViolation[];
+  vault: StatusVaultReport;
 }
 
 export interface CacheRound {
@@ -695,10 +715,34 @@ export class OrigamiEngine {
     }
 
     const liveBlocks = this.state.tree.live();
+    const allBlocks = this.state.tree.all();
     const summaryTokens = liveBlocks.reduce((s, b) => s + b.tokensAfter, 0);
+    const archivedTokens = liveBlocks.reduce((s, b) => s + b.tokensBefore, 0);
     const foldedSavings = liveBlocks.reduce((s, b) => s + Math.max(0, b.tokensBefore - b.tokensAfter), 0);
     const liveTokens = conversationTokens + toolTokens;
     const renderedBoundTokens = systemTokens + liveTokens + summaryTokens;
+
+    const compressionRatio =
+      summaryTokens > 0
+        ? Math.round((archivedTokens / summaryTokens) * 10) / 10
+        : archivedTokens > 0
+          ? archivedTokens
+          : 1;
+    const savingsPct =
+      archivedTokens > 0
+        ? Math.round((foldedSavings / archivedTokens) * 1000) / 10
+        : 0;
+
+    const vault: StatusVaultReport = {
+      archivedTokens,
+      summaryTokens,
+      reclaimedTokens: foldedSavings,
+      compressionRatio,
+      savingsPct,
+      archivedMessages: coverage.folded,
+      activeBlocks: liveBlocks.length,
+      totalBlocks: allBlocks.length,
+    };
 
     const windowTokens = Math.max(0, this.host.windowTokens());
     const projectedTokens = Math.max(0, this.host.projectedTokens());
@@ -768,6 +812,7 @@ export class OrigamiEngine {
         live: liveTokens,
         foldedSavings,
       },
+      vault,
       growthSinceFold: this.state.growthSinceFold(this.activeTurn, this.bookkeepingRefs),
       growthStep: this.config.growthStep,
       compressibleTokens: this.state.compressibleTokens(this.protectedFromTurn, this.bookkeepingRefs),

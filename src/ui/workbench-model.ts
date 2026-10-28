@@ -1,4 +1,4 @@
-import type { CacheRound, StatusBlockRow, StatusReport, StatusZoneRow } from "../engine.ts";
+import type { CacheRound, StatusBlockRow, StatusReport, StatusVaultReport, StatusZoneRow } from "../engine.ts";
 import type { NudgeRange } from "../kernel/nudge.ts";
 import { formatTokens } from "../kernel/nudge.ts";
 import type { SessionPhase } from "../sessions.ts";
@@ -47,6 +47,7 @@ export interface WorkbenchModel {
   compressibleTokens: number;
   compressibleFloor: number;
   tokenSplit: StatusReport["tokenSplit"];
+  vault: StatusVaultReport;
   categories: WorkbenchCategory[];
   blocks: BlockRow[];
   zones: ZoneRow[];
@@ -143,6 +144,7 @@ export function buildWorkbenchModel(
     compressibleTokens: report.compressibleTokens,
     compressibleFloor: report.compressibleFloor,
     tokenSplit: report.tokenSplit,
+    vault: report.vault,
     categories,
     blocks: report.blocks,
     zones: report.zones,

@@ -13,6 +13,7 @@ import { OrigamiRuntime } from "../src/runtime.ts";
 import { SessionRegistry } from "../src/sessions.ts";
 import { OrigamiFoldMessageComponent } from "../src/tools/display.ts";
 import { registerTools } from "../src/tools/index.ts";
+import { formatStatusChip } from "../src/ui/status.ts";
 import { startDashboardServer } from "../src/ui/dashboard-server.ts";
 import {
   buildTrajectoryData,
@@ -374,6 +375,16 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
       nudgeKind: "none",
       protectedFromTurn: 3,
       invariantViolations: [],
+      vault: {
+        archivedTokens: 18_000,
+        summaryTokens: 600,
+        reclaimedTokens: 17_400,
+        compressionRatio: 30,
+        savingsPct: 96.7,
+        archivedMessages: 9,
+        activeBlocks: 1,
+        totalBlocks: 1,
+      },
     };
 
     const rounds = [
@@ -409,9 +420,19 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
     });
 
     // Overview render & native describe
-    expect(wb.render(100).join("\n")).toContain("System & Tool Schemas");
+    const ansiOverview = wb.render(100).join("\n");
+    expect(ansiOverview).toContain("System & Tool Schemas");
+    expect(ansiOverview).toContain("Archived:");
+    expect(ansiOverview).toContain("Compression:");
+    expect(ansiOverview).toContain("30×");
     const rootOverview = wb.describe(nativeCx);
     expect(rootOverview?.k).toBe("card");
+    expect(JSON.stringify(rootOverview)).toContain("tile-stored");
+    expect(JSON.stringify(rootOverview)).toContain("tile-ratio");
+
+    // Status chip includes compression ratio when vault contains folds
+    expect(formatStatusChip(report)).toContain("30×");
+    expect(formatStatusChip(report, theme)).toContain("30×");
 
     // Switch to Trajectory tab via Tern native tab select
     wb.handleNativeEvent({ type: "select", key: "tabs", item: "trajectory" });

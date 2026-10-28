@@ -108,6 +108,7 @@ describe("Standalone Web Dashboard Server", () => {
       expect(html).toContain("Origami Context Dashboard");
       expect(html).toContain("Prompt Cache Read Rate");
       expect(html).toContain("FTS5 Search");
+      expect(html).toContain("Origami Vault Storage");
       // Every inline script must parse; one syntax error blanks the whole dashboard.
       const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
       expect(scripts.length).toBeGreaterThan(0);
@@ -161,10 +162,16 @@ describe("Standalone Web Dashboard Server", () => {
       // 2. GET /api/status -> JSON
       const statusRes = await fetch(`${baseUrl}/api/status`, { headers: authHeaders });
       expect(statusRes.status).toBe(200);
-      const status = (await statusRes.json()) as { sessionId: string; windowTokens: number; liveTokens: number };
+      const status = (await statusRes.json()) as {
+        sessionId: string;
+        windowTokens: number;
+        liveTokens: number;
+        vault?: { archivedTokens: number; compressionRatio: number };
+      };
       expect(status.sessionId).toBe("dash-session-1");
       expect(status.windowTokens).toBe(100_000);
-
+      expect(status.vault).toBeDefined();
+      expect(status.vault?.archivedTokens).toBeGreaterThanOrEqual(0);
       // 3. GET /api/blocks -> JSON array
       const blocksRes = await fetch(`${baseUrl}/api/blocks?session=dash-session-1`, { headers: authHeaders });
       expect(blocksRes.status).toBe(200);

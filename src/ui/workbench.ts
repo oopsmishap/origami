@@ -413,6 +413,19 @@ export class WorkbenchComponent implements Component {
       const pad = " ".repeat(Math.max(0, labelBudget - visibleWidth(labelTxt)));
       lines.push(truncateToWidth(`${mapPrefix}${swatch} ${theme.fg("muted", labelTxt)}${pad}${suffix}`, width, Ellipsis.Omit));
     }
+    lines.push("");
+    const v = m.vault;
+    const ratioStr = v.archivedTokens > 0 ? `${v.compressionRatio}×` : "1.0×";
+    const tile1 = `${theme.fg("muted", "Archived:")} ${theme.bold(theme.fg("text", formatTokens(v.archivedTokens)))}${theme.fg("dim", ` (${v.archivedMessages}m)`)}`;
+    const tile2 = `${theme.fg("muted", "In-Context:")} ${theme.fg("success", formatTokens(v.summaryTokens))}${theme.fg("dim", ` (${v.activeBlocks}b)`)}`;
+    const tile3 = `${theme.fg("muted", "Compression:")} ${theme.bold(theme.fg("accent", ratioStr))}${theme.fg("dim", ` (-${v.savingsPct}%)`)}`;
+    const tile4 = `${theme.fg("muted", "Growth:")} ${theme.fg("warning", `${formatTokens(m.growthSinceFold)}↑`)}${theme.fg("dim", `/${formatTokens(m.growthStep)}`)}`;
+    if (width >= 72) {
+      lines.push(truncateToWidth(`  ${tile1}    ${tile2}    ${tile3}    ${tile4}`, width, Ellipsis.Unicode));
+    } else {
+      lines.push(truncateToWidth(`  ${tile1}    ${tile2}`, width, Ellipsis.Unicode));
+      lines.push(truncateToWidth(`  ${tile3}    ${tile4}`, width, Ellipsis.Unicode));
+    }
 
     lines.push("");
     const hitRate =
@@ -661,6 +674,51 @@ export class WorkbenchComponent implements Component {
   #describeTabBody(cx: DescribeContext): NativeNode[] {
     const m = this.model;
     if (m.tab === 0) {
+      const v = m.vault;
+      const ratioStr = v.archivedTokens > 0 ? `${v.compressionRatio}×` : "1.0×";
+      const statTiles: NativeChild[] = [
+        node(
+          "col",
+          { role: "omp.origami.vault.stat", gap: "xs", title: "Original conversation tokens preserved in Origami's archive" },
+          [
+            text([span("Archived Stored", "muted")], { role: "omp.origami.stat.label", truncate: "end" }),
+            text([span(formatTokens(v.archivedTokens), "strong mono")], { role: "omp.origami.stat.value", truncate: "end" }),
+            text([span(`${v.archivedMessages} msgs · ${v.activeBlocks}b`, "dim")], { role: "omp.origami.stat.sub", truncate: "end" }),
+          ],
+          "tile-stored",
+        ),
+        node(
+          "col",
+          { role: "omp.origami.vault.stat", gap: "xs", title: "Summary tokens currently occupying prompt context" },
+          [
+            text([span("Active Summaries", "muted")], { role: "omp.origami.stat.label", truncate: "end" }),
+            text([span(formatTokens(v.summaryTokens), "success strong mono")], { role: "omp.origami.stat.value", truncate: "end" }),
+            text([span(`${v.activeBlocks} live blocks`, "dim")], { role: "omp.origami.stat.sub", truncate: "end" }),
+          ],
+          "tile-summaries",
+        ),
+        node(
+          "col",
+          { role: "omp.origami.vault.stat", gap: "xs", title: "Ratio of archived original tokens to in-context summaries" },
+          [
+            text([span("Compression", "muted")], { role: "omp.origami.stat.label", truncate: "end" }),
+            text([span(ratioStr, "accent strong mono")], { role: "omp.origami.stat.value", truncate: "end" }),
+            text([span(`-${formatTokens(v.reclaimedTokens)} (${v.savingsPct}%)`, "success")], { role: "omp.origami.stat.sub", truncate: "end" }),
+          ],
+          "tile-ratio",
+        ),
+        node(
+          "col",
+          { role: "omp.origami.vault.stat", gap: "xs", title: "Tokens accumulated toward next automatic fold step" },
+          [
+            text([span("Growth / Step", "muted")], { role: "omp.origami.stat.label", truncate: "end" }),
+            text([span(formatTokens(m.growthSinceFold), "warning strong mono")], { role: "omp.origami.stat.value", truncate: "end" }),
+            text([span(`of ${formatTokens(m.growthStep)} step`, "dim")], { role: "omp.origami.stat.sub", truncate: "end" }),
+          ],
+          "tile-growth",
+        ),
+      ];
+      const vaultGrid = node("row", { gap: "lg", role: "omp.origami.vault.stats" }, statTiles, "vault-stats");
       const catItems = m.categories.map((c) =>
         item(c.id, {
           label: [span(`${c.id === "free" ? "□" : "■"} `, c.color), span(c.label)],
@@ -676,7 +734,7 @@ export class WorkbenchComponent implements Component {
         ["Compressible Pool", `${formatTokens(m.compressibleTokens)} / ${formatTokens(m.compressibleFloor)} floor`],
         ["Prompt Cache Hit Rate", hitStr],
       ]);
-      const out: NativeNode[] = [list(catItems, undefined, "cat-list")];
+      const out: NativeNode[] = [vaultGrid, list(catItems, undefined, "cat-list")];
       if (telemetry) out.push(telemetry);
       if (m.showPreview || m.recommended.length > 0) {
         out.push(

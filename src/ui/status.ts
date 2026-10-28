@@ -13,7 +13,9 @@ export function formatStatusChip(report: StatusReport, theme?: Theme, subagents 
   const liveBlocks = report.blocks.filter((b) => b.status === "active").length;
   const saved = report.tokenSplit.foldedSavings;
   const growth = `${formatTokens(report.growthSinceFold)}↑/${formatTokens(report.growthStep)}`;
-  const blocksLabel = saved > 0 ? `${liveBlocks}b -${formatTokens(saved)}` : `${liveBlocks}b`;
+  const v = report.vault;
+  const ratioLabel = v && v.archivedTokens > 0 && v.compressionRatio > 1 ? ` (${v.compressionRatio}×)` : "";
+  const blocksLabel = saved > 0 ? `${liveBlocks}b -${formatTokens(saved)}${ratioLabel}` : `${liveBlocks}b`;
   const subLabel = subagents > 0 ? `${subagents} sub` : "";
 
   if (!theme) {
@@ -29,7 +31,7 @@ export function formatStatusChip(report: StatusReport, theme?: Theme, subagents 
   const growthPart = theme.fg(growthColor, growth);
   const blocksPart =
     saved > 0
-      ? `${theme.fg("muted", `${liveBlocks}b`)} ${theme.fg("success", `-${formatTokens(saved)}`)}`
+      ? `${theme.fg("muted", `${liveBlocks}b`)} ${theme.fg("success", `-${formatTokens(saved)}`)}${ratioLabel ? ` ${theme.fg("accent", ratioLabel.trim())}` : ""}`
       : theme.fg("dim", `${liveBlocks}b`);
   const subPart = subLabel ? `${sep}${theme.fg("accent", subLabel)}` : "";
   return `${icon} ${theme.fg("muted", "origami")} ${pctPart}${sep}${growthPart}${sep}${blocksPart}${subPart}`;

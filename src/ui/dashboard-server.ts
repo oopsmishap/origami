@@ -664,6 +664,35 @@ function renderDashboardHtml(): string {
     @media (max-width: 1080px) {
       .overview-split { grid-template-columns: 1fr; }
     }
+    /* Origami Vault Grid */
+    .vault-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+    .vault-tile {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+    }
+    .vault-tile-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 4px;
+    }
+    .vault-tile-val {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+    .vault-tile-sub {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      margin-top: 3px;
+    }
 
     /* billion-context Trajectory & Hit-Rate Charts */
     .chart-wrap { width: 100%; overflow-x: auto; position: relative; }
@@ -1150,6 +1179,37 @@ function renderDashboardHtml(): string {
             <div class="card-b">
               <div class="comp-bar" id="comp-bar"></div>
               <div class="comp-list" id="comp-list"></div>
+            </div>
+          </div>
+          <!-- Origami Vault Storage Card -->
+          <div class="card">
+            <div class="card-h">
+              <span class="card-title">Origami Vault Storage</span>
+              <span class="card-hint" id="vault-ratio-hint">1.0× compression</span>
+            </div>
+            <div class="card-b">
+              <div class="vault-grid">
+                <div class="vault-tile">
+                  <div class="vault-tile-label">Archived Stored</div>
+                  <div class="vault-tile-val mono" id="vault-archived">0t</div>
+                  <div class="vault-tile-sub" id="vault-archived-sub">0 msgs preserved</div>
+                </div>
+                <div class="vault-tile">
+                  <div class="vault-tile-label">Active Summaries</div>
+                  <div class="vault-tile-val mono" id="vault-summaries" style="color:var(--accent-green)">0t</div>
+                  <div class="vault-tile-sub" id="vault-summaries-sub">0 live blocks</div>
+                </div>
+                <div class="vault-tile">
+                  <div class="vault-tile-label">Compression Ratio</div>
+                  <div class="vault-tile-val mono" id="vault-ratio" style="color:var(--accent-cyan)">1.0×</div>
+                  <div class="vault-tile-sub" id="vault-ratio-sub">0% reduction</div>
+                </div>
+                <div class="vault-tile">
+                  <div class="vault-tile-label">Reclaimed Space</div>
+                  <div class="vault-tile-val mono" id="vault-saved" style="color:var(--accent-amber)">0t</div>
+                  <div class="vault-tile-sub" id="vault-saved-sub">Net prompt savings</div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1957,14 +2017,40 @@ function renderDashboardHtml(): string {
                 + '<span class="comp-val">' + formatK(r.tokens) + 't · ' + msgCnt + ' msg' + (msgCnt === 1 ? '' : 's') + '</span></div>';
             }).join('') + '</div>';
 
-        // 3. Reclaimed KPI
+        // 3. Vault & Reclaimed KPI
+        const v = st.vault || {};
         const liveBlockCount = blocks.filter((b) => b.status === 'active').length;
-        const savedTokens = Number(st.savedTokens) || 0;
+        const savedTokens = Number(st.savedTokens || v.reclaimedTokens) || 0;
+        const archTokens = Number(v.archivedTokens) || (savedTokens + (st.tokenSplit?.summaries || 0));
+        const sumTokens = Number(v.summaryTokens || st.tokenSplit?.summaries) || 0;
+        const compRatio = Number(v.compressionRatio) || (sumTokens > 0 ? Math.round((archTokens / sumTokens) * 10) / 10 : 1);
+        const ratioStr = archTokens > 0 ? compRatio + '×' : '1.0×';
+        const savPct = v.savingsPct != null ? v.savingsPct : (archTokens > 0 ? Math.round((savedTokens / archTokens) * 1000) / 10 : 0);
+
         $('kpi-saved').textContent = formatK(savedTokens) + 't';
-        $('kpi-saved-sub').textContent = 'Across ' + liveBlockCount + ' live' + (blocks.length > liveBlockCount ? ' / ' + blocks.length + ' total' : '') + ' block(s)';
+        $('kpi-saved-sub').textContent = (archTokens > 0 ? formatK(archTokens) + 't stored (' + ratioStr + ') · ' : '') + liveBlockCount + ' live' + (blocks.length > liveBlockCount ? ' / ' + blocks.length + ' total' : '') + ' block(s)';
         const savedRatio = (usedTokens + savedTokens) > 0 ? Math.min(100, Math.round((savedTokens / (usedTokens + savedTokens)) * 100)) : 0;
         $('saved-fill').style.width = savedRatio + '%';
 
+        // Vault Storage Card
+        const vHint = $('vault-ratio-hint');
+        if (vHint) vHint.textContent = ratioStr + ' compression (' + savPct + '% saved)';
+        const vArch = $('vault-archived');
+        if (vArch) vArch.textContent = formatK(archTokens) + 't';
+        const vArchSub = $('vault-archived-sub');
+        if (vArchSub) vArchSub.textContent = (v.archivedMessages || 0) + ' msgs · ' + liveBlockCount + ' live blocks';
+        const vSum = $('vault-summaries');
+        if (vSum) vSum.textContent = formatK(sumTokens) + 't';
+        const vSumSub = $('vault-summaries-sub');
+        if (vSumSub) vSumSub.textContent = liveBlockCount + ' active blocks in context';
+        const vRat = $('vault-ratio');
+        if (vRat) vRat.textContent = ratioStr;
+        const vRatSub = $('vault-ratio-sub');
+        if (vRatSub) vRatSub.textContent = '-' + formatK(savedTokens) + 't (' + savPct + '%)';
+        const vSav = $('vault-saved');
+        if (vSav) vSav.textContent = formatK(savedTokens) + 't';
+        const vSavSub = $('vault-saved-sub');
+        if (vSavSub) vSavSub.textContent = 'Net prompt tokens saved';
         // 4. Trajectory + Cache Hit Rate Charts & Cache Economics Table
         const lines = rounds.map((r, idx) => {
           const inp = Number(r.total_in) || 0;
