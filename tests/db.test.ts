@@ -254,4 +254,21 @@ describe("OrigamiDb", () => {
     expect(db.searchMessages("replaced", 10).map((hit) => hit.ref)).toEqual(["m00003"]);
     db.close();
   });
+
+  test("persists a fold batch atomically", () => {
+    const { path } = tempDb();
+    const db = openDb(path);
+    const row = block({ block_id: "atomic" });
+    expect(() => db.persistFoldBatch({
+      messages: [{ session_id: "session-1", ref: "m1", role: "user", text: "atomic archive", turn: 1, tokens: 2, captured_at: 1 }],
+      blocks: [row, { ...row, block_id: null as unknown as string }],
+      statuses: [],
+    })).toThrow();
+    expect(db.blocksForSession("session-1")).toEqual([]);
+    expect(db.messagesForRefs("session-1", ["m1"])).toEqual([]);
+
+    db.persistFoldBatch({ messages: [], blocks: [row], statuses: [] });
+    expect(db.blocksForSession("session-1").map((b) => b.block_id)).toEqual(["atomic"]);
+    db.close();
+  });
 });

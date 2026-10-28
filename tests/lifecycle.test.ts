@@ -160,6 +160,30 @@ describe("durable recall", () => {
   });
 });
 
+describe("persistence degradation", () => {
+  it("keeps journal-backed folding successful and disables persistence after an atomic write failure", () => {
+    const db = openDb(":memory:");
+    let failures = 0;
+    const faulty = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "persistFoldBatch") return () => { throw new Error("disk full"); };
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const h = harness();
+    h.engine.attachDb(faulty, () => failures++);
+    const result = h.engine.executeFold({ folds: [fold("m00003..m00004")] });
+    expect(result.ok).toBe(true);
+    expect(h.journal).toHaveLength(1);
+    expect(h.engine.state.tree.get("b1")?.status).toBe("active");
+    expect(failures).toBe(1);
+    expect(h.engine.search("anything")).toEqual([]);
+    h.engine.recordRound({ ts: 1, totalIn: 1, cacheRead: 0, cacheWrite: 0, foldEventId: null });
+    expect(failures).toBe(1);
+    db.close();
+  });
+});
+
 describe("nudge policy", () => {
   const cfg = { growthStep: 1000, compressibleFloor: 500, emergencyFillPct: 0.9, tier2MassTokens: 300, tier3MassTokens: 600, minFoldBenefit: 0 };
   const ranges = [{ start: "m00003", end: "m00008", tokens: 2000, messages: 6, toolTokens: 1000 }];

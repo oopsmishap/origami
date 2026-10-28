@@ -161,7 +161,15 @@ export default function origamiExtension(api: ExtensionAPI): void {
         );
       }
     }
-    rt.attachDb(db);
+    rt.attachDb(db, (error) => {
+      if (db) registry.releaseDb(db);
+      if (ctx.hasUI) {
+        ctx.ui.notify(
+          `origami: fold database write failed; persistence disabled for this session: ${error instanceof Error ? error.message : String(error)}`,
+          "error",
+        );
+      }
+    });
 
     const record = registry.register({ sessionId, agent: agentInfoFrom(ctx), runtime: rt, config, ctx });
     return { record, rt };

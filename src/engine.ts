@@ -192,6 +192,7 @@ export class OrigamiEngine {
   private lastNudge: NudgeDecision = { kind: null, text: null };
   private activeNudge: string | null = null;
   private pendingFoldAttribution: string | null = null;
+  private onPersistenceError: ((error: unknown) => void) | null = null;
   private lastEfficiencyAtGrowth: number | null = null;
   private lastPromotionAtMass: { 1: number | null; 2: number | null } = { 1: null, 2: null };
   get sessionId(): string {
@@ -213,8 +214,9 @@ export class OrigamiEngine {
     });
   }
 
-  attachDb(db: OrigamiDb | null): void {
+  attachDb(db: OrigamiDb | null, onPersistenceError?: (error: unknown) => void): void {
     this.db = db;
+    this.onPersistenceError = onPersistenceError ?? null;
   }
 
   refresh(entries: readonly SessionEntryLike[]): void {
@@ -464,11 +466,8 @@ export class OrigamiEngine {
     let reclaimed = 0;
     for (const p of planned) {
       const replaced = p.block.tier === 1 ? p.block.tokensBefore : p.block.children.reduce((s, c) => s + (tree.get(c)?.tokensAfter ?? 0), 0);
-      if (p.block.tier === 1) this.archiveOriginals(p.refs);
       this.host.appendEvent(makeFoldOp(p.block));
       tree.apply({ op: "fold", block: p.block });
-      this.persistBlock(tree.get(p.block.id)!);
-      for (const c of p.block.children) this.persistStatus(c);
       created.push({
         id: p.block.id,
         tier: p.block.tier,
@@ -479,6 +478,7 @@ export class OrigamiEngine {
       });
       reclaimed += Math.max(0, replaced - p.block.tokensAfter);
     }
+    this.persistFoldBatch(planned);
 
     this.pendingFoldAttribution = created[created.length - 1]!.id;
     this.activeNudge = null;
@@ -510,28 +510,8 @@ export class OrigamiEngine {
     return max + 1;
   }
 
-  /** Copy folded originals into the durable store so unfold/recall work off-branch. */
-  private archiveOriginals(refs: readonly string[]): void {
-    if (!this.db) return;
-    const want = new Set(refs);
-    const now = Date.now();
-    const rows = this.state.bound
-      .filter((m) => want.has(m.ref))
-      .map((m) => ({
-        session_id: this.host.sessionId(),
-        ref: m.ref,
-        role: m.role,
-        text: m.text,
-        turn: m.turn,
-        tokens: this.state.ledger.countMessage(m),
-        captured_at: now,
-      }));
-    if (rows.length > 0) this.db.archiveMessages(rows);
-  }
-
-  private persistBlock(b: Block): void {
-    if (!this.db) return;
-    this.db.insertBlock({
+  private blockRow(b: Block) {
+    return {
       session_id: this.host.sessionId(),
       block_id: b.id,
       tier: b.tier,
@@ -545,13 +525,57 @@ export class OrigamiEngine {
       consumed_by: b.consumedBy,
       ranges: JSON.stringify(b.ranges),
       children: JSON.stringify(b.children),
-    });
+    };
   }
 
-  private persistStatus(id: string): void {
-    const b = this.state.tree.get(id);
-    if (!this.db || !b) return;
-    this.db.updateBlockStatus(this.host.sessionId(), b.id, b.status, b.consumedBy);
+  private statusRow(b: Block) {
+    return {
+      session_id: this.host.sessionId(),
+      block_id: b.id,
+      status: b.status,
+      consumed_by: b.consumedBy,
+    };
+  }
+
+  private disablePersistence(error: unknown): void {
+    if (!this.db) return;
+    this.db = null;
+    this.onPersistenceError?.(error);
+  }
+
+  private persistFoldBatch(planned: readonly { block: Block; refs: string[] }[]): void {
+    if (!this.db) return;
+    const refs = new Set(planned.filter((p) => p.block.tier === 1).flatMap((p) => p.refs));
+    const now = Date.now();
+    const messages = this.state.bound
+      .filter((m) => refs.has(m.ref))
+      .map((m) => ({
+        session_id: this.host.sessionId(),
+        ref: m.ref,
+        role: m.role,
+        text: m.text,
+        turn: m.turn,
+        tokens: this.state.ledger.countMessage(m),
+        captured_at: now,
+      }));
+    const blocks = planned.map((p) => this.blockRow(this.state.tree.get(p.block.id)!));
+    const childIds = [...new Set(planned.flatMap((p) => p.block.children))];
+    const statuses = childIds.map((id) => this.state.tree.get(id)).filter((b): b is Block => b !== undefined).map((b) => this.statusRow(b));
+    try {
+      this.db.persistFoldBatch({ messages, blocks, statuses });
+    } catch (error) {
+      this.disablePersistence(error);
+    }
+  }
+
+  private persistStatuses(ids: readonly string[]): void {
+    if (!this.db) return;
+    const rows = [...new Set(ids)].map((id) => this.state.tree.get(id)).filter((b): b is Block => b !== undefined).map((b) => this.statusRow(b));
+    try {
+      this.db.updateBlockStatuses(rows);
+    } catch (error) {
+      this.disablePersistence(error);
+    }
   }
 
   /**
@@ -595,13 +619,14 @@ export class OrigamiEngine {
       this.host.appendEvent(makeUnfoldOp(next.id));
       tree.apply({ op: "unfold", id: next.id });
       unfolded.push(next.id);
-      this.persistStatus(next.id);
+      const changed = [next.id];
       for (const c of next.children) {
         const child = tree.get(c);
         if (!child) continue;
-        this.persistStatus(c);
+        changed.push(c);
         if (opts.deep && child.status === "active") queue.push(c);
       }
+      this.persistStatuses(changed);
     }
     return { ok: true, block, refs, unfolded };
   }
@@ -773,15 +798,19 @@ export class OrigamiEngine {
   recordRound(round: CacheRound): void {
     if (!this.db) return;
     const foldEventId = round.foldEventId ?? this.pendingFoldAttribution;
-    this.pendingFoldAttribution = null;
-    this.db.insertRound({
-      session_id: this.host.sessionId(),
-      ts: round.ts,
-      total_in: round.totalIn,
-      cache_read: round.cacheRead,
-      cache_write: round.cacheWrite,
-      fold_event_id: foldEventId,
-    });
+    try {
+      this.db.insertRound({
+        session_id: this.host.sessionId(),
+        ts: round.ts,
+        total_in: round.totalIn,
+        cache_read: round.cacheRead,
+        cache_write: round.cacheWrite,
+        fold_event_id: foldEventId,
+      });
+      this.pendingFoldAttribution = null;
+    } catch (error) {
+      this.disablePersistence(error);
+    }
   }
 
   search(query: string, limit = 10): FoldSearchHit[] {

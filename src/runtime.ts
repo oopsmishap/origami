@@ -66,9 +66,12 @@ export class OrigamiRuntime {
     });
   }
 
-  attachDb(db: OrigamiDb | null): void {
+  attachDb(db: OrigamiDb | null, onPersistenceError?: (error: unknown) => void): void {
     this.db = db;
-    this.engine.attachDb(db);
+    this.engine.attachDb(db, (error) => {
+      this.db = null;
+      onPersistenceError?.(error);
+    });
   }
 
   /** Refresh journal-derived state and re-bind current messages. Call before every use. */

@@ -40,6 +40,19 @@ export interface DbMessageRow {
   captured_at: number;
 }
 
+export interface DbBlockStatus {
+  session_id: string;
+  block_id: string;
+  status: string;
+  consumed_by: string | null;
+}
+
+export interface DbFoldBatch {
+  messages: DbMessageRow[];
+  blocks: DbBlockRow[];
+  statuses: DbBlockStatus[];
+}
+
 export interface DbBlockHit {
   block_id: string;
   session_id: string;
@@ -63,6 +76,8 @@ export interface OrigamiDb {
   readonly schemaVersion: number;
   readonly recovered: string | null;
   integrity(): { ok: boolean; detail: string };
+  persistFoldBatch(batch: DbFoldBatch): void;
+  updateBlockStatuses(rows: DbBlockStatus[]): void;
   insertBlock(row: DbBlockRow): void;
   updateBlockStatus(sessionId: string, blockId: string, status: string, consumedBy: string | null): void;
   insertRound(row: DbRoundRow): void;
@@ -234,6 +249,34 @@ function transaction(sqlite: Database, fn: () => void): void {
   }
 }
 
+function blockWriter(sqlite: Database): (row: DbBlockRow) => void {
+  const statement = sqlite.query(
+    `INSERT INTO blocks
+       (session_id, block_id, tier, topic, summary, body, tokens_before, tokens_after, created_at, status, consumed_by, ranges, children)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(session_id, block_id) DO UPDATE SET
+       tier=excluded.tier, topic=excluded.topic, summary=excluded.summary, body=excluded.body,
+       tokens_before=excluded.tokens_before, tokens_after=excluded.tokens_after, created_at=excluded.created_at,
+       status=excluded.status, consumed_by=excluded.consumed_by, ranges=excluded.ranges, children=excluded.children`,
+  );
+  return (row) => {
+    statement.run(row.session_id, row.block_id, row.tier, row.topic, row.summary, row.body, row.tokens_before, row.tokens_after, row.created_at, row.status, row.consumed_by, row.ranges, row.children);
+  };
+}
+
+function messageWriter(sqlite: Database): (row: DbMessageRow) => void {
+  const statement = sqlite.query(`INSERT INTO messages (session_id, ref, role, text, turn, tokens, captured_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(session_id, ref) DO UPDATE SET role=excluded.role, text=excluded.text,
+      turn=excluded.turn, tokens=excluded.tokens, captured_at=excluded.captured_at`);
+  return (row) => statement.run(row.session_id, row.ref, row.role, row.text, row.turn, row.tokens, row.captured_at);
+}
+
+function statusWriter(sqlite: Database): (row: DbBlockStatus) => void {
+  const statement = sqlite.query("UPDATE blocks SET status = ?, consumed_by = ? WHERE session_id = ? AND block_id = ?");
+  return (row) => statement.run(row.status, row.consumed_by, row.session_id, row.block_id);
+}
+
 function integrityResult(sqlite: Database): { ok: boolean; detail: string } {
   try {
     const rows = sqlite.query<{ quick_check: string }, []>("PRAGMA quick_check").all();
@@ -305,20 +348,28 @@ export function openDb(path: string): OrigamiDb {
       return integrityResult(sqlite);
     },
     insertBlock(row) {
-      transaction(sqlite, () => {
-        sqlite.query(
-          `INSERT INTO blocks
-             (session_id, block_id, tier, topic, summary, body, tokens_before, tokens_after, created_at, status, consumed_by, ranges, children)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(session_id, block_id) DO UPDATE SET
-             tier=excluded.tier, topic=excluded.topic, summary=excluded.summary, body=excluded.body,
-             tokens_before=excluded.tokens_before, tokens_after=excluded.tokens_after, created_at=excluded.created_at,
-             status=excluded.status, consumed_by=excluded.consumed_by, ranges=excluded.ranges, children=excluded.children`,
-        ).run(row.session_id, row.block_id, row.tier, row.topic, row.summary, row.body, row.tokens_before, row.tokens_after, row.created_at, row.status, row.consumed_by, row.ranges, row.children);
-      });
+      const write = blockWriter(sqlite);
+      transaction(sqlite, () => write(row));
     },
     updateBlockStatus(sessionId, blockId, status, consumedBy) {
-      sqlite.query("UPDATE blocks SET status = ?, consumed_by = ? WHERE session_id = ? AND block_id = ?").run(status, consumedBy, sessionId, blockId);
+      statusWriter(sqlite)({ session_id: sessionId, block_id: blockId, status, consumed_by: consumedBy });
+    },
+    persistFoldBatch(batch) {
+      const writeMessage = messageWriter(sqlite);
+      const writeBlock = blockWriter(sqlite);
+      const writeStatus = statusWriter(sqlite);
+      transaction(sqlite, () => {
+        for (const row of batch.messages) writeMessage(row);
+        for (const row of batch.blocks) writeBlock(row);
+        for (const row of batch.statuses) writeStatus(row);
+      });
+    },
+    updateBlockStatuses(rows) {
+      if (rows.length === 0) return;
+      const write = statusWriter(sqlite);
+      transaction(sqlite, () => {
+        for (const row of rows) write(row);
+      });
     },
     insertRound(row) {
       sqlite.query("INSERT INTO rounds (session_id, ts, total_in, cache_read, cache_write, fold_event_id) VALUES (?, ?, ?, ?, ?, ?)")
@@ -326,12 +377,9 @@ export function openDb(path: string): OrigamiDb {
     },
     archiveMessages(rows) {
       if (rows.length === 0) return;
+      const write = messageWriter(sqlite);
       transaction(sqlite, () => {
-        const statement = sqlite.query(`INSERT INTO messages (session_id, ref, role, text, turn, tokens, captured_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(session_id, ref) DO UPDATE SET role=excluded.role, text=excluded.text,
-            turn=excluded.turn, tokens=excluded.tokens, captured_at=excluded.captured_at`);
-        for (const row of rows) statement.run(row.session_id, row.ref, row.role, row.text, row.turn, row.tokens, row.captured_at);
+        for (const row of rows) write(row);
       });
     },
     messagesForRefs(sessionId, refs) {
