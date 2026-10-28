@@ -2201,7 +2201,7 @@ function renderDashboardHtml(): string {
         const vSav = $('vault-saved');
         if (vSav) vSav.textContent = formatK(savedTokens) + 't';
         const vSavSub = $('vault-saved-sub');
-        if (vSavSub) vSavSub.textContent = 'Net prompt tokens saved';
+        if (vSavSub) vSavSub.textContent = v.paybackStatus ? v.paybackStatus : 'Net prompt tokens saved';
         // 4. Trajectory + Cache Hit Rate Charts & Cache Economics Table
         const lines = rounds.map((r, idx) => {
           const inp = Number(r.total_in) || 0;

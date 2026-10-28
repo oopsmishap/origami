@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.6 — 2026-10-28
+
+### Features
+- Upstream billion-context architectural alignment (round 2):
+  1. **Fold Loop Circuit Breaker (#2146, #4812)**: Tracks consecutive fold failures in session telemetry. Arms at 3 consecutive failures with an explicit stop notice, and collapses into a short refusal on subsequent calls (`[Fold refused: circuit breaker still armed...]`), breaking infinite tool retry loops. Automatically disarms on any successful fold or after a 10-minute quiet window.
+  2. **Frontier Clamp Diagnostics (#2146, #4252)**: Detects requests referencing messages beyond the session's highest stored reference. Accurately diagnoses all-above-frontier ranges as stale-generation hallucinations (`range is above this session's highest ref (mXXXXX)`) and provides actionable ceiling clamp notes for partially-above-frontier ranges (`endRef is above the highest stored ref (mXXXXX); retry with endRef ≤ mXXXXX`).
+  3. **Coverage Regression Guard (#3322)**: Pre-commit invariant check in `executeFold` guaranteeing that every message covered by active blocks before a fold remains covered after the fold. Rejects any corrupted or partial merge that would decompress or orphan previously-covered messages without modifying session state.
+  4. **Tool Call Assistant Message Fingerprinting (#4110)**: Deserializes top-level `tool_calls` and `toolCalls` on assistant messages when `content` is null or empty. Synthesizes canonical tool-call representation into message text and generates distinct, deterministic content hashes to eliminate cross-session and cross-message hash collisions.
+  5. **Payback Economics & Break-Even Turns (#4899, #4916, #4956)**: Real-time calculation of amortized fold payback based on one-time summary overhead vs subsequent prompt egress avoidance. Computes `breakEvenTurns`, `paidBack` status, `cumulativeSavedTokens`, and actionable payback strings, surfaced across the footer status chip (`✓` indicator), Workbench Overview KPI tiles, and Web UI Vault Storage card.
+
 ## 0.2.5 — 2026-10-28
 
 ### Features

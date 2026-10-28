@@ -14,7 +14,8 @@ export function formatStatusChip(report: StatusReport, theme?: Theme, subagents 
   const saved = report.tokenSplit.foldedSavings;
   const growth = `${formatTokens(report.growthSinceFold)}↑/${formatTokens(report.growthStep)}`;
   const v = report.vault;
-  const ratioLabel = v && v.archivedTokens > 0 && v.compressionRatio > 1 ? ` (${v.compressionRatio}×)` : "";
+  const paybackTag = v && v.paidBack ? " ✓" : "";
+  const ratioLabel = v && v.archivedTokens > 0 && v.compressionRatio > 1 ? ` (${v.compressionRatio}×${paybackTag})` : "";
   const blocksLabel = saved > 0 ? `${liveBlocks}b -${formatTokens(saved)}${ratioLabel}` : `${liveBlocks}b`;
   const subLabel = subagents > 0 ? `${subagents} sub` : "";
 

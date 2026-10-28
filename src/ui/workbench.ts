@@ -432,9 +432,13 @@ export class WorkbenchComponent implements Component {
       m.trajectory.overallHitPct != null
         ? `${m.trajectory.overallHitPct.toFixed(1)}% (${formatTokens(m.trajectory.totalCached)}/${formatTokens(m.trajectory.totalInput)})`
         : "no rounds yet";
+    const paybackPart = v.reclaimedTokens > 0
+      ? `${theme.fg("muted", "Payback:")} ${theme.fg(v.paidBack ? "success" : "warning", v.paybackStatus)}   `
+      : "";
     lines.push(
       truncateToWidth(
         `${theme.fg("muted", "Compressible:")} ${theme.fg("text", formatTokens(m.compressibleTokens))}${theme.fg("dim", ` / floor ${formatTokens(m.compressibleFloor)}`)}   ` +
+          paybackPart +
           `${theme.fg("muted", "Prompt cache hit:")} ${theme.fg("success", hitRate)}`,
         width,
         Ellipsis.Unicode,
@@ -703,7 +707,7 @@ export class WorkbenchComponent implements Component {
           [
             text([span("Compression", "muted")], { role: "omp.origami.stat.label", truncate: "end" }),
             text([span(ratioStr, "accent strong mono")], { role: "omp.origami.stat.value", truncate: "end" }),
-            text([span(`-${formatTokens(v.reclaimedTokens)} (${v.savingsPct}%)`, "success")], { role: "omp.origami.stat.sub", truncate: "end" }),
+            text([span(`-${formatTokens(v.reclaimedTokens)} · ${v.paybackStatus}`, v.paidBack ? "success" : "dim")], { role: "omp.origami.stat.sub", truncate: "end" }),
           ],
           "tile-ratio",
         ),

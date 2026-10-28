@@ -46,13 +46,41 @@ export function messageFacts(message: unknown): KernelMessage | null {
   const role = strOr(message.role, "");
   if (!ROLES.has(role)) return null;
 
-  const text = canonicalText(message.content);
+  let text = canonicalText(message.content);
   const toolCallId = typeof message.toolCallId === "string" ? message.toolCallId : undefined;
-  const toolCalls = Array.isArray(message.content)
-    ? message.content
-        .filter((b) => isRecord(b) && b.type === "toolCall")
-        .map((b) => ({ id: strOr((b as Record<string, unknown>).id, ""), name: strOr((b as Record<string, unknown>).name, "") }))
-    : [];
+
+  const toolCalls: { id: string; name: string }[] = [];
+  if (Array.isArray(message.content)) {
+    for (const b of message.content) {
+      if (isRecord(b) && b.type === "toolCall") {
+        toolCalls.push({ id: strOr(b.id, ""), name: strOr(b.name, "") });
+      }
+    }
+  }
+  const rawTopCalls = Array.isArray(message.toolCalls)
+    ? message.toolCalls
+    : Array.isArray(message.tool_calls)
+      ? message.tool_calls
+      : [];
+  for (const tc of rawTopCalls) {
+    if (!isRecord(tc)) continue;
+    const id = strOr(tc.id, "");
+    const name = isRecord(tc.function) ? strOr(tc.function.name, "") : strOr(tc.name, "");
+    if (id || name) {
+      toolCalls.push({ id, name });
+    }
+  }
+  if (!text && rawTopCalls.length > 0) {
+    text = rawTopCalls
+      .filter(isRecord)
+      .map((tc) => {
+        const id = strOr(tc.id, "");
+        const name = isRecord(tc.function) ? strOr(tc.function.name, "") : strOr(tc.name, "");
+        const args = isRecord(tc.function) ? tc.function.arguments : tc.arguments;
+        return `toolCall:${id}:${name}:${stableJson(args ?? null)}`;
+      })
+      .join("\n");
+  }
   const signedThinking =
     Array.isArray(message.content) &&
     message.content.some(

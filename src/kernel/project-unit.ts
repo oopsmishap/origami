@@ -1,5 +1,5 @@
 import type { BoundMessage, RefRange } from "./types.ts";
-import { parseRef } from "./types.ts";
+import { formatRef, parseRef } from "./types.ts";
 import { widenSelectedToolPairs } from "./tool-pairs.ts";
 export interface ProjectUnitInput {
   bound: readonly BoundMessage[];
@@ -65,6 +65,25 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
   const protectedFromTurn = Math.min(activeTurn, input.protectedFromTurn ?? activeTurn);
   if (ranges.length === 0) return { ok: false, error: "empty range" };
 
+  const maxRefNum = bound.reduce((max, m) => (m.ref && /^m\d{5,}$/.test(m.ref) ? Math.max(max, parseRef(m.ref)) : max), 0);
+  const highestRef = formatRef(maxRefNum);
+
+  for (const r of ranges) {
+    const s = parseRef(r.start);
+    const e = parseRef(r.end);
+    if (s > maxRefNum && e > maxRefNum) {
+      return {
+        ok: false,
+        error: `range ${r.start}..${r.end} is above this session's highest ref (${highestRef}); check for stale refs from another session`,
+      };
+    }
+    if (s <= maxRefNum && e > maxRefNum) {
+      return {
+        ok: false,
+        error: `endRef ${r.end} is above the highest stored ref (${highestRef}); retry with endRef ≤ ${highestRef}`,
+      };
+    }
+  }
   const membersByTurn = new Map<number, number[]>();
   for (let i = 0; i < bound.length; i++) {
     const m = bound[i]!;

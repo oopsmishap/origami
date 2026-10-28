@@ -21,8 +21,8 @@ function estimateTokens(text: string): number {
   return Math.ceil(new TextEncoder().encode(text).length / ESTIMATED_TOKENS_PER_UTF8_BYTE);
 }
 
-export function pickEncoding(modelId: string): Encoding {
-  const m = modelId.toLowerCase();
+export function pickEncoding(modelId?: string): Encoding {
+  const m = (modelId ?? "").toLowerCase();
   if (m.includes("claude")) return "ClaudeV5";
   if (m.includes("kimi")) return "KimiK2";
   if (m.includes("deepseek")) return "DeepSeekV3";

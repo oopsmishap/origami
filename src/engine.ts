@@ -103,6 +103,14 @@ export interface StatusVaultReport {
   activeBlocks: number;
   /** Total blocks created across the session. */
   totalBlocks: number;
+  /** Number of subsequent turns needed to amortize fold creation cost. */
+  breakEvenTurns: number;
+  /** Whether the session's folds have already paid back their creation cost. */
+  paidBack: boolean;
+  /** Net cumulative tokens saved across subsequent turns. */
+  cumulativeSavedTokens: number;
+  /** Actionable payback status string. */
+  paybackStatus: string;
 }
 
 
@@ -531,6 +539,32 @@ export class OrigamiEngine {
       }
     }
 
+    // Coverage regression guard (#3322):
+    // A committed fold must never leave a previously-covered message without any covering block.
+    const coveredBefore = this.state.foldedRefs();
+    const simulatedConsumed = new Set<string>();
+    for (const p of planned) {
+      for (const c of p.block.children) simulatedConsumed.add(c);
+    }
+    const simulatedActive = tree.live().filter((b) => !simulatedConsumed.has(b.id)).concat(planned.map((p) => p.block));
+    const coveredAfter = new Set<string>();
+    for (const b of simulatedActive) {
+      for (const r of b.ranges) {
+        for (const ref of expandRefRange(r.start, r.end)) {
+          coveredAfter.add(ref);
+        }
+      }
+    }
+    for (const ref of coveredBefore) {
+      if (!coveredAfter.has(ref)) {
+        return {
+          ok: false,
+          error: `coverage regression: message ${ref} was previously covered but would lose its covering block; fold aborted`,
+          foldIndex: 0,
+        };
+      }
+    }
+
     const created: FoldCreatedBlock[] = [];
     let reclaimed = 0;
     for (const p of planned) {
@@ -784,6 +818,29 @@ export class OrigamiEngine {
         ? Math.round((foldedSavings / archivedTokens) * 1000) / 10
         : 0;
 
+    const breakEvenTurns =
+      foldedSavings > 0
+        ? Math.max(1, Math.ceil(summaryTokens / Math.max(1, foldedSavings)))
+        : 1;
+    const oldestFoldTurn = liveBlocks.length > 0
+      ? Math.min(...liveBlocks.map((b) => {
+          const firstRef = b.ranges[0]?.start;
+          const m = firstRef ? bound.find((msg) => msg.ref === firstRef) : null;
+          return m ? m.turn : 1;
+        }))
+      : this.activeTurn;
+    const turnsSinceFold = Math.max(0, this.activeTurn - oldestFoldTurn);
+    const paidBack = foldedSavings > 0 && turnsSinceFold >= breakEvenTurns;
+    const cumulativeSavedTokens = foldedSavings > 0
+      ? Math.max(0, foldedSavings * turnsSinceFold - summaryTokens)
+      : 0;
+    const paybackStatus =
+      foldedSavings === 0
+        ? "No folds yet"
+        : paidBack
+          ? `Paid back (${turnsSinceFold - breakEvenTurns} turns past break-even)`
+          : `Break-even in ~${Math.max(1, breakEvenTurns - turnsSinceFold)} turn(s)`;
+
     const vault: StatusVaultReport = {
       archivedTokens,
       summaryTokens,
@@ -793,6 +850,10 @@ export class OrigamiEngine {
       archivedMessages: coverage.folded,
       activeBlocks: liveBlocks.length,
       totalBlocks: allBlocks.length,
+      breakEvenTurns,
+      paidBack,
+      cumulativeSavedTokens,
+      paybackStatus,
     };
 
     const windowTokens = Math.max(0, this.host.windowTokens());

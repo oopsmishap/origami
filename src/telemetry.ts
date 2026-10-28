@@ -23,6 +23,8 @@ interface SessionTelemetryState {
   lowCacheRun: number;
   cacheCollapsed: boolean;
   cacheCollapseReason: string | null;
+  foldFailStreak: number;
+  foldFailLastAt: number;
 }
 
 const sessionStates = new Map<string, SessionTelemetryState>();
@@ -40,6 +42,8 @@ function getSessionState(sessionId: string): SessionTelemetryState {
       lowCacheRun: 0,
       cacheCollapsed: false,
       cacheCollapseReason: null,
+      foldFailStreak: 0,
+      foldFailLastAt: 0,
     };
     sessionStates.set(sessionId, state);
   }
@@ -218,4 +222,51 @@ export function getCacheCollapseStatus(sessionId: string): { collapsed: boolean;
 export function _resetTelemetryForTest(sessionId?: string): void {
   if (sessionId) sessionStates.delete(sessionId);
   else sessionStates.clear();
+}
+
+export const CIRCUIT_BREAKER_FAIL_THRESHOLD = 3;
+export const CIRCUIT_BREAKER_DECAY_MS = 10 * 60 * 1000; // 10 minutes quiet
+
+/**
+ * Fold loop circuit breaker (#2146, #4812).
+ * Prevents infinite fold failure loops where models repeatedly invoke fold with
+ * broken parameters or out-of-order ranges.
+ */
+export function recordFoldFailure(sessionId: string): { streak: number; armed: boolean; collapseToShort: boolean } {
+  const s = getSessionState(sessionId);
+  const now = Date.now();
+  if (s.foldFailLastAt > 0 && now - s.foldFailLastAt > CIRCUIT_BREAKER_DECAY_MS) {
+    s.foldFailStreak = 0;
+  }
+  s.foldFailStreak++;
+  s.foldFailLastAt = now;
+
+  const streak = s.foldFailStreak;
+  const armed = streak >= CIRCUIT_BREAKER_FAIL_THRESHOLD;
+  const collapseToShort = streak > CIRCUIT_BREAKER_FAIL_THRESHOLD;
+  return { streak, armed, collapseToShort };
+}
+
+export function recordFoldSuccess(sessionId: string): void {
+  const s = getSessionState(sessionId);
+  s.foldFailStreak = 0;
+  s.foldFailLastAt = 0;
+}
+
+export function checkFoldBreaker(sessionId: string): { armed: boolean; streak: number; refusal?: string } {
+  const s = getSessionState(sessionId);
+  const now = Date.now();
+  if (s.foldFailLastAt > 0 && now - s.foldFailLastAt > CIRCUIT_BREAKER_DECAY_MS) {
+    s.foldFailStreak = 0;
+    s.foldFailLastAt = 0;
+    return { armed: false, streak: 0 };
+  }
+  if (s.foldFailStreak >= CIRCUIT_BREAKER_FAIL_THRESHOLD) {
+    return {
+      armed: true,
+      streak: s.foldFailStreak,
+      refusal: `[Fold refused: circuit breaker still armed (${s.foldFailStreak} consecutive failures). Disarms on one successful fold or 10 minutes quiet.]`,
+    };
+  }
+  return { armed: s.foldFailStreak >= CIRCUIT_BREAKER_FAIL_THRESHOLD, streak: s.foldFailStreak };
 }

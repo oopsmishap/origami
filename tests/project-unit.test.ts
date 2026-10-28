@@ -38,10 +38,20 @@ describe("projectUnit", () => {
     if (!r.ok) expect(r.error).toBe("empty range");
   });
 
-  it("rejects a range matching no messages", () => {
+  it("rejects a range matching no messages or above frontier", () => {
     const r = projectUnit({ bound: makeBound(), ranges: [{ start: "m00090", end: "m00099" }], ...base });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toBe("range matches no messages");
+    if (!r.ok) expect(r.error).toContain("is above this session's highest ref");
+
+    // An in-frontier range where all messages are already folded matches no messages
+    const r2 = projectUnit({
+      bound: makeBound(),
+      ranges: [{ start: "m00004", end: "m00006" }],
+      ...base,
+      foldedRefs: new Set(["m00004", "m00005", "m00006"]),
+    });
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.error).toBe("range matches no messages");
   });
 
   it("accepts a whole turn and keeps its single span", () => {

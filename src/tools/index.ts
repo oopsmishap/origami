@@ -25,7 +25,7 @@ import {
   unfoldResultView,
 } from "./display.ts";
 import { nativeAvailable } from "../ui/native.ts";
-import { recordToolTelemetry } from "../telemetry.ts";
+import { checkFoldBreaker, CIRCUIT_BREAKER_FAIL_THRESHOLD, recordFoldFailure, recordFoldSuccess, recordToolTelemetry } from "../telemetry.ts";
 import { salvageFoldParams } from "./salvage.ts";
 
 export type ToolMutationListener = (
@@ -88,8 +88,31 @@ export function registerTools(
       const t0 = performance.now();
       const rt = getRuntime(ctx);
       rt.sync();
+
+      const breaker = checkFoldBreaker(rt.sessionId);
+      if (breaker.refusal) {
+        recordFoldFailure(rt.sessionId);
+        const durationMs = performance.now() - t0;
+        const row = recordToolTelemetry(rt, {
+          tool: "fold",
+          durationMs,
+          ok: false,
+          error: `circuit breaker armed (${breaker.streak} consecutive failures)`,
+          inputSummary: "circuit breaker refusal",
+          outputSummary: `Fold refused: breaker armed at ${breaker.streak} failures`,
+          metrics: { streak: breaker.streak },
+        });
+        if (row) onMutation?.("telemetry", row, ctx);
+        return textResult(breaker.refusal, { summary: breaker.refusal, rows: [] }, true);
+      }
+
       const salvaged = salvageFoldParams(params);
       if (!salvaged.ok) {
+        const failStreak = recordFoldFailure(rt.sessionId);
+        let errorMsg = `error: ${salvaged.error}`;
+        if (failStreak.streak === CIRCUIT_BREAKER_FAIL_THRESHOLD) {
+          errorMsg += `\n\n⚠️ COMPRESS CIRCUIT BREAKER: 3 consecutive fold failures. STOP calling fold immediately. Disarms on 1 successful fold or 10 minutes quiet.`;
+        }
         const durationMs = performance.now() - t0;
         const row = recordToolTelemetry(rt, {
           tool: "fold",
@@ -98,16 +121,21 @@ export function registerTools(
           error: salvaged.error,
           inputSummary: "malformed fold params",
           outputSummary: "Fold rejected: invalid arguments",
-          metrics: { requestedFolds: 0 },
+          metrics: { requestedFolds: 0, failStreak: failStreak.streak },
         });
         if (row) onMutation?.("telemetry", row, ctx);
-        return textResult(`error: ${salvaged.error}`, { summary: salvaged.error, rows: [] }, true);
+        return textResult(errorMsg, { summary: salvaged.error, rows: [] }, true);
       }
       const { folds, tier } = salvaged.params;
       const inputSummary = `${folds.length} range(s) · T${tier ?? 1}`;
       const result = rt.engine.executeFold({ folds, tier });
       const durationMs = performance.now() - t0;
       if (!result.ok) {
+        const failStreak = recordFoldFailure(rt.sessionId);
+        let errorMsg = `error: ${result.error} (fold ${result.foldIndex})`;
+        if (failStreak.streak === CIRCUIT_BREAKER_FAIL_THRESHOLD) {
+          errorMsg += `\n\n⚠️ COMPRESS CIRCUIT BREAKER: 3 consecutive fold failures. STOP calling fold immediately. Disarms on 1 successful fold or 10 minutes quiet.`;
+        }
         const row = recordToolTelemetry(rt, {
           tool: "fold",
           durationMs,
@@ -115,11 +143,12 @@ export function registerTools(
           error: `${result.error} (fold ${result.foldIndex})`,
           inputSummary,
           outputSummary: `Fold rejected at index ${result.foldIndex}`,
-          metrics: { tier: tier ?? 1, requestedFolds: folds.length, foldIndex: result.foldIndex },
+          metrics: { tier: tier ?? 1, requestedFolds: folds.length, foldIndex: result.foldIndex, failStreak: failStreak.streak },
         });
         if (row) onMutation?.("telemetry", row, ctx);
-        return textResult(`error: ${result.error} (fold ${result.foldIndex})`, { summary: result.error, rows: [] }, true);
+        return textResult(errorMsg, { summary: result.error, rows: [] }, true);
       }
+      recordFoldSuccess(rt.sessionId);
       onMutation?.("fold", result.outcome, ctx);
       const text = formatFoldOutcome(result.outcome);
       const outSummary = `${result.outcome.foldCount} block(s) · -${formatTokens(result.outcome.tokensReclaimed)}t`;

@@ -384,6 +384,10 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
         archivedMessages: 9,
         activeBlocks: 1,
         totalBlocks: 1,
+        breakEvenTurns: 1,
+        paidBack: true,
+        cumulativeSavedTokens: 16_800,
+        paybackStatus: "Paid back (2 turns past break-even)",
       },
     };
 
