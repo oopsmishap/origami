@@ -221,8 +221,14 @@ describe("billion-context Trajectory & Cache Hit Rate", () => {
     const hitChart = bigNative[1]?.p as TspChartProps | undefined;
     expect(trajChart?.kind).toBe("spark");
     expect(hitChart?.kind).toBe("spark");
-    expect(trajChart?.series?.length).toBe(268);
-    expect(hitChart?.series?.length).toBe(268);
+    // Binned to maxCols (default 70) so it never overflows the overlay card
+    expect(trajChart?.series?.length).toBe(70);
+    expect(hitChart?.series?.length).toBe(70);
+
+    // Custom column budget respected
+    const narrowNative = describeNativeTrajectory(bigData, 48);
+    const narrowTraj = narrowNative[0]?.p as TspChartProps | undefined;
+    expect(narrowTraj?.series?.length).toBe(48);
   });
 });
 

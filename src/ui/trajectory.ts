@@ -543,7 +543,7 @@ interface BinnedColumn {
   foldIds: string[];
 }
 
-function binTrajectoryColumns(data: TrajectoryData, maxCols: number): BinnedColumn[] {
+export function binTrajectoryColumns(data: TrajectoryData, maxCols: number, expand = true): BinnedColumn[] {
   const { lines, folds } = data;
   if (lines.length === 0 || maxCols <= 0) return [];
 
@@ -576,7 +576,23 @@ function binTrajectoryColumns(data: TrajectoryData, maxCols: number): BinnedColu
     }];
   }
 
-  if (lines.length <= maxCols) {
+  if (!expand) {
+    if (lines.length <= maxCols) {
+      return lines.map((l) => {
+        const fIds = foldSeqMap.get(l.seq) ?? [];
+        return {
+          seqStart: l.seq,
+          seqEnd: l.seq,
+          input: l.input,
+          cached: l.cached,
+          hitPct: l.hitPct,
+          cause: l.cause,
+          hasFold: fIds.length > 0,
+          foldIds: fIds,
+        };
+      });
+    }
+  } else if (lines.length <= maxCols) {
     const targetCols = Math.min(maxCols, Math.max(lines.length, Math.min(64, lines.length * 3)));
     if (targetCols === lines.length) {
       return lines.map((l) => {
@@ -825,7 +841,7 @@ export function renderAnsiTrajectory(data: TrajectoryData, width: number, plotRo
  * Native Tern TSP descriptors for Context Trajectory (`kind: "spark"`) and
  * Prompt Cache Hit Rate (`kind: "spark"`), plus fold & round summary table.
  */
-export function describeNativeTrajectory(data: TrajectoryData): NativeNode[] {
+export function describeNativeTrajectory(data: TrajectoryData, maxCols = 70): NativeNode[] {
   if (data.lines.length === 0) {
     return [
       text([span("No request rounds recorded for this session yet.", "muted")], {
@@ -843,27 +859,31 @@ export function describeNativeTrajectory(data: TrajectoryData): NativeNode[] {
     }
   }
 
-  const series = data.lines.map((l) => {
-    const fMarks = foldBySeq.get(l.seq);
+  const binned = binTrajectoryColumns(data, maxCols, false);
+  const series = binned.map((c) => {
     const tone: TspTone | undefined =
-      l.cause === "seam"
+      c.cause === "seam"
         ? "error"
-        : l.cause === "comp" || (fMarks && fMarks.length > 0)
+        : c.hasFold || c.cause === "comp"
           ? "warning"
-          : l.cause === "cold" || l.cause === "rest"
+          : c.cause === "cold" || c.cause === "rest"
             ? "muted"
             : undefined;
-    const hitStr = l.hitPct != null ? `${l.hitPct.toFixed(1)}%` : "—";
+    const hitStr = c.hitPct != null ? `${c.hitPct.toFixed(1)}%` : "—";
     const foldNote =
-      fMarks && fMarks.length > 0
-        ? `\nfold ${fMarks.map((m) => `${m.id} (-${formatTokens(m.saved)})`).join(", ")}`
-        : "";
-    const causeNote = l.cause !== "new" ? `\n${CAUSE_LABEL[l.cause]}` : "";
+      c.foldIds.length > 0 ? `\nfold ${c.foldIds.join(", ")}` : "";
+    const causeNote = c.cause !== "new" ? `\n${CAUSE_LABEL[c.cause]}` : "";
+    const seqLabel =
+      c.seqStart === c.seqEnd ? `#${c.seqStart}` : `#${c.seqStart}..#${c.seqEnd}`;
+    const inLabel =
+      c.seqStart === c.seqEnd
+        ? `in ${formatTokens(c.input)}`
+        : `peak in ${formatTokens(c.input)}`;
     return {
-      label: `#${l.seq}`,
-      value: l.input,
+      label: seqLabel,
+      value: c.input,
       ...(tone ? { tone } : {}),
-      title: `#${l.seq} · in ${formatTokens(l.input)} · cached ${formatTokens(l.cached)} · missed ${formatTokens(l.missed)} · hit ${hitStr}${foldNote}${causeNote}`,
+      title: `${seqLabel} · ${inLabel} · cached ${formatTokens(c.cached)} · hit ${hitStr}${foldNote}${causeNote}`,
     };
   });
 
@@ -896,14 +916,17 @@ export function describeNativeTrajectory(data: TrajectoryData): NativeNode[] {
       : []),
   ];
 
-  const hitSeries = data.lines.map((l) => {
-    const pct = l.hitPct ?? 0;
-    const tone: TspTone | undefined = pct >= 85 ? undefined : pct >= 50 ? "warning" : "error";
+  const hitSeries = binned.map((c) => {
+    const pct = c.hitPct ?? 0;
+    const tone: TspTone | undefined =
+      pct >= 85 ? undefined : pct >= 50 ? "warning" : "error";
+    const seqLabel =
+      c.seqStart === c.seqEnd ? `#${c.seqStart}` : `#${c.seqStart}..#${c.seqEnd}`;
     return {
-      label: `#${l.seq}`,
+      label: seqLabel,
       value: Math.round(pct * 10) / 10,
       ...(tone ? { tone } : {}),
-      title: `#${l.seq} · hit ${l.hitPct != null ? `${l.hitPct.toFixed(1)}%` : "—"} (${formatTokens(l.cached)} / ${formatTokens(l.input)})`,
+      title: `${seqLabel} · hit ${c.hitPct != null ? `${c.hitPct.toFixed(1)}%` : "—"} (${formatTokens(c.cached)} / ${formatTokens(c.input)})`,
     };
   });
 

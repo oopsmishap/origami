@@ -704,7 +704,8 @@ export class WorkbenchComponent implements Component {
 
     if (m.tab === 1) {
       if (cx.supports("chart")) {
-        return describeNativeTrajectory(m.trajectory);
+        const plotCols = Math.max(30, Math.min(cx.cols - 16, 70));
+        return describeNativeTrajectory(m.trajectory, plotCols);
       }
       const ansiLines = renderAnsiTrajectory(m.trajectory, Math.max(40, cx.cols - 8), 8);
       return [node("rows", { cols: Math.max(40, cx.cols - 8), lines: ansiLines }, undefined, "traj-fallback")];
