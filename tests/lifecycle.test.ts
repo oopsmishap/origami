@@ -82,6 +82,37 @@ describe("fold batch validation", () => {
     if (!res.ok) expect(res.error).toContain("is not smaller than what it replaces");
   });
 
+  it("rejects an entire multi-fold batch atomically if any single fold expands (Billion-Context #1819, #2748)", () => {
+    const { engine, journal } = harness();
+    const res = engine.executeFold({
+      folds: [
+        fold("m00003..m00004", "shrinking"),
+        { range: "m00005..m00006", topic: "expanding", summary: "x".repeat(3000) },
+      ],
+    });
+    expect(res.ok).toBe(false);
+    expect(res).toMatchObject({ ok: false, foldIndex: 1 });
+    if (!res.ok) expect(res.error).toContain("is not smaller than what it replaces");
+    expect(journal).toHaveLength(0);
+    expect(engine.state.tree.all()).toHaveLength(0);
+  });
+
+  it("rejects a tier-2 distillation that does not shrink its combined children (Billion-Context #1819, #3635)", () => {
+    const h = harness();
+    expect(h.engine.executeFold({ folds: [fold("m00003..m00004"), fold("m00005..m00006")] }).ok).toBe(true);
+    const b1 = h.engine.state.tree.get("b1")!;
+    const b2 = h.engine.state.tree.get("b2")!;
+    const combinedTokens = b1.tokensAfter + b2.tokensAfter;
+    const res = h.engine.executeFold({
+      folds: [{ range: "b1,b2", topic: "bloated-merge", summary: "m".repeat(combinedTokens + 100) }],
+      tier: 2,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain("is not smaller than what it replaces");
+    expect(h.engine.state.tree.get("b1")?.status).toBe("active");
+    expect(h.engine.state.tree.get("b2")?.status).toBe("active");
+  });
+
   it("a fold over an active block covers only the unfolded refs", () => {
     const { engine, render } = harness();
     expect(engine.executeFold({ folds: [fold("m00005..m00006")] }).ok).toBe(true);

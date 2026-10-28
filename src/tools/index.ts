@@ -26,6 +26,7 @@ import {
 } from "./display.ts";
 import { nativeAvailable } from "../ui/native.ts";
 import { recordToolTelemetry } from "../telemetry.ts";
+import { salvageFoldParams } from "./salvage.ts";
 
 export type ToolMutationListener = (
   event: "fold" | "unfold" | "telemetry",
@@ -62,16 +63,21 @@ export function registerTools(
     description:
       'Fold conversation ranges into compact summary blocks. Tier 1 compresses message ranges ("m00012..m00048"); tier 2/3 distill whole blocks ("b1..b5" / "b1,b3"). Call with EXACTLY the ranges an [origami] nudge advertises.',
     parameters: t.Object({
-      folds: t.Array(
-        t.Object({
-          range: t.String({ description: 'Range spec: "m00012..m00048" (tier 1) or "b1..b5" (tier 2/3)' }),
-          topic: t.String({ description: "One-line domain topic (≤60 chars), e.g. 'Auth token refresh refactor'" }),
-          summary: t.String({ description: "Distilled summary adhering to origami doctrine (lossless on decisions)" }),
-        }),
-        { description: "One or more disjoint fold ranges" },
+      folds: t.Optional(
+        t.Array(
+          t.Object({
+            range: t.String({ description: 'Range spec: "m00012..m00048" (tier 1) or "b1..b5" (tier 2/3)' }),
+            topic: t.String({ description: "One-line domain topic (≤60 chars), e.g. 'Auth token refresh refactor'" }),
+            summary: t.String({ description: "Distilled summary adhering to origami doctrine (lossless on decisions)" }),
+          }),
+          { description: "One or more disjoint fold ranges" },
+        ),
       ),
+      range: t.Optional(t.String({ description: 'Shorthand range spec: "m00012..m00048" (tier 1) or "b1..b5" (tier 2/3)' })),
+      topic: t.Optional(t.String({ description: "One-line domain topic (≤60 chars)" })),
+      summary: t.Optional(t.String({ description: "Distilled summary adhering to origami doctrine" })),
       tier: t.Optional(
-        t.Union([t.Literal(1), t.Literal(2), t.Literal(3)], {
+        t.Union([t.Literal(1), t.Literal(2), t.Literal(3), t.Literal("1"), t.Literal("2"), t.Literal("3")], {
           description: "Fold tier: 1=message compression, 2=distillation, 3=ultra-dense",
         }),
       ),
@@ -82,8 +88,24 @@ export function registerTools(
       const t0 = performance.now();
       const rt = getRuntime(ctx);
       rt.sync();
-      const inputSummary = `${params.folds.length} range(s) · T${params.tier ?? 1}`;
-      const result = rt.engine.executeFold({ folds: params.folds as FoldSpec[], tier: params.tier });
+      const salvaged = salvageFoldParams(params);
+      if (!salvaged.ok) {
+        const durationMs = performance.now() - t0;
+        const row = recordToolTelemetry(rt, {
+          tool: "fold",
+          durationMs,
+          ok: false,
+          error: salvaged.error,
+          inputSummary: "malformed fold params",
+          outputSummary: "Fold rejected: invalid arguments",
+          metrics: { requestedFolds: 0 },
+        });
+        if (row) onMutation?.("telemetry", row, ctx);
+        return textResult(`error: ${salvaged.error}`, { summary: salvaged.error, rows: [] }, true);
+      }
+      const { folds, tier } = salvaged.params;
+      const inputSummary = `${folds.length} range(s) · T${tier ?? 1}`;
+      const result = rt.engine.executeFold({ folds, tier });
       const durationMs = performance.now() - t0;
       if (!result.ok) {
         const row = recordToolTelemetry(rt, {
@@ -93,7 +115,7 @@ export function registerTools(
           error: `${result.error} (fold ${result.foldIndex})`,
           inputSummary,
           outputSummary: `Fold rejected at index ${result.foldIndex}`,
-          metrics: { tier: params.tier ?? 1, requestedFolds: params.folds.length, foldIndex: result.foldIndex },
+          metrics: { tier: tier ?? 1, requestedFolds: folds.length, foldIndex: result.foldIndex },
         });
         if (row) onMutation?.("telemetry", row, ctx);
         return textResult(`error: ${result.error} (fold ${result.foldIndex})`, { summary: result.error, rows: [] }, true);
@@ -108,7 +130,7 @@ export function registerTools(
         inputSummary,
         outputSummary: outSummary,
         metrics: {
-          tier: params.tier ?? 1,
+          tier: tier ?? 1,
           blocksCreated: result.outcome.blocks.length,
           tokensReclaimed: result.outcome.tokensReclaimed,
         },
@@ -122,18 +144,18 @@ export function registerTools(
       });
     },
     describeCall(args) {
-      const a = (args ?? {}) as { folds?: FoldSpec[]; tier?: number };
-      return foldCallView({ folds: a.folds ?? [], tier: a.tier ?? 1 });
+      return foldCallView((args ?? {}) as Parameters<typeof foldCallView>[0]);
     },
     describeResult(result) {
       return foldResultView(result, result.details as ToolDetail | undefined, Boolean(result.isError));
     },
     renderCall(args, options, uiTheme) {
-      const a = (args ?? {}) as { folds?: FoldSpec[]; tier?: number };
-      const folds = a.folds ?? [];
+      const a = (args ?? {}) as { folds?: FoldSpec[]; range?: string; topic?: string; tier?: number | string };
+      const folds = a.folds ?? (a.range ? [{ range: a.range, topic: a.topic ?? "Summary", summary: "" }] : []);
+      const tier = Number(a.tier ?? 1) || 1;
       return renderInlineToolCall(
         "Fold",
-        `tier ${a.tier ?? 1}`,
+        `tier ${tier}`,
         folds.map((f) => `${f.range} · ${f.topic}`),
         options,
         uiTheme,
@@ -477,8 +499,9 @@ export function registerTools(
       const rt = getRuntime(ctx);
       rt.sync();
       const rounds = rt.engine.cacheRounds();
-      const text = formatCacheRounds(rounds);
-      const firstLine = text.split("\n")[0] ?? "no cache rounds";
+      const collapse = rt.engine.status().cacheCollapse;
+      const text = formatCacheRounds(rounds, collapse?.collapsed ? collapse.reason : null);
+      const firstLine = (collapse?.collapsed ? `⚠️ ${collapse.reason}\n` : "") + (text.split("\n").find((l) => l.includes("round(s)")) ?? "no cache rounds");
       const durationMs = performance.now() - t0;
       const row = recordToolTelemetry(rt, {
         tool: "fold_cache",

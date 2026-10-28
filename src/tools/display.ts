@@ -379,10 +379,10 @@ function viewMemos(): { call: ViewMemos; result: ViewMemos } {
   return memos;
 }
 
-export function foldCallView(args: { folds?: FoldSpec[]; tier?: number }): NativeToolView {
-  return viewMemos().call.fold.get(args, [args.tier ?? 1, (args.folds ?? []).length], () => {
-    const folds = args.folds ?? [];
-    const tier = args.tier ?? 1;
+export function foldCallView(args: { folds?: FoldSpec[]; range?: string; topic?: string; summary?: string; tier?: number | string }): NativeToolView {
+  const folds = args.folds ?? (args.range ? [{ range: args.range, topic: args.topic ?? "Summary", summary: args.summary ?? "" }] : []);
+  const tier = Number(args.tier ?? 1) || 1;
+  return viewMemos().call.fold.get(args, [tier, folds.length, args.range ?? ""], () => {
     const ranges = folds.map((f) => f.range).join(", ");
     return {
       head: toolHead("Fold", `tier ${tier}`, ranges || undefined),
@@ -602,10 +602,18 @@ export function formatStatusReport(report: StatusReport): string {
     lines.push("zones:");
     for (const z of report.zones) lines.push(`  ${z.kind} ${z.start}..${z.end} (${formatTokens(z.tokens)}t)`);
   }
+  if (report.uncoveredRuns && report.uncoveredRuns.length > 0) {
+    lines.push("");
+    lines.push("uncovered history runs:");
+    for (const u of report.uncoveredRuns) {
+      const adv = u.advertised ? " [in current nudge]" : " [unadvertised]";
+      lines.push(`  ${u.startRef}..${u.endRef} (${u.count} msgs, ${formatTokens(u.tokens)}t)${adv}`);
+    }
+  }
   return lines.join("\n");
 }
 
-export function formatCacheRounds(rounds: readonly CacheRound[]): string {
+export function formatCacheRounds(rounds: readonly CacheRound[], collapseWarning?: string | null): string {
   if (rounds.length === 0) return "no cache rounds recorded";
   let totalIn = 0;
   let totalRead = 0;
@@ -614,10 +622,14 @@ export function formatCacheRounds(rounds: readonly CacheRound[]): string {
     totalRead += r.cacheRead;
   }
   const hitPct = totalIn > 0 ? ((totalRead / totalIn) * 100).toFixed(1) : "0.0";
-  const lines = [
+  const lines: string[] = [];
+  if (collapseWarning) {
+    lines.push(`⚠️ WARNING: ${collapseWarning}\n`);
+  }
+  lines.push(
     `${rounds.length} round(s) · cache hit ${hitPct}% (${formatTokens(totalRead)} / ${formatTokens(totalIn)})`,
     "ts | total_in | cache_read | cache_write | fold",
-  ];
+  );
   for (const r of rounds) {
     lines.push(`${new Date(r.ts).toISOString()} | ${r.totalIn} | ${r.cacheRead} | ${r.cacheWrite} | ${r.foldEventId ?? "-"}`);
   }

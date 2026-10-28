@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../src/persist/db.ts";
-import { evaluateStumble, recordToolTelemetry } from "../src/telemetry.ts";
+import { evaluateCacheRound, evaluateStumble, getCacheCollapseStatus, recordToolTelemetry, _resetTelemetryForTest } from "../src/telemetry.ts";
 import { OrigamiRuntime, type HostBinding } from "../src/runtime.ts";
 import { registerTools } from "../src/tools/index.ts";
 
@@ -218,5 +218,40 @@ describe("Telemetry & Stumble Detection", () => {
     } finally {
       db.close();
     }
+  });
+
+  test("detects prompt cache collapse after 4 consecutive large low-hit turns (Billion-Context #499, #1847)", () => {
+    const sId = "session-cache-collapse-" + Date.now();
+    _resetTelemetryForTest(sId);
+
+    // Small turns are ignored
+    const r1 = evaluateCacheRound(sId, 2000, 1900);
+    expect(r1.collapsed).toBe(false);
+
+    // Large turns with zero cache before any high hit: not considered collapsed (just fresh session)
+    const r2 = evaluateCacheRound(sId, 10000, 0);
+    expect(r2.collapsed).toBe(false);
+
+    // Demonstrate healthy cache hit (80%)
+    const r3 = evaluateCacheRound(sId, 20000, 16000);
+    expect(r3.collapsed).toBe(false);
+
+    // 1st low hit
+    expect(evaluateCacheRound(sId, 25000, 100).collapsed).toBe(false);
+    // 2nd low hit
+    expect(evaluateCacheRound(sId, 25000, 200).collapsed).toBe(false);
+    // 3rd low hit
+    expect(evaluateCacheRound(sId, 25000, 0).collapsed).toBe(false);
+
+    // 4th consecutive low hit -> triggers collapse!
+    const r4 = evaluateCacheRound(sId, 25000, 500);
+    expect(r4.collapsed).toBe(true);
+    expect(r4.reason).toContain("Prompt cache collapse: 4 consecutive large requests");
+    expect(getCacheCollapseStatus(sId).collapsed).toBe(true);
+
+    // Recovery: provider warms back up with a high hit
+    const r5 = evaluateCacheRound(sId, 25000, 22000);
+    expect(r5.collapsed).toBe(false);
+    expect(getCacheCollapseStatus(sId).collapsed).toBe(false);
   });
 });

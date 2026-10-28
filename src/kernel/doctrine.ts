@@ -7,7 +7,8 @@ const KEEP_DROP_RULES = `## KEEP VERBATIM
 - Constraints discovered ("must support Node 22", "no new dependencies").
 - Exact values: versions, config keys, thresholds, magic numbers.
 - User intent: quote short user messages verbatim ONLY with their message ref (\`[#m00132]\`). Without a verifiable ref, paraphrase.
-- Open objectives — if any source message names work still open, the summary MUST keep a one-line \`Open objectives:\` entry naming each with its ref. These are the last thing to drop and the first to restore.
+- Open objectives — if any source message names work still open, the summary MUST keep a one-line \`Open objectives:\` entry naming each with its ref. Drop completed or resolved objectives so finished work is never re-executed.
+- Time sensitivity — file paths, line numbers, and code snippets are snapshots taken at fold time that drift over subsequent edits; always re-read live files before anchoring edits.
 
 ## DROP
 - Verbose logs/build output once the error line or result is captured.
@@ -20,14 +21,13 @@ const KEEP_DROP_RULES = `## KEEP VERBATIM
 const TIER1_RULES = `## Tier 1 — Range fold (\`fold\` with message ranges)
 Fold a contiguous span of older messages into one summary block. The summary replaces those messages in the rendered context; the originals stay recoverable.
 - Range syntax: \`"m00012..m00048"\`. One fold call may carry several folds; folds in one call must not overlap.
-- Write a \`topic\` (a few words) and a \`summary\` that lets a later reader continue WITHOUT the originals. A summary that is not smaller than what it replaces is rejected.
+- Write a \`topic\` (a few words) and a \`summary\` that lets a later reader continue WITHOUT the originals. A summary that does not shrink its span is rejected before committing. Be dense: compact bullets, no filler or repetition.
 - Group under short thematic headers when a range spans distinct concerns.
 - Preserve the goal, its evolution, every open objective, every decision and its rationale.
 - The pinned first user message, the current in-flight turn, and the protected recent tail cannot be folded.`;
 
 const TIER2_RULES = `## Tier 2 — Distillation (fold block ranges \`"b1..b5"\` or \`"b1,b4,b7"\`)
-Merge at least 2 active tier-1 blocks into one denser summary; the merged blocks are consumed (they leave context and return only if the tier-2 block is unfolded). Re-carry open objectives verbatim. Keep decisions and their rationale. This is the summary-of-summaries path: what survives here is what a reader needs after months.`;
-
+Merge at least 2 active tier-1 blocks into one denser summary; the merged blocks are consumed (they leave context and return only if the tier-2 block is unfolded). A merged summary that does not shrink the combined mass of its children is rejected. Re-carry open objectives verbatim. Keep decisions and their rationale. This is the summary-of-summaries path: what survives here is what a reader needs after months.`;
 const TIER3_RULES = `## Tier 3 — Ultra-condense (fold block ranges)
 Merge at least 2 active lower-tier blocks. Keep ONLY: the goal, open objectives, and the load-bearing constraints. Everything else is expendable.`;
 

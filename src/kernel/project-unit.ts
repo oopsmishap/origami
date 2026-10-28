@@ -204,9 +204,84 @@ export function protectedZoneMap(
   return zones;
 }
 
-function pinnedHeadTurn(bound: readonly BoundMessage[], pinnedHeadRef: string): number {
+export function pinnedHeadTurn(bound: readonly BoundMessage[], pinnedHeadRef: string): number {
   for (const m of bound) {
     if (m.ref === pinnedHeadRef) return m.turn;
   }
   return -1;
+}
+
+export interface UncoveredRun {
+  startRef: string;
+  endRef: string;
+  count: number;
+  tokens: number;
+  advertised: boolean;
+}
+
+/**
+ * Uncovered-history audit (Billion-Context #4331, uncovered.ts).
+ * Identifies contiguous runs of raw messages that are:
+ * 1. Outside the pinned head
+ * 2. Older than the protected recent tail (compressible)
+ * 3. Not covered by any active fold block
+ * Also flags whether the run is currently advertised in the active nudge.
+ */
+export function detectUncoveredRuns(
+  bound: readonly BoundMessage[],
+  protectedFromTurn: number,
+  foldedRefs: ReadonlySet<string>,
+  pinnedHeadRef: string | null,
+  bookkeepingRefs: ReadonlySet<string>,
+  countTokens: (msg: BoundMessage) => number,
+  advertisedRanges: readonly { start: string; end: string }[] = [],
+): UncoveredRun[] {
+  const headTurn = pinnedHeadRef !== null ? pinnedHeadTurn(bound, pinnedHeadRef) : -1;
+  const entries: { ref: string; tokens: number }[] = [];
+
+  for (const m of bound) {
+    if (m.ephemeral || !/^m\d{5,}$/.test(m.ref) || bookkeepingRefs.has(m.ref)) continue;
+    const isPinned = headTurn !== -1 && m.turn === headTurn;
+    const isProtectedTail = m.turn >= protectedFromTurn;
+    if (isPinned || isProtectedTail) continue;
+    if (foldedRefs.has(m.ref)) continue;
+
+    const tokens = countTokens(m);
+    if (tokens <= 0) continue;
+    entries.push({ ref: m.ref, tokens });
+  }
+
+  if (entries.length === 0) return [];
+
+  const rawRuns: { startRef: string; endRef: string; count: number; tokens: number }[] = [];
+  let cur: { startRef: string; endRef: string; count: number; tokens: number; lastNum: number } | null = null;
+
+  for (const e of entries) {
+    const num = parseRef(e.ref);
+    if (cur && num === cur.lastNum + 1) {
+      cur.endRef = e.ref;
+      cur.count++;
+      cur.tokens += e.tokens;
+      cur.lastNum = num;
+    } else {
+      if (cur) rawRuns.push({ startRef: cur.startRef, endRef: cur.endRef, count: cur.count, tokens: cur.tokens });
+      cur = { startRef: e.ref, endRef: e.ref, count: 1, tokens: e.tokens, lastNum: num };
+    }
+  }
+  if (cur) rawRuns.push({ startRef: cur.startRef, endRef: cur.endRef, count: cur.count, tokens: cur.tokens });
+
+  const advWindows = advertisedRanges.map((r) => [parseRef(r.start), parseRef(r.end)] as const);
+
+  return rawRuns.map((r) => {
+    const s = parseRef(r.startRef);
+    const e = parseRef(r.endRef);
+    const advertised = advWindows.some(([lo, hi]) => !(e < lo || s > hi));
+    return {
+      startRef: r.startRef,
+      endRef: r.endRef,
+      count: r.count,
+      tokens: r.tokens,
+      advertised,
+    };
+  });
 }

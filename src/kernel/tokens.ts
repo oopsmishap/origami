@@ -59,10 +59,10 @@ export class TokenLedger {
   }
 
   countMessage(msg: KernelMessage): number {
-    const key = `m\u0000${msg.role}\u0000${msg.contentHash}`;
+    const key = `m\u0000${msg.role}\u0000${msg.contentHash}\u0000${msg.imageTokens ?? 0}`;
     const hit = this.memo.get(key);
     if (hit !== undefined) return hit;
-    const n = this.countText(msg.text) + PER_MESSAGE_OVERHEAD_TOKENS;
+    const n = this.countText(msg.text) + PER_MESSAGE_OVERHEAD_TOKENS + (msg.imageTokens ?? 0);
     this.memo.set(key, n);
     return n;
   }

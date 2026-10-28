@@ -19,6 +19,10 @@ interface SessionTelemetryState {
   recentSearchQueries: string[];
   lastTool: string | null;
   lastTs: number;
+  sawHighCacheHit: boolean;
+  lowCacheRun: number;
+  cacheCollapsed: boolean;
+  cacheCollapseReason: string | null;
 }
 
 const sessionStates = new Map<string, SessionTelemetryState>();
@@ -32,6 +36,10 @@ function getSessionState(sessionId: string): SessionTelemetryState {
       recentSearchQueries: [],
       lastTool: null,
       lastTs: 0,
+      sawHighCacheHit: false,
+      lowCacheRun: 0,
+      cacheCollapsed: false,
+      cacheCollapseReason: null,
     };
     sessionStates.set(sessionId, state);
   }
@@ -158,4 +166,56 @@ export function recordToolTelemetry(
   }
 
   return row;
+}
+
+/**
+ * Upstream prompt-cache collapse detector (Billion-Context #499, #1847, cache-warn.ts).
+ * A warm session normally rides the provider's prefix cache (85%+ hit). When a restart,
+ * mid-prompt timestamp, or deployment change drops the upstream KV cache, the resend
+ * is expensive but silent: requests succeed, but every turn is billed and processed cold.
+ *
+ * Detects when a session with demonstrated healthy cache (≥50% on a request ≥8Kt)
+ * logs 4 consecutive large requests at ~0% hit (≤10%).
+ */
+export function evaluateCacheRound(
+  sessionId: string,
+  totalIn: number,
+  cacheRead: number,
+): { collapsed: boolean; reason: string | null } {
+  const state = getSessionState(sessionId);
+  if (totalIn < 8000) {
+    return { collapsed: state.cacheCollapsed, reason: state.cacheCollapseReason };
+  }
+  const hit = cacheRead / totalIn;
+  if (hit >= 0.5) {
+    state.sawHighCacheHit = true;
+    state.lowCacheRun = 0;
+    state.cacheCollapsed = false;
+    state.cacheCollapseReason = null;
+    return { collapsed: false, reason: null };
+  }
+  if (!state.sawHighCacheHit) {
+    return { collapsed: false, reason: null };
+  }
+  if (hit > 0.1) {
+    state.lowCacheRun = 0;
+    return { collapsed: false, reason: null };
+  }
+  state.lowCacheRun++;
+  if (state.lowCacheRun >= 4) {
+    state.cacheCollapsed = true;
+    state.cacheCollapseReason = `Prompt cache collapse: ${state.lowCacheRun} consecutive large requests (≥8Kt) at ~0% hit (last: ${Math.round(hit * 100)}%) after earlier ≥50% hits`;
+    return { collapsed: true, reason: state.cacheCollapseReason };
+  }
+  return { collapsed: false, reason: null };
+}
+
+export function getCacheCollapseStatus(sessionId: string): { collapsed: boolean; reason: string | null } {
+  const state = getSessionState(sessionId);
+  return { collapsed: state.cacheCollapsed, reason: state.cacheCollapseReason };
+}
+
+export function _resetTelemetryForTest(sessionId?: string): void {
+  if (sessionId) sessionStates.delete(sessionId);
+  else sessionStates.clear();
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.5 — 2026-10-28
+
+### Features
+- Upstream billion-context feature alignment:
+  1. **Regurgitation Guard & Net-Shrink Enforcement (#1819, #2748, #3635)**: Hard rejection gate in `executeFold` blocking any fold or multi-fold batch where summary tokens exceed or equal replaced message tokens, including Tier 2 distillation merges exceeding combined child mass. Updated origami doctrine with time-sensitivity warnings and resolved objective pruning.
+  2. **Lenient Fold Argument Salvage (#2580, #1502)**: Expanded tool schema and introduced `salvageFoldParams` supporting shorthand `{ range, topic, summary }`, string tiers (`"1"`, `"2"`, `"3"`), stringified JSON payloads, stripped outer quotes/backticks, and automatic Tier 2 distillation inference for block ranges (`b1..b5`).
+  3. **Prompt Cache Collapse Warning (#499, #1847)**: Telemetry tracking in `evaluateCacheRound` flagging collapse when 4 consecutive large turns (≥8Kt) drop to ≤10% hit rate after earlier healthy cache hits (≥50%). Surfaced as visual warning banners in the Web UI Audit tab and `fold_cache` status output.
+  4. **Uncovered Mid-History Runs Auditing (#4331)**: Algorithmic detection of uncompressed message spans stranded between active fold blocks or prior to protected tails (`detectUncoveredRuns`). Exposed in `StatusReport`, `fold_status` CLI output, and the Web UI Context Zones table.
+  5. **Vision & Thinking Token Realism (#488, #767, #1320, #1843)**: High-detail vision tile modeling (`pixelTileEstimate`, `decodeImageDims`) parsing container headers (PNG, JPEG, GIF, BMP) to replace flat ~6-token string approximations with realistic 765–2805 token counts, alongside accurate accounting for extended thinking and encrypted `redacted_thinking` blocks.
+
 ## 0.2.4 — 2026-10-28
 
 ### Features

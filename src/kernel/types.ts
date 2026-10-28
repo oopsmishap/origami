@@ -15,6 +15,7 @@ export interface KernelMessage {
   signedThinking: boolean;
   text: string;
   bytes: number;
+  imageTokens?: number;
 }
 
 export interface BoundMessage extends KernelMessage {

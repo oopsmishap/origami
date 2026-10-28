@@ -3,7 +3,7 @@ import { formatRef, parseRangeSpec, parseRef } from "./kernel/types.ts";
 import { messageFacts } from "./kernel/message-facts.ts";
 import { SessionState } from "./kernel/state.ts";
 import type { SessionEntryLike } from "./kernel/state.ts";
-import { projectUnit, protectedTailTurn, protectedZoneMap, spanHits } from "./kernel/project-unit.ts";
+import { detectUncoveredRuns, projectUnit, protectedTailTurn, protectedZoneMap, spanHits, type UncoveredRun } from "./kernel/project-unit.ts";
 import { checkInvariants, renderableBlocks } from "./kernel/invariants.ts";
 import { historicalFoldCallRefs } from "./kernel/fold-calls.ts";
 import { buildToolPairPartnerMap } from "./kernel/tool-pairs.ts";
@@ -21,6 +21,7 @@ import type { OrigamiDb } from "./persist/db.ts";
 import { blockBodyForIndex } from "./persist/db.ts";
 import type { OrigamiConfig } from "./config.ts";
 import { configFromPreset } from "./config.ts";
+import { evaluateCacheRound, getCacheCollapseStatus } from "./telemetry.ts";
 
 export interface HostPort {
   sessionId(): string;
@@ -132,6 +133,11 @@ export interface StatusReport {
   protectedFromTurn: number;
   invariantViolations: InvariantViolation[];
   vault: StatusVaultReport;
+  cacheCollapse?: {
+    collapsed: boolean;
+    reason: string | null;
+  };
+  uncoveredRuns?: UncoveredRun[];
 }
 
 export interface CacheRound {
@@ -885,6 +891,16 @@ export class OrigamiEngine {
       nudgeKind: this.lastNudge.kind ?? "none",
       protectedFromTurn: this.protectedFromTurn,
       invariantViolations: this.invariants(),
+      cacheCollapse: getCacheCollapseStatus(this.host.sessionId()),
+      uncoveredRuns: detectUncoveredRuns(
+        bound,
+        this.protectedFromTurn,
+        foldedRefs,
+        this.pinnedHeadRef,
+        this.bookkeepingRefs,
+        (m) => this.state.ledger.countMessage(m),
+        this.recommendedRanges().map((r) => ({ start: r.start, end: r.end })),
+      ),
     };
   }
 
@@ -900,6 +916,7 @@ export class OrigamiEngine {
   }
 
   recordRound(round: CacheRound): void {
+    evaluateCacheRound(this.host.sessionId(), round.totalIn, round.cacheRead);
     if (!this.db) return;
     const foldEventId = round.foldEventId ?? this.pendingFoldAttribution;
     try {

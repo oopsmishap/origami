@@ -1442,6 +1442,11 @@ function renderDashboardHtml(): string {
         <div class="alert-body" id="audit-stumble-list"></div>
       </div>
 
+      <!-- Cache Collapse Alert Banner (shown when prompt cache collapsed) -->
+      <div class="alert-banner" id="audit-cache-collapse-banner" style="display:none;margin-bottom:16px;background:rgba(239,68,68,0.08);border-color:rgba(239,68,68,0.3);">
+        <div class="alert-title" style="color:var(--accent-red);">⚠️ Prompt Cache Collapse Detected</div>
+        <div class="alert-body" id="audit-cache-collapse-text">Prompt cache hit rate fell to ~0% across multiple large turns. Requests are being re-sent cold every turn.</div>
+      </div>
       <!-- Main Audit Layout -->
       <div class="card">
         <div class="card-h">
@@ -2089,6 +2094,16 @@ function renderDashboardHtml(): string {
         if (seq !== refreshSeq) return;
         renderAudit(auditData);
 
+        const ccBanner = $('audit-cache-collapse-banner');
+        const ccText = $('audit-cache-collapse-text');
+        if (ccBanner) {
+          if (st.cacheCollapse && st.cacheCollapse.collapsed) {
+            ccBanner.style.display = 'block';
+            if (ccText && st.cacheCollapse.reason) ccText.textContent = st.cacheCollapse.reason;
+          } else {
+            ccBanner.style.display = 'none';
+          }
+        }
 
         $('cnt-blocks').textContent = String(blocks.length);
         $('cnt-rounds').textContent = String(rounds.length);
@@ -2329,7 +2344,7 @@ function renderDashboardHtml(): string {
             const cls = 'zone-seg zone-' + z.kind;
             return '<div class="' + cls + '" style="flex:' + weight + ';" title="' + escapeHtml(z.kind + ' · ' + z.start + '..' + z.end + ' · ' + formatK(z.tokens || 0) + 't') + '">' + escapeHtml(z.start + '..' + z.end) + '</div>';
           }).join('');
-          $('zones-tbody').innerHTML = zones.map((z) => {
+          let rowsHtml = zones.map((z) => {
             const share = (((Number(z.tokens) || 0) / totalZ) * 100).toFixed(1) + '%';
             return '<tr>' +
               '<td><span class="status-pill" style="background:var(--bg-elevated);color:var(--text-primary)">' + escapeHtml(z.kind) + '</span></td>' +
@@ -2339,6 +2354,19 @@ function renderDashboardHtml(): string {
               '<td class="num">' + share + '</td>' +
               '</tr>';
           }).join('');
+          if (st.uncoveredRuns && st.uncoveredRuns.length > 0) {
+            rowsHtml += st.uncoveredRuns.map((u) => {
+              const tag = u.advertised ? '<span class="badge-tag" style="background:rgba(59,130,246,0.15);color:var(--accent-cyan);margin-left:6px;">Nudge candidate</span>' : '<span class="badge-tag" style="background:rgba(245,158,11,0.15);color:var(--accent-amber);margin-left:6px;">Unadvertised mid-history</span>';
+              return '<tr style="background:rgba(245,158,11,0.03);">' +
+                '<td><span class="status-pill" style="background:rgba(245,158,11,0.15);color:var(--accent-amber)">uncovered</span></td>' +
+                '<td class="mono">' + escapeHtml(u.startRef + '..' + u.endRef) + tag + '</td>' +
+                '<td class="num">' + u.count + '</td>' +
+                '<td class="num">' + formatK(u.tokens) + '</td>' +
+                '<td class="num">—</td>' +
+                '</tr>';
+            }).join('');
+          }
+          $('zones-tbody').innerHTML = rowsHtml;
         }
       } catch (err) {
         console.error('Refresh error', err);

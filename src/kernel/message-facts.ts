@@ -1,6 +1,7 @@
 import { contentHash } from "./hash.ts";
 import type { KernelMessage, KernelRole } from "./types.ts";
 import { isRecord, strOr } from "./guards.ts";
+import { estimateImageBlockTokens } from "./image-tokens.ts";
 
 const ROLES: ReadonlySet<string> = new Set(["user", "assistant", "toolResult", "developer", "system", "custom"]);
 
@@ -57,6 +58,12 @@ export function messageFacts(message: unknown): KernelMessage | null {
     message.content.some(
       (b) => isRecord(b) && (b.type === "thinking" || b.type === "redacted_thinking") && typeof b.thinkingSignature === "string",
     );
+  let imageTokens = 0;
+  if (Array.isArray(message.content)) {
+    for (const b of message.content) {
+      imageTokens += estimateImageBlockTokens(b);
+    }
+  }
 
   return {
     role: role as KernelRole,
@@ -66,5 +73,6 @@ export function messageFacts(message: unknown): KernelMessage | null {
     signedThinking,
     toolCallId,
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
+    ...(imageTokens > 0 ? { imageTokens } : {}),
   };
 }
