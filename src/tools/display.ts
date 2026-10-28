@@ -3,10 +3,22 @@ import { Text, type Component } from "@oh-my-pi/pi-tui";
 import { Box } from "@oh-my-pi/pi-tui/components/box";
 import { Disclosure } from "@oh-my-pi/pi-tui/components/disclosure";
 import { Markdown } from "@oh-my-pi/pi-tui/components/markdown";
-import { item, kv, list, md, node, span } from "@oh-my-pi/pi-tui/native/describe";
-import { Memo, OwnerMemo } from "@oh-my-pi/pi-tui/native/memo";
-import { type NativeNode, type NativeUiEvent, rootToggleExpanded } from "@oh-my-pi/pi-tui/native/node";
-import { plainText } from "@oh-my-pi/pi-tui/native/spans";
+import type { NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
+import {
+  createMemo,
+  createOwnerMemo,
+  errorView,
+  item,
+  kv,
+  list,
+  md,
+  node,
+  plainText,
+  resultText,
+  rootToggleExpanded,
+  span,
+  toolHead,
+} from "../ui/native.ts";
 import { Ellipsis, renderStatusLine, truncateToWidth } from "@oh-my-pi/pi-tui/render";
 import {
   createCachedComponent,
@@ -17,7 +29,7 @@ import {
   replaceTabs,
 } from "@oh-my-pi/pi-tui/render/render-utils";
 import { getMarkdownTheme, getThemeEpoch, theme, type Theme } from "@oh-my-pi/pi-tui/theme";
-import { errorView, resultText, toolHead } from "@oh-my-pi/pi-tui/tools/native-view";
+import type { Memo, OwnerMemo } from "@oh-my-pi/pi-tui/native/memo";
 import type { NativeToolView, RenderResultOptions } from "@oh-my-pi/pi-tui/tools/renderer";
 import type {
   CacheRound,
@@ -155,7 +167,7 @@ export class OrigamiFoldMessageComponent implements Component {
   #disposed = false;
   #expanded: boolean;
   readonly #parsed: ParsedFoldBanner;
-  readonly #native = new Memo();
+  #native: Memo | undefined;
 
   constructor(content: string, details?: OrigamiFoldMessageDetails, expanded = false) {
     this.#parsed = parseFoldBanner(content, details);
@@ -169,6 +181,7 @@ export class OrigamiFoldMessageComponent implements Component {
   }
 
   describe(): NativeNode {
+    this.#native ??= createMemo();
     return this.#native.get([this.#expanded, getThemeEpoch()], () => {
       const p = this.#parsed;
       const tierLabel = p.tier === 3 ? "Ultra-condensed" : p.tier === 2 ? "Distilled" : "Folded";
@@ -224,7 +237,8 @@ export class OrigamiFoldMessageComponent implements Component {
   }
 
   releaseRenderCaches(): void {
-    this.#disclosure.releaseRenderCaches();
+    const disclosure = this.#disclosure as Disclosure & { releaseRenderCaches?: () => void };
+    disclosure.releaseRenderCaches?.();
   }
 
   dispose(): void {
@@ -347,26 +361,26 @@ export function renderInlineToolResult(
   return inlineRowsComponent(header, d?.rows ?? [], options, uiTheme);
 }
 
-const callMemos = {
-  fold: new OwnerMemo<NativeToolView>(),
-  unfold: new OwnerMemo<NativeToolView>(),
-  recall: new OwnerMemo<NativeToolView>(),
-  search: new OwnerMemo<NativeToolView>(),
-  status: new OwnerMemo<NativeToolView>(),
-  cache: new OwnerMemo<NativeToolView>(),
-};
+type ViewMemos = Record<"fold" | "unfold" | "recall" | "search" | "status" | "cache", OwnerMemo<NativeToolView>>;
 
-const resultMemos = {
-  fold: new OwnerMemo<NativeToolView>(),
-  unfold: new OwnerMemo<NativeToolView>(),
-  recall: new OwnerMemo<NativeToolView>(),
-  search: new OwnerMemo<NativeToolView>(),
-  status: new OwnerMemo<NativeToolView>(),
-  cache: new OwnerMemo<NativeToolView>(),
-};
+// Created on first native use: older hosts have no native memo module.
+let memos: { call: ViewMemos; result: ViewMemos } | undefined;
+
+function viewMemos(): { call: ViewMemos; result: ViewMemos } {
+  const create = (): ViewMemos => ({
+    fold: createOwnerMemo(),
+    unfold: createOwnerMemo(),
+    recall: createOwnerMemo(),
+    search: createOwnerMemo(),
+    status: createOwnerMemo(),
+    cache: createOwnerMemo(),
+  });
+  memos ??= { call: create(), result: create() };
+  return memos;
+}
 
 export function foldCallView(args: { folds?: FoldSpec[]; tier?: number }): NativeToolView {
-  return callMemos.fold.get(args, [args.tier ?? 1, (args.folds ?? []).length], () => {
+  return viewMemos().call.fold.get(args, [args.tier ?? 1, (args.folds ?? []).length], () => {
     const folds = args.folds ?? [];
     const tier = args.tier ?? 1;
     const ranges = folds.map((f) => f.range).join(", ");
@@ -396,7 +410,7 @@ export function foldResultView(
   isError: boolean,
   fallbackError?: string,
 ): NativeToolView {
-  return resultMemos.fold.get(resultObj, [isError], () => {
+  return viewMemos().result.fold.get(resultObj, [isError], () => {
     if (isError) {
       return { ...errorView("Fold", fallbackError || details?.summary || "Fold failed"), inline: true };
     }
@@ -415,7 +429,7 @@ export function foldResultView(
 }
 
 export function unfoldCallView(args: { id?: string; mode?: string }): NativeToolView {
-  return callMemos.unfold.get(args, [args.id ?? "", args.mode ?? "file"], () => ({
+  return viewMemos().call.unfold.get(args, [args.id ?? "", args.mode ?? "file"], () => ({
     head: toolHead("Unfold", args.id, args.mode ?? "file"),
     inline: true,
     body: [],
@@ -428,7 +442,7 @@ export function unfoldResultView(
   isError: boolean,
   id?: string,
 ): NativeToolView {
-  return resultMemos.unfold.get(resultObj, [isError, id ?? ""], () => {
+  return viewMemos().result.unfold.get(resultObj, [isError, id ?? ""], () => {
     if (isError) {
       return { ...errorView("Unfold", details?.summary || "Unfold failed", id), inline: true };
     }
@@ -447,7 +461,7 @@ export function unfoldResultView(
 }
 
 export function recallCallView(args: { refs?: string }): NativeToolView {
-  return callMemos.recall.get(args, [args.refs ?? ""], () => ({
+  return viewMemos().call.recall.get(args, [args.refs ?? ""], () => ({
     head: toolHead("Fold Recall", args.refs),
     inline: true,
     body: [],
@@ -460,7 +474,7 @@ export function recallResultView(
   isError: boolean,
   refs?: string,
 ): NativeToolView {
-  return resultMemos.recall.get(resultObj, [isError, refs ?? ""], () => {
+  return viewMemos().result.recall.get(resultObj, [isError, refs ?? ""], () => {
     if (isError) {
       return { ...errorView("Fold Recall", details?.summary || "Recall failed", refs), inline: true };
     }
@@ -476,7 +490,7 @@ export function recallResultView(
 }
 
 export function searchCallView(args: { query?: string; limit?: number }): NativeToolView {
-  return callMemos.search.get(args, [args.query ?? "", args.limit ?? 10], () => ({
+  return viewMemos().call.search.get(args, [args.query ?? "", args.limit ?? 10], () => ({
     head: toolHead("Fold Search", args.query),
     inline: true,
     body: [],
@@ -489,7 +503,7 @@ export function searchResultView(
   isError: boolean,
   query?: string,
 ): NativeToolView {
-  return resultMemos.search.get(resultObj, [isError, query ?? ""], () => {
+  return viewMemos().result.search.get(resultObj, [isError, query ?? ""], () => {
     if (isError) {
       return { ...errorView("Fold Search", details?.summary || "Search failed", query), inline: true };
     }
@@ -507,7 +521,7 @@ export function searchResultView(
 }
 
 export function statusCallView(args: object): NativeToolView {
-  return callMemos.status.get(args, [], () => ({
+  return viewMemos().call.status.get(args, [], () => ({
     head: toolHead("Fold Status"),
     inline: true,
     body: [],
@@ -515,7 +529,7 @@ export function statusCallView(args: object): NativeToolView {
 }
 
 export function statusResultView(resultObj: object, details: ToolDetail | undefined, isError: boolean): NativeToolView {
-  return resultMemos.status.get(resultObj, [isError], () => {
+  return viewMemos().result.status.get(resultObj, [isError], () => {
     if (isError) {
       return { ...errorView("Fold Status", details?.summary || "Status failed"), inline: true };
     }
@@ -534,7 +548,7 @@ export function statusResultView(resultObj: object, details: ToolDetail | undefi
 }
 
 export function cacheCallView(args: object): NativeToolView {
-  return callMemos.cache.get(args, [], () => ({
+  return viewMemos().call.cache.get(args, [], () => ({
     head: toolHead("Fold Cache"),
     inline: true,
     body: [],
@@ -542,7 +556,7 @@ export function cacheCallView(args: object): NativeToolView {
 }
 
 export function cacheResultView(resultObj: object, details: ToolDetail | undefined, isError: boolean): NativeToolView {
-  return resultMemos.cache.get(resultObj, [isError], () => {
+  return viewMemos().result.cache.get(resultObj, [isError], () => {
     if (isError) {
       return { ...errorView("Fold Cache", details?.summary || "Cache report failed"), inline: true };
     }

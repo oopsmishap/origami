@@ -3,10 +3,25 @@ import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } f
 import { planContextMap } from "./context-map.ts";
 import { OverlayPanel, PanelDivider, PanelRows } from "@oh-my-pi/pi-tui/chrome/overlay-box";
 import { renderSegmentTrack } from "@oh-my-pi/pi-tui/chrome/segment-track";
-import { item, kv, list, md, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
-import { actionBar, actionButton, hintsRow, itemIndex, overlayCard, selectList } from "@oh-my-pi/pi-tui/native/overlay";
-import { plainText } from "@oh-my-pi/pi-tui/native/spans";
+import {
+  actionBar,
+  actionButton,
+  hintsRow,
+  item,
+  itemIndex,
+  kv,
+  list,
+  md,
+  nativeAvailable,
+  node,
+  overlayCard,
+  plainText,
+  row,
+  selectList,
+  span,
+  text,
+} from "./native.ts";
 import { Ellipsis } from "@oh-my-pi/pi-tui/render";
 import { theme, type ThemeColor } from "@oh-my-pi/pi-tui/theme";
 import { formatTokens } from "../kernel/nudge.ts";
@@ -79,6 +94,7 @@ export class WorkbenchComponent implements Component {
   }
 
   describe(cx: DescribeContext): NativeNode | null {
+    if (!nativeAvailable) return null;
     const m = this.model;
     if (m.drillBlockId !== null) {
       const block = m.blocks.find((b) => b.id === m.drillBlockId);

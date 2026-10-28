@@ -1,6 +1,6 @@
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
-import { node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import { node, row, span, text } from "./native.ts";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import type { CacheRound, StatusBlockRow } from "../engine.ts";

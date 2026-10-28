@@ -24,6 +24,7 @@ import {
   unfoldCallView,
   unfoldResultView,
 } from "./display.ts";
+import { nativeAvailable } from "../ui/native.ts";
 
 export type ToolMutationListener = (
   event: "fold" | "unfold",
@@ -39,6 +40,11 @@ function registerInlineTool<TParams extends ToolSchema, TDetails = unknown>(
   api: ExtensionAPI,
   def: ToolDefinition<TParams, TDetails>,
 ): void {
+  // Native tool views exist only on Tern-capable hosts; older hosts render ANSI.
+  if (!nativeAvailable) {
+    delete (def as { describeCall?: unknown }).describeCall;
+    delete (def as { describeResult?: unknown }).describeResult;
+  }
   api.registerTool(Object.assign(def, { inline: true, mergeCallAndResult: true }));
 }
 
