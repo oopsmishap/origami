@@ -25,23 +25,31 @@ Origami is a native [`oh-my-pi`](https://omp.sh) implementation inspired by [`bi
 
 Requires [`oh-my-pi`](https://omp.sh) (`omp`). Choose any installation method below.
 
-### Option 1: `omp plugin` CLI (Recommended)
+### Option 1: Install from Git (Recommended)
 
-Clone the repository, install its runtime dependencies, and link it globally with `omp`:
+Install directly from GitHub. `omp` clones the package and installs its runtime dependencies:
+
+```bash
+omp plugin install github:oopsmishap/origami
+```
+
+Manage or update the plugin at any time:
+
+```bash
+omp plugin list
+omp plugin upgrade origami
+omp plugin disable origami
+omp plugin enable origami
+omp plugin uninstall origami
+```
+
+For a development checkout, clone and link it instead:
 
 ```bash
 git clone https://github.com/oopsmishap/origami.git
 cd origami
 bun install
 omp plugin link .
-```
-
-Manage the plugin at any time with:
-
-```bash
-omp plugin list
-omp plugin disable origami
-omp plugin enable origami
 ```
 
 ### Option 2: Auto-Discovered Extension Directory
