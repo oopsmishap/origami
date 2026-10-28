@@ -2,22 +2,22 @@
 
 Incremental, reversible hierarchical context folding for [`oh-my-pi`](https://omp.sh) (`omp`).
 
-Origami replaces destructive full-window compaction with model-driven, range-based context folding. Completed conversation spans are compressed into high-signal summary blocks in measured steps—preserving prompt-cache hit rates, keeping active work and pinned context verbatim, and allowing any folded block to be searched or restored on demand.
+Origami replaces destructive full-window compaction with model-driven, range-based context folding. As a session grows, it compresses completed conversation spans into summary blocks in measured steps so prompt-cache prefixes stay intact, active work and pinned context remain unchanged, and any folded block can be searched or restored on demand.
 
-Native [`oh-my-pi`](https://omp.sh) implementation inspired by [`billion-context`](https://github.com/ranxianglei/billion-context) and the paper [*Model-Driven Incremental Hierarchical Compression: Training-Free Multi-Generational Context Management for Long-Lived Coding Agents*](https://github.com/ranxianglei/billion-context/blob/master/paper/model-driven-incremental-hierarchical-compression-training-free-multi-generational-context-management-for-long-lived-coding-agents.md).
+Origami is a native [`oh-my-pi`](https://omp.sh) implementation inspired by [`billion-context`](https://github.com/ranxianglei/billion-context) and the paper [*Model-Driven Incremental Hierarchical Compression: Training-Free Multi-Generational Context Management for Long-Lived Coding Agents*](https://github.com/ranxianglei/billion-context/blob/master/paper/model-driven-incremental-hierarchical-compression-training-free-multi-generational-context-management-for-long-lived-coding-agents.md).
 
 ---
 
 ## Features
 
-- **Incremental & Reversible** — Folds only completed older spans while leaving your initial prompt, recent turns, and active work untouched. Any block can be unfolded to a sidecar artifact file (cache-safe) or restored inline in context.
-- **Prefix-Cache Friendly** — Waits for configurable growth thresholds before proposing folds instead of rewriting history every turn, preserving stable prompt-cache prefixes across long sessions.
-- **Multi-Tier Compression** — Supports three hierarchical tiers:
-  - **Tier 1**: Compresses raw message ranges (`m00012..m00048`) into structured summary blocks.
-  - **Tier 2**: Distills multiple Tier 1 blocks (`b1..b5`) into denser milestone summaries.
-  - **Tier 3**: Ultra-condenses distilled blocks for marathon sessions while retaining goals, constraints, and open objectives.
-- **Native `oh-my-pi` Experience** — Integrates directly into `omp` with collapsible transcript dividers, live status-bar telemetry, an interactive TUI & Tern workbench (`/fold`, `Alt+F`), and a live browser dashboard (`/fold web`).
-- **Automatic Host Compaction Guard** — Disarms destructive host auto-compaction so Origami manages context lifecycle end-to-end, with an automatic archive safeguard if window occupancy reaches critical thresholds.
+- Incremental, reversible folding: compresses completed older spans while leaving your initial prompt, recent turns, and active work untouched. Any block can be unfolded to a sidecar artifact file (cache-safe) or restored inline in context.
+- Stable prompt-cache prefixes: waits for configurable growth thresholds before proposing folds instead of rewriting history on every turn.
+- Three compression tiers:
+  - Tier 1 compresses raw message ranges (`m00012..m00048`) into structured summary blocks.
+  - Tier 2 distills multiple Tier 1 blocks (`b1..b5`) into denser milestone summaries.
+  - Tier 3 condenses distilled blocks across long sessions while retaining goals, constraints, and open objectives.
+- Native `oh-my-pi` UI: integrates into `omp` with collapsible transcript dividers, a live status-bar chip, an interactive TUI and Tern workbench (`/fold`, `Alt+F`), and a browser dashboard (`/fold web`).
+- Host compaction guard: disables destructive host auto-compaction so Origami manages context end-to-end, with an automatic archive safeguard if window occupancy hits critical thresholds.
 
 ---
 
@@ -73,18 +73,18 @@ omp --extension /path/to/origami
 
 ## Quick Start
 
-Origami works out of the box with the `balanced` preset—no setup or manual intervention is required.
+Origami uses the `balanced` preset by default and needs no manual setup.
 
-1. **Work normally in `omp`.** As your session grows past the configured growth step, Origami prompts the agent to fold completed older spans while keeping recent turns verbatim.
-2. **Read the status bar.** Origami displays a live status chip in the footer:
+1. Work as usual in `omp`. Once your session grows past the configured growth step, Origami prompts the agent to fold completed older spans while leaving recent turns intact.
+2. Check the footer status chip for live session metrics:
    ```text
    origami 11% · 12.4K↑/50.0K · 2b -50.8K
    ```
-   - `11%` — Current context window occupancy.
-   - `12.4K↑/50.0K` — Context growth since the last fold relative to `growthStep`.
-   - `2b -50.8K` — Active folded blocks and total tokens reclaimed.
-3. **Expand folded blocks in chat.** Folded spans appear in the transcript as compact horizontal dividers showing block ID, tier, token reduction, and topic. Press `Ctrl+O` (or click the divider in Tern) to expand or collapse the summary.
-4. **Inspect or restore at any time.** Press `Alt+F` or run `/fold` for the interactive terminal workbench, or run `/fold web` for the browser dashboard.
+   - `11%`: current context window occupancy.
+   - `12.4K↑/50.0K`: context growth since the last fold relative to `growthStep`.
+   - `2b -50.8K`: active folded blocks and total tokens reclaimed.
+3. Expand folded blocks in chat when needed. Folded spans render in the transcript as horizontal dividers showing the block ID, tier, token reduction, and topic. Press `Ctrl+O` (or click the divider in Tern) to toggle the summary.
+4. Press `Alt+F` or run `/fold` to open the terminal workbench, or run `/fold web` to open the browser dashboard.
 
 > **Subagents:** Origami stays dormant in subagents below `40,000` projected tokens by default so short delegated tasks incur zero overhead.
 
@@ -104,12 +104,12 @@ Origami works out of the box with the `balanced` preset—no setup or manual int
 
 ## Interactive Workbench (`/fold` / `Alt+F`)
 
-The Workbench overlay works in both terminal (ANSI TUI) and native Tern surfaces and provides four views:
+The Workbench overlay runs in both terminal (ANSI TUI) and native Tern surfaces with four tabs:
 
-- **Overview** — Proportional 2D context map, occupancy breakdown (system/harness overhead, live conversation, tool definitions, fold summaries, free headroom), and reclaimed token totals.
-- **Trajectory** — Context window usage over time paired with prompt-cache read rates and fold markers.
-- **Blocks** — Navigable list of folded blocks with tier, message coverage, token compression ratio, and status (`live` vs `superseded`).
-- **Zones** — Token-weighted map of pinned head messages, folded summaries, compressible history, and protected recent turns.
+- `Overview`: proportional 2D context map, occupancy breakdown (system/harness overhead, live conversation, tool definitions, fold summaries, free headroom), and reclaimed token totals.
+- `Trajectory`: context window usage over time paired with prompt-cache read rates and fold markers.
+- `Blocks`: navigable list of folded blocks with tier, message coverage, token compression ratio, and status (`live` vs `superseded`).
+- `Zones`: token-weighted map of pinned head messages, folded summaries, compressible history, and protected recent turns.
 
 ### Keyboard Controls
 
@@ -129,15 +129,15 @@ The Workbench overlay works in both terminal (ANSI TUI) and native Tern surfaces
 
 ## Live Web Dashboard (`/fold web`)
 
-Running `/fold web` starts a local dashboard server at `http://127.0.0.1:3780` (automatically selecting ports `3780–3789` if `3780` is in use) with live Server-Sent Events updates as turns complete and folds run.
+Running `/fold web` starts a local server at `http://127.0.0.1:3780` (falling back to ports `3780–3789` if `3780` is busy) and streams live Server-Sent Events updates as turns complete and folds run.
 
-- **Context Trajectory & Cache Hit Rate** — Synchronized dual charts displaying total input tokens, cached prefix tokens, fold boundaries, and uncached gap causes (cold start, post-fold cache rebuild, prefix seam, or cache TTL expiry).
-  - **Zoom:** Click and drag horizontally across either chart to zoom both charts to a request range; double-click or press `Esc` to reset.
-  - **Scale Toggle:** Switch the trajectory Y-axis between `Y: Auto` (data fit) and `Y: Window` (full context window ceiling).
-- **Context Zones & Next-Fold Candidates** — Token-weighted zone bar and preview of eligible message spans approaching the fold threshold.
-- **Slide-Over Block Inspector** — Click any row in the Fold Blocks table to inspect its full markdown summary and trigger **Unfold to File** or **Unfold Inline** directly from the browser.
-- **Full-Text Search** — Ranked search across folded block topics and summaries in your local store, supporting `tier:<1|2|3>` and `session:<id>` filters.
-- **Theme Toggle** — Switch between dark and light themes in the header.
+- Context trajectory and cache hit rate: synchronized charts for total input tokens, cached prefix tokens, fold boundaries, and uncached gap causes (cold start, post-fold cache rebuild, prefix seam, or cache TTL expiry).
+  - Click and drag horizontally across either chart to zoom both charts to a request range; double-click or press `Esc` to reset.
+  - Toggle the trajectory Y-axis between `Y: Auto` (data fit) and `Y: Window` (full context window ceiling).
+- Context zones and next-fold candidates: token-weighted zone bar and preview of eligible message spans approaching the fold threshold.
+- Slide-over block inspector: click any row in the Fold Blocks table to read its full markdown summary and trigger Unfold to File or Unfold Inline from the browser.
+- Full-text search: ranked search across folded block topics and summaries in your local store with `tier:<1|2|3>` and `session:<id>` filters.
+- Theme toggle: switch between dark and light themes in the header.
 
 ---
 
@@ -159,8 +159,8 @@ Origami registers five inline tools that the model uses automatically and that y
 
 Origami works without a configuration file. To customize behavior, create an `origami.yml` file at either or both locations (project settings override global settings):
 
-1. **Global:** `~/.omp/agent/origami.yml`
-2. **Project:** `<project>/.omp/origami.yml`
+1. Global: `~/.omp/agent/origami.yml`
+2. Project: `<project>/.omp/origami.yml`
 
 ### Presets
 
@@ -198,8 +198,8 @@ language: preserve
 
 ## Local Data & Storage
 
-- **Fold Store & Search Index:** `~/.omp/agent/origami.db` (SQLite database storing block history, FTS5 full-text index, and per-round cache telemetry; follows `PI_CODING_AGENT_DIR` when customized).
-- **Unfolded Artifacts:** Written to the active `oh-my-pi` session artifact directory when unfolding a block in `file` mode (`u` in the Workbench or `unfold` with `mode: "file"`).
+- Fold store and search index: `~/.omp/agent/origami.db` stores block history, the FTS5 full-text index, and per-round cache telemetry (follows `PI_CODING_AGENT_DIR` when set).
+- Unfolded artifacts: unfolding a block in `file` mode (`u` in the Workbench or `unfold` with `mode: "file"`) writes the reconstructed messages to the active `oh-my-pi` session artifact directory.
 
 ---
 
@@ -212,16 +212,16 @@ Origami only proposes a fold once both `growthStep` (new tokens accumulated sinc
 Prefer unfolding to a file (`u` / `mode: "file"`). It writes the exact original messages to a local session artifact that you or the agent can read selectively without mutating past conversation history or invalidating your prompt cache. Use inline unfold (`i` / `mode: "inline"`) only when you want the entire original span permanently restored into the active prompt.
 
 **Why did prompt-cache hit rate dip on a turn?**
-Open `/fold trajectory` or `/fold web`. Expected single-turn cache rebuilds immediately following a fold are annotated directly on the chart, making it easy to distinguish planned fold boundaries from upstream provider cache TTL expirations.
+Open `/fold trajectory` or `/fold web`. The chart marks expected single-turn cache rebuilds after a fold so you can separate planned fold boundaries from upstream provider cache TTL expirations.
 
 ---
 
 ## References & Acknowledgments
 
-Origami builds on the incremental hierarchical context-folding model and trajectory visualization introduced by **billion-context**:
+Origami builds on the incremental hierarchical context-folding model and trajectory visualization introduced by billion-context:
 
-- **Original Repository:** [`ranxianglei/billion-context`](https://github.com/ranxianglei/billion-context)
-- **Paper:** Xianglei Ran, [*Model-Driven Incremental Hierarchical Compression: Training-Free Multi-Generational Context Management for Long-Lived Coding Agents*](https://github.com/ranxianglei/billion-context/blob/master/paper/model-driven-incremental-hierarchical-compression-training-free-multi-generational-context-management-for-long-lived-coding-agents.md)
+- Original repository: [`ranxianglei/billion-context`](https://github.com/ranxianglei/billion-context)
+- Paper: Xianglei Ran, [*Model-Driven Incremental Hierarchical Compression: Training-Free Multi-Generational Context Management for Long-Lived Coding Agents*](https://github.com/ranxianglei/billion-context/blob/master/paper/model-driven-incremental-hierarchical-compression-training-free-multi-generational-context-management-for-long-lived-coding-agents.md)
 
 ---
 
