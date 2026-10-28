@@ -11,7 +11,9 @@ bun run bench -- --turns 200 --assert --json benchmark.json
 
 ## Host compatibility
 
-Runtime peer dependencies support OMP `>=18.12.3 <19`. Development dependencies remain pinned to the current 18.x host so CI catches forward changes. The `18.12.3` floor is verified against its published coding-agent, TUI, native, and wire packages; 18.12.2 and earlier lack the native trajectory chart protocol Origami uses.
+Runtime peer dependencies support OMP `>=18.6.0` with no upper bound. Development dependencies stay pinned to the current host so CI catches forward changes. The floor was verified by installing each host version in isolation, loading the extension, rendering its ANSI surfaces, and typechecking `src/` (18.6.0, 18.10.0, 18.12.2, 18.13.2 pass; 18.3.0 and earlier lack `@oh-my-pi/pi-coding-agent/config/registry` and `ExtensionContext.agent`).
+
+Native (Tern) rendering is optional. `src/ui/native.ts` loads the `@oh-my-pi/pi-tui/native/*` and `tools/native-view` modules dynamically; when they are unavailable, the workbench, transcript banner, and inline tool views fall back to ANSI. Import native builders only through that module, never statically.
 
 The test preload in `bunfig.toml` redirects `PI_CODING_AGENT_DIR` to a temporary directory so tests never migrate or write the user's live Origami database.
 

@@ -1,6 +1,6 @@
 {
   "name": "origami",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "First-principles incremental hierarchical context folding for oh-my-pi",
   "type": "module",
   "license": "MIT",
@@ -20,9 +20,9 @@
     "bench": "bun bench/marathon.ts"
   },
   "peerDependencies": {
-    "@oh-my-pi/pi-coding-agent": ">=18.12.3 <19",
-    "@oh-my-pi/pi-natives": ">=18.12.3 <19",
-    "@oh-my-pi/pi-tui": ">=18.12.3 <19"
+    "@oh-my-pi/pi-coding-agent": ">=18.6.0",
+    "@oh-my-pi/pi-natives": ">=18.6.0",
+    "@oh-my-pi/pi-tui": ">=18.6.0"
   },
   "peerDependenciesMeta": {
     "@oh-my-pi/pi-coding-agent": {

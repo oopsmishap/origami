@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.2 — 2026-10-28
+
+### Compatibility
+- Supports oh-my-pi `>=18.6.0` with no upper bound (previously `^18.13.2`, which failed to install on 18.12.x).
+- Native Tern rendering is optional: native UI modules load dynamically, and the workbench, transcript banner, and inline tool views fall back to ANSI when they are unavailable.
+
+### Fixes
+- A fold batch whose disjoint ranges share one turn no longer fails with a false overlap error. Turn widening gives the shared turn to the earlier fold; only intersecting requested ranges are rejected.
+
 ## 0.2.1 — 2026-10-28
 
 ### Reliability
