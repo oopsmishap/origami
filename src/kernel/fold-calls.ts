@@ -1,29 +1,28 @@
 import type { BoundMessage } from "./types.ts";
 
-/** Tools whose finished calls are pure bookkeeping once their turn has ended. */
+/** Tools whose historical calls duplicate content already carried by their block. */
 export const FOLD_TOOL_NAMES: ReadonlySet<string> = new Set(["fold"]);
 
 /**
- * Refs of finished fold calls to drop from the outbound context: assistant
- * messages from completed turns whose tool calls are all `fold`, plus their
- * tool results. The block a fold created already carries its content, so the
- * call/result pair only repeats it. Call and result are hidden together, so
- * tool-call pairing stays intact.
+ * Refs of completed historical fold call/result pairs. They remain in outbound
+ * context so the host retains the durable record of executed tool actions, but
+ * are excluded from fold economics because their block already carries the
+ * useful content.
  */
-export function hiddenFoldCalls(bound: readonly BoundMessage[], protectedFromTurn: number): Set<string> {
-  const hidden = new Set<string>();
+export function historicalFoldCallRefs(bound: readonly BoundMessage[], protectedFromTurn: number): Set<string> {
+  const refs = new Set<string>();
   const callIds = new Set<string>();
   for (const m of bound) {
     if (m.role !== "assistant" || m.turn >= protectedFromTurn) continue;
     const calls = m.toolCalls;
     if (!calls || calls.length === 0) continue;
     if (!calls.every((c) => FOLD_TOOL_NAMES.has(c.name))) continue;
-    hidden.add(m.ref);
+    refs.add(m.ref);
     for (const c of calls) callIds.add(c.id);
   }
-  if (callIds.size === 0) return hidden;
+  if (callIds.size === 0) return refs;
   for (const m of bound) {
-    if (m.role === "toolResult" && m.toolCallId && callIds.has(m.toolCallId)) hidden.add(m.ref);
+    if (m.role === "toolResult" && m.toolCallId && callIds.has(m.toolCallId)) refs.add(m.ref);
   }
-  return hidden;
+  return refs;
 }

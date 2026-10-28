@@ -1838,6 +1838,12 @@ function renderDashboardHtml(): string {
       }
     });
 
+    $('search-tbody').addEventListener('click', (ev) => {
+      const row = ev.target instanceof Element ? ev.target.closest('[data-search-block-id]') : null;
+      const blockId = row?.getAttribute('data-search-block-id');
+      if (blockId) openBlockDrawer(blockId);
+    });
+
     async function refreshData() {
       const seq = ++refreshSeq;
       try {
@@ -2132,7 +2138,7 @@ function renderDashboardHtml(): string {
         tbody.innerHTML = '<tr><td colspan="4" class="chart-empty">No matches for "' + escapeHtml(q) + '".</td></tr>';
       } else {
         const blockRows = blocks.map((h) =>
-          '<tr class="clickable" onclick="openBlockDrawer(\'' + escapeHtml(h.blockId) + '\')">' +
+          '<tr class="clickable" data-search-block-id="' + escapeHtml(h.blockId) + '">' +
             '<td class="mono"><strong>' + escapeHtml(h.blockId) + '</strong></td>' +
             '<td><span class="tag-tier tag-tier' + h.tier + '">Tier ' + h.tier + '</span></td>' +
             '<td>' + escapeHtml(h.topic) + '</td>' +

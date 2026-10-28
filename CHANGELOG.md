@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3 — 2026-10-28
+
+### Fixes
+- Fixed malformed generated JavaScript that prevented the web dashboard from loading when block search results were rendered.
+- Historical `fold` tool-call and result messages remain in outbound model context, preventing the host from treating completed fold actions as absent and requesting them again.
+
 ## 0.2.2 — 2026-10-28
 
 ### Compatibility

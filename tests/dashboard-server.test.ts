@@ -108,6 +108,11 @@ describe("Standalone Web Dashboard Server", () => {
       expect(html).toContain("Origami Context Dashboard");
       expect(html).toContain("Prompt Cache Read Rate");
       expect(html).toContain("FTS5 Search");
+      // Every inline script must parse; one syntax error blanks the whole dashboard.
+      const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+      expect(scripts.length).toBeGreaterThan(0);
+      const AsyncFunction = (async () => {}).constructor as new (body: string) => unknown;
+      for (const script of scripts) expect(() => new AsyncFunction(script)).not.toThrow();
       expect(htmlRes.headers.get("Access-Control-Allow-Origin")).toBeNull();
 
       const missingTokenRes = await fetch(`${baseUrl}/api/status`);

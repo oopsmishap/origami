@@ -5,7 +5,7 @@ import { SessionState } from "./kernel/state.ts";
 import type { SessionEntryLike } from "./kernel/state.ts";
 import { projectUnit, protectedTailTurn, protectedZoneMap, spanHits } from "./kernel/project-unit.ts";
 import { checkInvariants, renderableBlocks } from "./kernel/invariants.ts";
-import { hiddenFoldCalls } from "./kernel/fold-calls.ts";
+import { historicalFoldCallRefs } from "./kernel/fold-calls.ts";
 import type { InvariantViolation } from "./kernel/invariants.ts";
 import type { ProjectUnitResult } from "./kernel/project-unit.ts";
 import { planRender, applyRender, expandRefRange, foldCoverageStats, renderBlockText } from "./kernel/render.ts";
@@ -187,7 +187,7 @@ export class OrigamiEngine {
   private nudgedThisTurn = false;
   private activeTurn = 1;
   private protectedFromTurn = 1;
-  private hiddenRefs: ReadonlySet<string> = new Set();
+  private bookkeepingRefs: ReadonlySet<string> = new Set();
   private pinnedHeadRef: string | null = null;
   private lastNudge: NudgeDecision = { kind: null, text: null };
   private activeNudge: string | null = null;
@@ -246,7 +246,7 @@ export class OrigamiEngine {
       }
     }
     this.protectedFromTurn = Math.min(tailTurn, lastUserTurn);
-    this.hiddenRefs = hiddenFoldCalls(bound, this.protectedFromTurn);
+    this.bookkeepingRefs = historicalFoldCallRefs(bound, this.protectedFromTurn);
   }
 
   get bound() {
@@ -263,7 +263,7 @@ export class OrigamiEngine {
       ref: m.ref,
       ephemeral: m.ephemeral,
       turn: m.turn,
-      tokens: this.hiddenRefs.has(m.ref) ? 0 : this.state.ledger.countMessage(m),
+      tokens: this.bookkeepingRefs.has(m.ref) ? 0 : this.state.ledger.countMessage(m),
       tool: m.role === "toolResult",
     }));
   }
@@ -289,8 +289,8 @@ export class OrigamiEngine {
     const projected = this.host.projectedTokens();
     const decision = decideNudge(
       {
-        growthSinceFoldTokens: this.state.growthSinceFold(this.activeTurn, this.hiddenRefs),
-        compressibleTokens: this.state.compressibleTokens(this.protectedFromTurn, this.hiddenRefs),
+        growthSinceFoldTokens: this.state.growthSinceFold(this.activeTurn, this.bookkeepingRefs),
+        compressibleTokens: this.state.compressibleTokens(this.protectedFromTurn, this.bookkeepingRefs),
         windowFillPct: window > 0 ? projected / window : 0,
         nudgedThisTurn: this.nudgedThisTurn,
         lastEfficiencyAtGrowth: this.lastEfficiencyAtGrowth,
@@ -303,7 +303,7 @@ export class OrigamiEngine {
     if (decision.text) {
       this.activeNudge = decision.text;
       this.nudgedThisTurn = true;
-      if (decision.kind === "efficiency") this.lastEfficiencyAtGrowth = this.state.growthSinceFold(this.activeTurn, this.hiddenRefs);
+      if (decision.kind === "efficiency") this.lastEfficiencyAtGrowth = this.state.growthSinceFold(this.activeTurn, this.bookkeepingRefs);
       if (decision.promotion) this.lastPromotionAtMass[decision.promotion.fromTier] = decision.promotion.tokens;
     } else if (!this.nudgedThisTurn) {
       this.activeNudge = null;
@@ -411,7 +411,7 @@ export class OrigamiEngine {
         }
         if (refs.length === 0) return fail("range covers only messages already folded or claimed by an earlier fold in this batch");
         ranges = rangesFromRefs(refs);
-        tokensBefore = this.state.tokensFor(refs.filter((r) => !this.hiddenRefs.has(r)));
+        tokensBefore = this.state.tokensFor(refs.filter((r) => !this.bookkeepingRefs.has(r)));
         replacedTokens = tokensBefore;
       } else {
         for (const childId of children) {
@@ -768,9 +768,9 @@ export class OrigamiEngine {
         live: liveTokens,
         foldedSavings,
       },
-      growthSinceFold: this.state.growthSinceFold(this.activeTurn, this.hiddenRefs),
+      growthSinceFold: this.state.growthSinceFold(this.activeTurn, this.bookkeepingRefs),
       growthStep: this.config.growthStep,
-      compressibleTokens: this.state.compressibleTokens(this.protectedFromTurn, this.hiddenRefs),
+      compressibleTokens: this.state.compressibleTokens(this.protectedFromTurn, this.bookkeepingRefs),
       compressibleFloor: this.config.compressibleFloor,
       blocks: this.state.tree.all().map((b) => ({
         id: b.id,
@@ -929,7 +929,6 @@ export class OrigamiEngine {
       bound,
       blocks: renderableBlocks(this.state.tree.live()),
       pinnedHeadIndex,
-      hiddenRefs: this.hiddenRefs,
     });
     return applyRender(source, ops, makeFoldMessage);
   }

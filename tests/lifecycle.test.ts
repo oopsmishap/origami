@@ -276,7 +276,7 @@ describe("recent-zone protection", () => {
     expect(engine.executeFold({ folds: [fold("m00003..m00010")] }).ok).toBe(true);
   });
 
-  it("hides finished fold call/result pairs but keeps the in-flight turn's", () => {
+  it("keeps historical fold call/result pairs in outbound context", () => {
     const foldCall = (id: string) => ({
       role: "assistant",
       content: [{ type: "toolCall", id, name: "fold", arguments: { folds: [] } }],
@@ -291,9 +291,9 @@ describe("recent-zone protection", () => {
     const { engine, render } = harness({ entries: entries as ReturnType<typeof conversation> });
     const out = render() as unknown as { role: string; toolCallId?: string; content?: unknown }[];
     const results = out.filter((m) => m.role === "toolResult").map((m) => m.toolCallId);
-    expect(results).toEqual(["call-new"]);
+    expect(results).toEqual(["call-old", "call-new"]);
     const calls = out.filter((m) => m.role === "assistant" && Array.isArray(m.content));
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
     expect(engine.invariants()).toEqual([]);
   });
 });

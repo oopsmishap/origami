@@ -43,17 +43,10 @@ export function planRender(input: {
   bound: readonly BoundMessage[];
   blocks: readonly Block[];
   pinnedHeadIndex: number;
-  /** Refs dropped outright (finished fold calls), independent of any block. */
-  hiddenRefs?: ReadonlySet<string>;
 }): RenderOp[] {
-  const { bound, blocks, pinnedHeadIndex, hiddenRefs } = input;
+  const { bound, blocks, pinnedHeadIndex } = input;
   const ops: RenderOp[] = [];
   const removed = new Set<number>();
-  if (hiddenRefs && hiddenRefs.size > 0) {
-    for (const m of bound) {
-      if (m.index >= pinnedHeadIndex && hiddenRefs.has(m.ref)) removed.add(m.index);
-    }
-  }
 
   for (const block of blocks) {
     const indices = coveredIndices(bound, block);
