@@ -2,7 +2,9 @@ import { describe, expect, it } from "bun:test";
 import { unlinkSync } from "node:fs";
 import { initThemeSync, theme } from "@oh-my-pi/pi-tui/theme";
 import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import type { ExtensionAPI, RegisteredCommand } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { DescribeContext } from "@oh-my-pi/pi-tui/native/node";
+import origamiExtension from "../src/index.ts";
 import { configFromPreset } from "../src/config.ts";
 import { openDb } from "../src/persist/db.ts";
 import type { JournalOp } from "../src/persist/journal.ts";
@@ -218,6 +220,34 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
     comp.dispose();
   });
 
+  it("advertises /fold subcommands, including before any argument is typed", () => {
+    const commands = new Map<string, RegisteredCommand>();
+    const fakeApi = {
+      typebox: {
+        Type: {
+          Object: (value: unknown) => value,
+          Array: (value: unknown) => value,
+          String: (value: unknown) => value,
+          Optional: (value: unknown) => value,
+          Union: (value: unknown) => value,
+          Literal: (value: unknown) => value,
+          Integer: (value: unknown) => value,
+        },
+      },
+      registerTool: () => {},
+      registerMessageRenderer: () => {},
+      registerCommand: (name: string, command: RegisteredCommand) => commands.set(name, command),
+      registerShortcut: () => {},
+      on: () => {},
+    } as unknown as ExtensionAPI;
+
+    origamiExtension(fakeApi);
+    const complete = commands.get("fold")?.getArgumentCompletions;
+    expect(complete?.("")?.map((item) => item.value)).toEqual(["trajectory", "blocks", "zones", "web"]);
+    expect(complete?.("bl")?.map((item) => item.value)).toEqual(["blocks"]);
+    expect(complete?.("blocks ")).toBeNull();
+  });
+
   it("marks all 5 tools as inline + mergeCallAndResult with both describeCall and describeResult", () => {
     const tools = new Map<string, ToolDefinition & { inline?: boolean; mergeCallAndResult?: boolean }>();
     const pass = <T>(v: T) => v;
@@ -298,6 +328,7 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
     const model = buildWorkbenchModel(report, rounds, 200_000);
     let renderRequests = 0;
     const unfoldSettled = Promise.withResolvers<void>();
+    let closeOutcomes = 0;
     const wb = new WorkbenchComponent({
       model,
       actions: {
@@ -316,7 +347,9 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
           if (unfoldedCalls.length > 0 && model.statusMessage) unfoldSettled.resolve();
         },
       } as never,
-      onOutcome: () => {},
+      onOutcome: (outcome) => {
+        if (outcome.close) closeOutcomes++;
+      },
     });
 
     // Overview render & native describe
@@ -348,6 +381,10 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
     // Esc exits drilldown back to Blocks list without closing the overlay
     wb.handleInput("\x1b");
     expect(model.drillBlockId).toBeNull();
+
+    // Kitty keyboard protocol Escape closes the popup in Tern as well as legacy ANSI Escape.
+    wb.handleInput("\x1b[27u");
+    expect(closeOutcomes).toBe(1);
     expect(theme).toBeDefined();
     wb.dispose();
   });

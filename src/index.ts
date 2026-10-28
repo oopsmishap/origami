@@ -390,8 +390,21 @@ export default function origamiExtension(api: ExtensionAPI): void {
     }
   }
 
+  const foldSubcommands = [
+    { label: "trajectory", value: "trajectory", description: "Open the context trajectory graph" },
+    { label: "blocks", value: "blocks", description: "Open the fold block browser" },
+    { label: "zones", value: "zones", description: "Open the context zones view" },
+    { label: "web", value: "web", description: "Open the browser dashboard" },
+  ];
+
   api.registerCommand("fold", {
     description: "Open the Origami context workbench ('/fold trajectory' for graph, '/fold web' for browser UI)",
+    getArgumentCompletions(argumentPrefix) {
+      if (argumentPrefix.trimStart().includes(" ")) return null;
+      const normalized = argumentPrefix.trim().toLowerCase();
+      const matches = foldSubcommands.filter((item) => item.label.startsWith(normalized));
+      return matches.length > 0 ? matches : null;
+    },
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       const sub = args.trim().toLowerCase();
       if (sub === "web" || sub === "dashboard") {

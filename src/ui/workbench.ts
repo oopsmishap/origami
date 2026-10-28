@@ -1,5 +1,5 @@
 import type { TspSpan } from "@oh-my-pi/pi-wire";
-import { truncateToWidth, visibleWidth, type Component, type TUI } from "@oh-my-pi/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@oh-my-pi/pi-tui";
 import { planContextMap } from "@oh-my-pi/pi-tui/chrome/context-map";
 import { OverlayPanel, PanelDivider, PanelRows } from "@oh-my-pi/pi-tui/chrome/overlay-box";
 import { renderSegmentTrack } from "@oh-my-pi/pi-tui/chrome/segment-track";
@@ -149,7 +149,8 @@ export class WorkbenchComponent implements Component {
   }
 
   handleInput(data: string): void {
-    const outcome = handleWorkbenchKey(this.model, data, this.actions);
+    const normalized = matchesKey(data, "escape") ? "\x1b" : data;
+    const outcome = handleWorkbenchKey(this.model, normalized, this.actions);
     if (outcome.pendingUnfold) {
       this.#runUnfold(outcome.pendingUnfold.id, outcome.pendingUnfold.mode);
       return;
@@ -236,7 +237,7 @@ export class WorkbenchComponent implements Component {
 
   capturesInput(data: string): boolean {
     return (
-      data === "\x1b" ||
+      matchesKey(data, "escape") ||
       data === "\x7f" ||
       data === "\b" ||
       data === "q" ||

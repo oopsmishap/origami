@@ -27,7 +27,7 @@ Requires [`oh-my-pi`](https://omp.sh) (`omp`). Choose any installation method be
 
 ### Option 1: Install from Git (Recommended)
 
-Install directly from GitHub. `omp` clones the package and installs its runtime dependencies:
+Install directly from GitHub. `omp` supplies its own extension API and TUI packages, so the plugin does not download a second copy of the host dependency tree:
 
 ```bash
 omp plugin install github:oopsmishap/origami
