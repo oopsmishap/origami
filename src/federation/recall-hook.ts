@@ -86,6 +86,7 @@ export function handleRecallToolResult(
   const otherBlocks = existing.filter((c) => c.type !== "text");
 
   const originalText = textBlocks.map((b) => b.text).join("\n\n");
+  if (originalText.includes("[Origami In-Session History")) return;
   const augmentedText = originalText ? `${originalText}\n\n${notice}` : notice;
   const details = "details" in event ? event.details : undefined;
   return {
