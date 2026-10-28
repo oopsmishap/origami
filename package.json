@@ -16,7 +16,8 @@
   },
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "bench": "bun bench/marathon.ts"
   },
   "peerDependencies": {
     "@oh-my-pi/pi-coding-agent": "^18.13.2",
