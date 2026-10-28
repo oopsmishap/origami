@@ -23,6 +23,7 @@ Origami keeps long coding sessions usable without destructive full-window compac
 - Automatic multi-tier folding for long sessions.
 - Recent turns and the latest user request stay verbatim.
 - Folded originals remain available through search, recall, file unfold, and JSON export.
+- Runtime safety guards: circuit breaker for failed folds, preflight window checks, tool pair atomicity, and coverage regression protection.
 - Native status chip, terminal/Tern workbench, and browser dashboard.
 - Main-agent and subagent sessions remain separate and selectable.
 - Host auto-compaction is disabled so Origami manages context consistently.
@@ -69,13 +70,13 @@ Folded transcript sections show their block ID, tier, token reduction, and topic
 ### Status chip
 
 ```text
-origami 11% · 12.4K↑/50.0K · 2b -50.8K
+origami 11% · 12.4K↑/50.0K · 2b -50.8K (30.0× ✓)
 ```
 
 - `11%`: context-window occupancy.
 - `12.4K↑/50.0K`: growth since the last fold versus the next fold step.
 - `2b -50.8K`: active blocks and reclaimed tokens.
-
+- `(30.0× ✓)`: compression ratio multiplier and amortized payback indicator.
 Short subagent tasks stay dormant by default. The main status chip shows how many subagents are running, and the workbench/dashboard can switch between their sessions.
 
 ## Restore or search history
