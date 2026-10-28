@@ -4,6 +4,7 @@ import { initThemeSync, theme } from "@oh-my-pi/pi-tui/theme";
 import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { ExtensionAPI, RegisteredCommand } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { DescribeContext } from "@oh-my-pi/pi-tui/native/node";
+import type { TspChartProps } from "@oh-my-pi/pi-wire";
 import origamiExtension from "../src/index.ts";
 import { configFromPreset } from "../src/config.ts";
 import { openDb } from "../src/persist/db.ts";
@@ -195,8 +196,33 @@ describe("billion-context Trajectory & Cache Hit Rate", () => {
 
     const native = describeNativeTrajectory(data);
     expect(native[0]?.k).toBe("chart");
+    expect((native[0]?.p as TspChartProps | undefined)?.kind).toBe("spark");
     expect(native[1]?.k).toBe("chart");
+    expect((native[1]?.p as TspChartProps | undefined)?.kind).toBe("spark");
     expect(native[2]?.k).toBe("table");
+
+    // Ensure large trajectory (e.g. 268 rounds from long sessions) uses responsive spark charts
+    const bigData = {
+      ...data,
+      lines: Array.from({ length: 268 }, (_, i) => ({
+        seq: i + 1,
+        at: Date.now() - (268 - i) * 7000,
+        input: 100_000 + i * 500,
+        cached: 90_000 + i * 490,
+        cacheWrite: 0,
+        missed: 10_000 + i * 10,
+        hitPct: 90 + (i % 10),
+        foldEventId: null,
+        cause: "new" as const,
+      })),
+    };
+    const bigNative = describeNativeTrajectory(bigData);
+    const trajChart = bigNative[0]?.p as TspChartProps | undefined;
+    const hitChart = bigNative[1]?.p as TspChartProps | undefined;
+    expect(trajChart?.kind).toBe("spark");
+    expect(hitChart?.kind).toBe("spark");
+    expect(trajChart?.series?.length).toBe(268);
+    expect(hitChart?.series?.length).toBe(268);
   });
 });
 

@@ -822,7 +822,7 @@ export function renderAnsiTrajectory(data: TrajectoryData, width: number, plotRo
 }
 
 /**
- * Native Tern TSP descriptors for Context Trajectory (`kind: "bars"`) and
+ * Native Tern TSP descriptors for Context Trajectory (`kind: "spark"`) and
  * Prompt Cache Hit Rate (`kind: "spark"`), plus fold & round summary table.
  */
 export function describeNativeTrajectory(data: TrajectoryData): NativeNode[] {
@@ -923,7 +923,7 @@ export function describeNativeTrajectory(data: TrajectoryData): NativeNode[] {
     node(
       "chart",
       {
-        kind: "bars",
+        kind: "spark",
         size: "lg",
         ...trajectoryDomain,
         token: "accent",
