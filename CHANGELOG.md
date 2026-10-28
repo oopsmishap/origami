@@ -1,6 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 — 2026-10-28
+
+### Reliability
+- Fold archive, block, and child-status writes are committed in one SQLite transaction. A write-time storage failure now disables persistence for the affected session without undoing its journal-backed fold, and reports the degradation once.
+- Cache-round fold attribution is cleared only after the round is durably inserted.
+- Dashboard fold and unfold endpoints return stable `400` responses for malformed JSON and invalid request fields.
+
+### Search and tooling
+- Dashboard search now returns archived original-message hits alongside fold blocks.
+- CI enforces deterministic benchmark gates for invariants, fact retention, fold activity, and input cost, and uploads the benchmark JSON artifact.
+
+### Documentation
+- README focuses on installation and everyday use; configuration, storage, UI, tool, benchmark, and development reference moved under `docs/`.
+
+## 0.2.0 — 2026-10-28
 
 ### Correctness
 - Blocks have an explicit lifecycle (`status`: `active` / `consumed` / `unfolded`, plus `consumedBy`) replacing the `superseded` flag. Tier 2/3 folds consume their children atomically, so merged sources are no longer rendered twice.
