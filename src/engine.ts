@@ -415,7 +415,7 @@ export class OrigamiEngine {
       }
       for (const ref of refs) {
         const prior = claimedRefs.get(ref);
-        if (prior !== undefined) return fail(`overlaps fold ${prior} in this batch at ${ref}`);
+        if (prior !== undefined) return fail(`overlaps fold ${prior} in this batch at ${ref}; fold ranges in one call must be disjoint`);
       }
 
       const tokensAfter = this.state.ledger.countText(`${topic}\n${summary}`);

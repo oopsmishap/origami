@@ -1,10 +1,16 @@
-import type { TspChartMark, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
+import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import type { CacheRound, StatusBlockRow } from "../engine.ts";
 import { formatTokens } from "../kernel/nudge.ts";
+
+interface NativeChartMark {
+  value: number;
+  tone?: TspTone;
+  title?: string;
+}
 
 export type TrajectoryCause = "new" | "cold" | "comp" | "seam" | "rest";
 
@@ -861,7 +867,7 @@ export function describeNativeTrajectory(data: TrajectoryData): NativeNode[] {
     };
   });
 
-  const marks: TspChartMark[] = [];
+  const marks: NativeChartMark[] = [];
   if (data.windowTokens > 0 && data.peakInput >= data.windowTokens * 0.25) {
     marks.push({
       value: data.windowTokens,
@@ -909,16 +915,18 @@ export function describeNativeTrajectory(data: TrajectoryData): NativeNode[] {
     ),
   ];
 
+  // Added by newer TSP revisions; older terminals ignore unknown optional fields.
+  const trajectoryDomain: Record<string, unknown> = { min: 0, max: maxDomain, ...(marks.length > 0 ? { marks } : {}) };
+  const hitDomain: Record<string, unknown> = { min: 0, max: 100, marks: [{ value: 85, tone: "muted", title: "Warm cache threshold (85%)" }] };
+
   const nodes: NativeNode[] = [
     node(
       "chart",
       {
         kind: "bars",
         size: "lg",
-        min: 0,
-        max: maxDomain,
+        ...trajectoryDomain,
         token: "accent",
-        ...(marks.length > 0 ? { marks } : {}),
         series,
         summary: trajSummary,
       },
@@ -930,10 +938,8 @@ export function describeNativeTrajectory(data: TrajectoryData): NativeNode[] {
       {
         kind: "spark",
         size: "md",
-        min: 0,
-        max: 100,
+        ...hitDomain,
         token: "success",
-        marks: [{ value: 85, tone: "muted", title: "Warm cache threshold (85%)" }],
         series: hitSeries,
         summary: hitSummary,
       },

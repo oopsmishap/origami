@@ -20,9 +20,9 @@
     "bench": "bun bench/marathon.ts"
   },
   "peerDependencies": {
-    "@oh-my-pi/pi-coding-agent": "^18.13.2",
-    "@oh-my-pi/pi-natives": "^18.13.2",
-    "@oh-my-pi/pi-tui": "^18.13.2"
+    "@oh-my-pi/pi-coding-agent": ">=18.12.3 <19",
+    "@oh-my-pi/pi-natives": ">=18.12.3 <19",
+    "@oh-my-pi/pi-tui": ">=18.12.3 <19"
   },
   "peerDependenciesMeta": {
     "@oh-my-pi/pi-coding-agent": {

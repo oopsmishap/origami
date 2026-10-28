@@ -1,4 +1,4 @@
-import type { Server } from "bun";
+type BunServer = ReturnType<typeof Bun.serve>;
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import { openDb, type DbBlockRow, type OrigamiDb } from "../persist/db.ts";
 import type { SessionRecord, SessionRegistry } from "../sessions.ts";
@@ -33,7 +33,7 @@ export interface DashboardInstance {
   url: string;
   token: string;
   port: number;
-  server: Server<unknown>;
+  server: BunServer;
   broadcast: (event: string, data: unknown) => void;
   stop: () => void;
 }
@@ -112,7 +112,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
     }
   }
 
-  let server: Server<unknown> | null = null;
+  let server: BunServer | null = null;
   let activePort = initialPort;
 
   for (let offset = 0; offset < 10; offset++) {

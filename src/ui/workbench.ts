@@ -1,6 +1,6 @@
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@oh-my-pi/pi-tui";
-import { planContextMap } from "@oh-my-pi/pi-tui/chrome/context-map";
+import { planContextMap } from "./context-map.ts";
 import { OverlayPanel, PanelDivider, PanelRows } from "@oh-my-pi/pi-tui/chrome/overlay-box";
 import { renderSegmentTrack } from "@oh-my-pi/pi-tui/chrome/segment-track";
 import { item, kv, list, md, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
@@ -380,7 +380,7 @@ export class WorkbenchComponent implements Component {
             renderedCells.push(theme.fg("dim", "·"));
           } else {
             const owner = catById.get(cell.id)!;
-            const sym = theme.symbol(owner.symbol);
+            const sym = theme.symbol(owner.symbol as Parameters<typeof theme.symbol>[0]);
             const painted = theme.fg(owner.color, sym);
             renderedCells.push(cell.full ? painted : `\x1b[2m${painted}\x1b[22m`);
           }
@@ -388,7 +388,7 @@ export class WorkbenchComponent implements Component {
         mapPrefix = `${renderedCells.join(" ")}   `;
       }
 
-      const swatch = theme.styledSymbol(cat.symbol, cat.color);
+      const swatch = theme.styledSymbol(cat.symbol as Parameters<typeof theme.styledSymbol>[0], cat.color);
       const tokCol = formatTokens(cat.tokens).padStart(tokW);
       const pctCol = `${cat.pct.toFixed(1)}%`.padStart(6);
       const suffix = ` ${theme.fg("text", tokCol)} ${theme.fg("dim", pctCol)}`;

@@ -9,6 +9,10 @@ bun test
 bun run bench -- --turns 200 --assert --json benchmark.json
 ```
 
+## Host compatibility
+
+Runtime peer dependencies support OMP `>=18.12.3 <19`. Development dependencies remain pinned to the current 18.x host so CI catches forward changes. The `18.12.3` floor is verified against its published coding-agent, TUI, native, and wire packages; 18.12.2 and earlier lack the native trajectory chart protocol Origami uses.
+
 The test preload in `bunfig.toml` redirects `PI_CODING_AGENT_DIR` to a temporary directory so tests never migrate or write the user's live Origami database.
 
 ## Benchmark
