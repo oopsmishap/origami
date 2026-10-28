@@ -8,7 +8,7 @@
  * rendered through the real engine and scored against an uncompressed baseline.
  *
  *   bun run bench [--turns 400] [--seed 7] [--window 200000] [--preset balanced]
- *                 [--fact-keep 0.85] [--promotion mass|growth] [--json out.json]
+ *                 [--fact-keep 0.85] [--promotion mass|growth] [--assert] [--json out.json]
  *
  * `--promotion growth` replaces the preset's merge-mass floors with triggers tied
  * to the growth step (tier 2 at 1.5x, tier 3 at 2.25x), the billion-context rule.
@@ -28,12 +28,17 @@ interface Options {
   factKeep: number;
   promotion: "mass" | "growth";
   json: string | null;
+  assert: boolean;
 }
 
 function parseArgs(argv: readonly string[]): Options {
-  const opts: Options = { turns: 400, seed: 7, window: 200_000, preset: "balanced", factKeep: 0.85, promotion: "mass", json: null };
+  const opts: Options = { turns: 400, seed: 7, window: 200_000, preset: "balanced", factKeep: 0.85, promotion: "mass", json: null, assert: false };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
+    if (key === "--assert") {
+      opts.assert = true;
+      continue;
+    }
     const value = argv[i + 1];
     if (value === undefined) throw new Error(`missing value for ${key}`);
     i++;
@@ -329,6 +334,15 @@ function pct(x: number): string {
   return `${(x * 100).toFixed(1)}%`;
 }
 
+export function benchmarkFailures(result: MarathonResult): string[] {
+  const failures: string[] = [];
+  if (result.maxInvariantViolations !== 0) failures.push(`invariant violations: ${result.maxInvariantViolations}`);
+  if (result.factLost !== 0) failures.push(`lost facts: ${result.factLost}`);
+  if (result.blocksCreated[1] === 0) failures.push("no tier-1 folds were created");
+  if (result.costVsBaseline > 0.7) failures.push(`input cost ${(result.costVsBaseline * 100).toFixed(1)}% exceeds 70% of baseline`);
+  return failures;
+}
+
 if (import.meta.main) {
   const options = parseArgs(process.argv.slice(2));
   const r = runMarathon(options);
@@ -351,4 +365,11 @@ if (import.meta.main) {
   console.log("| metric | value |\n|---|---|");
   for (const [k, v] of rows) console.log(`| ${k} | ${v} |`);
   if (options.json) await Bun.write(options.json, JSON.stringify(r, null, 2));
+  if (options.assert) {
+    const failures = benchmarkFailures(r);
+    if (failures.length > 0) {
+      console.error(`benchmark assertions failed: ${failures.join("; ")}`);
+      process.exitCode = 1;
+    }
+  }
 }
