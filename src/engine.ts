@@ -133,6 +133,13 @@ export class OrigamiEngine {
   private lastNudge: NudgeDecision = { kind: null, text: null };
   private activeNudge: string | null = null;
   private pendingFoldAttribution: string | null = null;
+  get sessionId(): string {
+    return this.host.sessionId();
+  }
+
+  get windowTokens(): number {
+    return this.host.windowTokens();
+  }
 
   constructor(opts: { host: HostPort; entries: readonly SessionEntryLike[]; modelId: string; config?: OrigamiConfig; countFn?: (input: string, encoding?: string) => number }) {
     this.host = opts.host;

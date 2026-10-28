@@ -22,6 +22,7 @@ import { buildWorkbenchModel } from "./ui/workbench-model.ts";
 import type { WorkbenchKeyOutcome } from "./ui/workbench-model.ts";
 import { WorkbenchComponent } from "./ui/workbench.ts";
 import { plainFoldCard } from "./tools/display.ts";
+import { startDashboardServer, type DashboardInstance } from "./ui/dashboard-server.ts";
 
 const NATIVE_ENCODINGS: Readonly<Record<string, NativeEncoding>> = {
   O200kBase: NativeEncoding.O200kBase,
@@ -70,6 +71,7 @@ interface SessionRuntimeEntry {
 export default function origamiExtension(api: ExtensionAPI): void {
   const sessions = new Map<string, SessionRuntimeEntry>();
   let lastContext: ExtensionContext | null = null;
+  let dashboard: DashboardInstance | null = null;
 
   function makeHost(ctx: ExtensionContext): HostBinding {
     return {
@@ -280,6 +282,10 @@ export default function origamiExtension(api: ExtensionAPI): void {
       if (getRuntime() === entry.runtime) {
         setRuntime(null);
       }
+      if (sessions.size === 0 && dashboard) {
+        dashboard.stop();
+        dashboard = null;
+      }
     }
   });
 
@@ -327,10 +333,25 @@ export default function origamiExtension(api: ExtensionAPI): void {
       { overlay: true },
     );
   }
+  async function openWebDashboard(ctx: ExtensionContext): Promise<void> {
+    if (!dashboard) {
+      dashboard = await startDashboardServer({
+        getRuntime: () => getRuntime(),
+        openBrowser: true,
+      });
+      if (ctx.hasUI) ctx.ui.notify(`origami dashboard running at ${dashboard.url}`, "info");
+    } else {
+      dashboard.broadcast("refresh", {});
+    }
+  }
 
   api.registerCommand("fold", {
-    description: "Open the origami fold workbench",
-    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+    description: "Open the origami fold workbench (or '/fold web' for browser dashboard)",
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
+      if (args.trim() === "web") {
+        await openWebDashboard(ctx);
+        return;
+      }
       await openWorkbench(ctx);
     },
   });
