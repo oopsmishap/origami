@@ -196,9 +196,9 @@ describe("billion-context Trajectory & Cache Hit Rate", () => {
 
     const native = describeNativeTrajectory(data);
     expect(native[0]?.k).toBe("chart");
-    expect((native[0]?.p as TspChartProps | undefined)?.kind).toBe("spark");
+    expect((native[0]?.p as TspChartProps | undefined)?.kind).toBe("bars");
     expect(native[1]?.k).toBe("chart");
-    expect((native[1]?.p as TspChartProps | undefined)?.kind).toBe("spark");
+    expect((native[1]?.p as TspChartProps | undefined)?.kind).toBe("bars");
     expect(native[2]?.k).toBe("table");
 
     // Ensure large trajectory (e.g. 268 rounds from long sessions) uses responsive spark charts
@@ -219,16 +219,19 @@ describe("billion-context Trajectory & Cache Hit Rate", () => {
     const bigNative = describeNativeTrajectory(bigData);
     const trajChart = bigNative[0]?.p as TspChartProps | undefined;
     const hitChart = bigNative[1]?.p as TspChartProps | undefined;
-    expect(trajChart?.kind).toBe("spark");
-    expect(hitChart?.kind).toBe("spark");
-    // Binned to maxCols (default 70) so it never overflows the overlay card
-    expect(trajChart?.series?.length).toBe(70);
-    expect(hitChart?.series?.length).toBe(70);
+    expect(trajChart?.kind).toBe("bars");
+    expect(hitChart?.kind).toBe("bars");
+    // Time-bounded to most recent rounds (default 50) so it never overflows the overlay card
+    expect(trajChart?.series?.length).toBe(50);
+    expect(hitChart?.series?.length).toBe(50);
+    // Height scales to recent peak for granularity (not squashed by windowTokens ceiling)
+    expect(trajChart?.max).toBeLessThan(300_000);
+    expect(trajChart?.max).toBeGreaterThan(200_000);
 
-    // Custom column budget respected
-    const narrowNative = describeNativeTrajectory(bigData, 48);
+    // Custom bar limit respected
+    const narrowNative = describeNativeTrajectory(bigData, 35);
     const narrowTraj = narrowNative[0]?.p as TspChartProps | undefined;
-    expect(narrowTraj?.series?.length).toBe(48);
+    expect(narrowTraj?.series?.length).toBe(35);
   });
 });
 

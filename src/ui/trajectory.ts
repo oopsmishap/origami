@@ -838,10 +838,12 @@ export function renderAnsiTrajectory(data: TrajectoryData, width: number, plotRo
 }
 
 /**
- * Native Tern TSP descriptors for Context Trajectory (`kind: "spark"`) and
- * Prompt Cache Hit Rate (`kind: "spark"`), plus fold & round summary table.
+ * Native Tern TSP descriptors for Context Trajectory (`kind: "bars"`) and
+ * Prompt Cache Hit Rate (`kind: "bars"`), plus fold & round summary table.
+ * Time-bounded to the most recent window of rounds to fit the overlay card
+ * while showing full 1:1 height granularity for active rounds.
  */
-export function describeNativeTrajectory(data: TrajectoryData, maxCols = 70): NativeNode[] {
+export function describeNativeTrajectory(data: TrajectoryData, maxBars = 50): NativeNode[] {
   if (data.lines.length === 0) {
     return [
       text([span("No request rounds recorded for this session yet.", "muted")], {
@@ -859,43 +861,44 @@ export function describeNativeTrajectory(data: TrajectoryData, maxCols = 70): Na
     }
   }
 
-  const binned = binTrajectoryColumns(data, maxCols, false);
-  const series = binned.map((c) => {
+  const visible = data.lines.length > maxBars ? data.lines.slice(-maxBars) : data.lines;
+  const series = visible.map((l) => {
+    const fMarks = foldBySeq.get(l.seq);
     const tone: TspTone | undefined =
-      c.cause === "seam"
+      l.cause === "seam"
         ? "error"
-        : c.hasFold || c.cause === "comp"
+        : l.cause === "comp" || (fMarks && fMarks.length > 0)
           ? "warning"
-          : c.cause === "cold" || c.cause === "rest"
+          : l.cause === "cold" || l.cause === "rest"
             ? "muted"
             : undefined;
-    const hitStr = c.hitPct != null ? `${c.hitPct.toFixed(1)}%` : "—";
+    const hitStr = l.hitPct != null ? `${l.hitPct.toFixed(1)}%` : "—";
     const foldNote =
-      c.foldIds.length > 0 ? `\nfold ${c.foldIds.join(", ")}` : "";
-    const causeNote = c.cause !== "new" ? `\n${CAUSE_LABEL[c.cause]}` : "";
-    const seqLabel =
-      c.seqStart === c.seqEnd ? `#${c.seqStart}` : `#${c.seqStart}..#${c.seqEnd}`;
-    const inLabel =
-      c.seqStart === c.seqEnd
-        ? `in ${formatTokens(c.input)}`
-        : `peak in ${formatTokens(c.input)}`;
+      fMarks && fMarks.length > 0
+        ? `\nfold ${fMarks.map((m) => `${m.id} (-${formatTokens(m.saved)})`).join(", ")}`
+        : "";
+    const causeNote = l.cause !== "new" ? `\n${CAUSE_LABEL[l.cause]}` : "";
     return {
-      label: seqLabel,
-      value: c.input,
+      label: `#${l.seq}`,
+      value: l.input,
       ...(tone ? { tone } : {}),
-      title: `${seqLabel} · ${inLabel} · cached ${formatTokens(c.cached)} · hit ${hitStr}${foldNote}${causeNote}`,
+      title: `#${l.seq} · in ${formatTokens(l.input)} · cached ${formatTokens(l.cached)} · missed ${formatTokens(l.missed)} · hit ${hitStr}${foldNote}${causeNote}`,
     };
   });
 
+  // Scale domain to the visible peak so bars use the full height and show granular sawtooth steps
+  const visiblePeak = Math.max(1, ...visible.map((l) => l.input));
+  const maxDomain = Math.round(visiblePeak * 1.08);
+
   const marks: NativeChartMark[] = [];
-  if (data.windowTokens > 0 && data.peakInput >= data.windowTokens * 0.25) {
+  if (data.windowTokens > 0 && data.windowTokens <= maxDomain) {
     marks.push({
       value: data.windowTokens,
       tone: "error",
       title: `Context window ${formatTokens(data.windowTokens)}`,
     });
   }
-  if (data.baselineTokens >= 200) {
+  if (data.baselineTokens >= 200 && data.baselineTokens < maxDomain) {
     marks.push({
       value: data.baselineTokens,
       tone: "muted",
@@ -903,30 +906,28 @@ export function describeNativeTrajectory(data: TrajectoryData, maxCols = 70): Na
     });
   }
 
-  const maxDomain =
-    data.windowTokens > 0 && data.peakInput >= data.windowTokens * 0.5
-      ? Math.round(data.windowTokens * 1.05)
-      : Math.max(1, Math.round(data.peakInput * 1.08));
-
   const trajSummary: TspSpan[] = [
     span("Context Trajectory", "strong"),
     span(` · latest ${formatTokens(data.latestInput)} · peak ${formatTokens(data.peakInput)}`, "muted"),
+    ...(data.lines.length > visible.length
+      ? [span(` · recent ${visible.length} of ${data.lines.length}`, "dim")]
+      : []),
+    ...(data.windowTokens > 0
+      ? [span(` · window ${formatTokens(data.windowTokens)}`, "dim")]
+      : []),
     ...(data.folds.length > 0
       ? [span(` · ${data.folds.length} fold(s) (-${formatTokens(data.reclaimedTotal)})`, "accent")]
       : []),
   ];
 
-  const hitSeries = binned.map((c) => {
-    const pct = c.hitPct ?? 0;
-    const tone: TspTone | undefined =
-      pct >= 85 ? undefined : pct >= 50 ? "warning" : "error";
-    const seqLabel =
-      c.seqStart === c.seqEnd ? `#${c.seqStart}` : `#${c.seqStart}..#${c.seqEnd}`;
+  const hitSeries = visible.map((l) => {
+    const pct = l.hitPct ?? 0;
+    const tone: TspTone | undefined = pct >= 85 ? undefined : pct >= 50 ? "warning" : "error";
     return {
-      label: seqLabel,
+      label: `#${l.seq}`,
       value: Math.round(pct * 10) / 10,
       ...(tone ? { tone } : {}),
-      title: `${seqLabel} · hit ${c.hitPct != null ? `${c.hitPct.toFixed(1)}%` : "—"} (${formatTokens(c.cached)} / ${formatTokens(c.input)})`,
+      title: `#${l.seq} · hit ${l.hitPct != null ? `${l.hitPct.toFixed(1)}%` : "—"} (${formatTokens(l.cached)} / ${formatTokens(l.input)})`,
     };
   });
 
@@ -946,7 +947,7 @@ export function describeNativeTrajectory(data: TrajectoryData, maxCols = 70): Na
     node(
       "chart",
       {
-        kind: "spark",
+        kind: "bars",
         size: "lg",
         ...trajectoryDomain,
         token: "accent",
@@ -959,8 +960,7 @@ export function describeNativeTrajectory(data: TrajectoryData, maxCols = 70): Na
     node(
       "chart",
       {
-        kind: "spark",
-        size: "md",
+        kind: "bars",
         ...hitDomain,
         token: "success",
         series: hitSeries,
