@@ -1,6 +1,6 @@
 {
   "name": "origami",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "First-principles incremental hierarchical context folding for oh-my-pi",
   "type": "module",
   "license": "MIT",

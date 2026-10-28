@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.9 — 2026-10-28
+
+### Bug Fixes & Improvements
+- **Dashboard Server Idle Timeout & SSE Keep-Alive**: Configured `idleTimeout: 0` on `Bun.serve` in `dashboard-server.ts` to disable Bun's default 10-second socket idle timeout on long-lived Server-Sent Events (SSE) streams (`/api/events`). Added a 15-second heartbeat interval emitting `: ping\n\n` comments to prevent browser event sources, proxies, and bridges from disconnecting during quiet periods.
+- **Obsolete Ephemeral Developer Reminder Pruning**: `planRender` now schedules removals for obsolete ephemeral developer reminders (`<system-reminder>`, `[shaken]`, `WSL bridge`, `<system-notice>`) that are surrounded by folded history or whose turn has folded. Ephemeral messages in live history and the protected tail remain untouched.
+- **Context Zone De-Fragmentation**: Fixed `protectedZoneMap` to assign `folded` or `compressible` status to internal ephemeral messages based on their surrounding context rather than unconditionally marking them `protected`. This eliminates fragmented `sys..sys` zone rows.
+- **Accurate Ephemeral Token Accounting**: `status().occupancy` now counts only live system tokens, reducing inflated system token reports from 2.7K to the actual active count (~65t). Zone token accounting now includes intermediate ephemerals in range slices and restricts isolated fallback reporting to specific zone messages.
+- **Nudge Candidate Run Ephemeral Spanning**: `recommendRanges` now allows candidate runs to span across intermediate ephemeral messages within foldable turns, trimming range endpoints to valid non-ephemeral message references so runs do not split or orphan tool-pair partners.
+
 ## 0.2.8 — 2026-10-28
 
 ### Features & Invariant Fixes

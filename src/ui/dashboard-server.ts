@@ -99,6 +99,19 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
   const unsubscribe = registry.subscribe((event, sessionId, data) => {
     broadcast(event, { sessionId, data });
   });
+  // Periodic SSE keepalive comment to keep connections alive and immediately clean up dead clients
+  const heartbeatTimer = setInterval(() => {
+    const ping = new TextEncoder().encode(`: ping\n\n`);
+    for (const client of clients) {
+      try {
+        client.enqueue(ping);
+      } catch {
+        clients.delete(client);
+      }
+    }
+  }, 15000);
+  heartbeatTimer.unref?.();
+
 
   /** History reads: live session's db, else the process-shared handle, else a private one. */
   function withDb<T>(record: SessionRecord | undefined, fn: (db: OrigamiDb) => T): T {
@@ -121,6 +134,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
       server = Bun.serve({
         port: tryPort,
         hostname: host,
+        idleTimeout: 0,
         async fetch(req) {
           const url = new URL(req.url);
           const path = url.pathname;
@@ -342,6 +356,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
   }
 
   if (!server) {
+    clearInterval(heartbeatTimer);
     unsubscribe();
     throw new Error(`Failed to bind origami dashboard server on ports ${initialPort}..${initialPort + 9}`);
   }
@@ -358,6 +373,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
     server,
     broadcast,
     stop() {
+      clearInterval(heartbeatTimer);
       unsubscribe();
       for (const client of clients) {
         try {
