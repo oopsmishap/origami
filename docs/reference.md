@@ -37,6 +37,8 @@ Origami tracks the long-term economics of context management:
 - Active Summaries: Compact summary tokens occupying active prompt window space.
 - Compression Ratio: Multiplier of archived original tokens over in-context summaries (e.g. 45.4×).
 - Payback Status: Fold generation cost (summary tokens plus prefix re-cache penalty) is amortized against ongoing egress avoidance. Most folds break even within 1 to 2 turns, indicated by a checkmark (`✓`) in the status chip and detailed payback turn counts in the workbench and web dashboard.
+- Cache Miss Reconciliation: Ground-truth decomposition separates missed tokens into normal turn growth, fold prefix invalidation re-pay, and provider TTL or cluster eviction.
+- Cadence Protection: Every fold evaluates measured re-pay against subsequent request savings. If a fold requires more turns to break even, post-fold cooldown automatically extends to protect prompt cache efficiency.
 ## Workbench
 
 Open with `/fold` or `Alt+F`.

@@ -534,7 +534,11 @@ export function registerTools(
       rt.sync();
       const rounds = rt.engine.cacheRounds();
       const collapse = rt.engine.status().cacheCollapse;
-      const text = formatCacheRounds(rounds, collapse?.collapsed ? collapse.reason : null);
+      let cacheRep = null;
+      try {
+        cacheRep = rt.engine.cacheReport();
+      } catch {}
+      const text = formatCacheRounds(rounds, collapse?.collapsed ? collapse.reason : null, cacheRep);
       const firstLine = (collapse?.collapsed ? `⚠️ ${collapse.reason}\n` : "") + (text.split("\n").find((l) => l.includes("round(s)")) ?? "no cache rounds");
       const durationMs = performance.now() - t0;
       const row = recordToolTelemetry(rt, {

@@ -19,6 +19,7 @@ import {
   span,
   toolHead,
 } from "../ui/native.ts";
+import type { CacheReport } from "../kernel/cache-report.ts";
 import { Ellipsis, renderStatusLine, truncateToWidth } from "@oh-my-pi/pi-tui/render";
 import {
   createCachedComponent,
@@ -613,13 +614,19 @@ export function formatStatusReport(report: StatusReport): string {
   return lines.join("\n");
 }
 
-export function formatCacheRounds(rounds: readonly CacheRound[], collapseWarning?: string | null): string {
+export function formatCacheRounds(
+  rounds: readonly CacheRound[],
+  collapseWarning?: string | null,
+  cacheReport?: CacheReport | null,
+): string {
   if (rounds.length === 0) return "no cache rounds recorded";
   let totalIn = 0;
   let totalRead = 0;
+  let totalWrite = 0;
   for (const r of rounds) {
     totalIn += r.totalIn;
     totalRead += r.cacheRead;
+    totalWrite += r.cacheWrite;
   }
   const hitPct = totalIn > 0 ? ((totalRead / totalIn) * 100).toFixed(1) : "0.0";
   const lines: string[] = [];
@@ -627,11 +634,51 @@ export function formatCacheRounds(rounds: readonly CacheRound[], collapseWarning
     lines.push(`⚠️ WARNING: ${collapseWarning}\n`);
   }
   lines.push(
-    `${rounds.length} round(s) · cache hit ${hitPct}% (${formatTokens(totalRead)} / ${formatTokens(totalIn)})`,
-    "ts | total_in | cache_read | cache_write | fold",
+    `${rounds.length} round(s) · cache hit ${hitPct}% (${formatTokens(totalRead)} read / ${formatTokens(totalIn)} in · ${formatTokens(totalWrite)} write)`,
   );
-  for (const r of rounds) {
-    lines.push(`${new Date(r.ts).toISOString()} | ${r.totalIn} | ${r.cacheRead} | ${r.cacheWrite} | ${r.foldEventId ?? "-"}`);
+
+  if (cacheReport && cacheReport.summary) {
+    const s = cacheReport.summary;
+    const totalMiss = Math.max(0, s.totalInput - s.totalCached);
+    const freshPct = totalMiss > 0 ? Math.round((s.newContent / totalMiss) * 100) : 0;
+    const repayPct = totalMiss > 0 ? Math.round((s.compRepay / totalMiss) * 100) : 0;
+    const ttlPct = totalMiss > 0 ? Math.round((s.ttlRepay / totalMiss) * 100) : 0;
+
+    lines.push(
+      "",
+      "--- Cache Miss Decomposition (Ground Truth) ---",
+      `Fresh Content:       ${formatTokens(s.newContent)} (${freshPct}% of misses · normal turn growth)`,
+      `Compression Re-pay:  ${formatTokens(s.compRepay)} (${repayPct}% of misses · prefix invalidation)`,
+      `TTL / Eviction:      ${formatTokens(s.ttlRepay)} (${ttlPct}% of misses · provider KV cache drops)`,
+      `Net Prompt Saved:    ${formatTokens(s.netTokens)}t (${s.paidBackCount}/${s.foldsCount} folds paid back)`,
+    );
+
+    if (cacheReport.folds.length > 0) {
+      lines.push(
+        "",
+        "--- Per-Fold Payback & Cadence Ledger ---",
+        "fold | compressed | summary | repay_T | breakeven | requests | payback | cadence",
+      );
+      for (const f of cacheReport.folds) {
+        const status = f.paidBack ? "PAID_BACK ✓" : `BREAKEVEN_IN_${Math.max(1, f.breakevenTurns - f.requestsAfter)}T`;
+        const cadence = f.cadenceOk === null ? "ACTIVE" : f.cadenceOk ? "OK ✓" : "THRASHED ✗";
+        lines.push(
+          `${f.id.padEnd(4)} | ${formatTokens(f.S).padEnd(10)} | ${formatTokens(f.sigma).padEnd(7)} | ${formatTokens(f.T).padEnd(7)} | ` +
+          `${(f.breakevenTurns + " turns").padEnd(9)} | ${(f.requestsAfter + " post").padEnd(8)} | ` +
+          `${status.padEnd(11)} | ${cadence}`,
+        );
+      }
+    }
+  }
+
+  lines.push(
+    "",
+    "--- Recent Rounds ---",
+    "ts | total_in | cache_read | cache_write | hit% | fold",
+  );
+  for (const r of rounds.slice(-10)) {
+    const rHit = r.totalIn > 0 ? `${((r.cacheRead / r.totalIn) * 100).toFixed(1)}%` : "0.0%";
+    lines.push(`${new Date(r.ts).toLocaleTimeString()} | ${r.totalIn} | ${r.cacheRead} | ${r.cacheWrite} | ${rHit.padEnd(6)} | ${r.foldEventId ?? "-"}`);
   }
   return lines.join("\n");
 }

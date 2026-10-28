@@ -23,6 +23,7 @@ import type { OrigamiConfig } from "./config.ts";
 import { configFromPreset } from "./config.ts";
 import { evaluateCacheRound, getCacheCollapseStatus } from "./telemetry.ts";
 import { extractPlanTerms, rerankHitsWithPlan } from "./kernel/plan-search.ts";
+import { buildCacheReport, type CacheReport, type CacheSample, type FoldEvent } from "./kernel/cache-report.ts";
 export interface HostPort {
   sessionId(): string;
   appendEvent(op: JournalOp): void;
@@ -343,7 +344,21 @@ export class OrigamiEngine {
       },
       this.recommendedRanges(),
       promotionCandidates(this.state.tree.live(), this.state.tree.foldAges(), this.config.blockMatureFolds),
-      { ...this.config, minFoldBenefit: this.minFoldBenefit() },
+      {
+        ...this.config,
+        minFoldBenefit: this.minFoldBenefit(),
+        cooldownTurns: (() => {
+          let cd = this.config.cooldownTurns ?? 2;
+          try {
+            const rep = this.cacheReport();
+            if (rep.folds.length > 0) {
+              const latest = rep.folds[rep.folds.length - 1]!;
+              if (!latest.paidBack && latest.breakevenTurns > cd) cd = latest.breakevenTurns;
+            }
+          } catch {}
+          return cd;
+        })(),
+      },
     );
     if (decision.text) {
       this.activeNudge = decision.text;
@@ -854,29 +869,47 @@ export class OrigamiEngine {
         ? Math.round((foldedSavings / archivedTokens) * 1000) / 10
         : 0;
 
-    const breakEvenTurns =
-      foldedSavings > 0
-        ? Math.max(1, Math.ceil(summaryTokens / Math.max(1, foldedSavings)))
-        : 1;
-    const oldestFoldTurn = liveBlocks.length > 0
-      ? Math.min(...liveBlocks.map((b) => {
-          const firstRef = b.ranges[0]?.start;
-          const m = firstRef ? bound.find((msg) => msg.ref === firstRef) : null;
-          return m ? m.turn : 1;
-        }))
-      : this.activeTurn;
-    const turnsSinceFold = Math.max(0, this.activeTurn - oldestFoldTurn);
-    const paidBack = foldedSavings > 0 && turnsSinceFold >= breakEvenTurns;
-    const cumulativeSavedTokens = foldedSavings > 0
-      ? Math.max(0, foldedSavings * turnsSinceFold - summaryTokens)
-      : 0;
-    const paybackStatus =
-      foldedSavings === 0
-        ? "No folds yet"
-        : paidBack
-          ? `Paid back (${turnsSinceFold - breakEvenTurns} turns past break-even)`
-          : `Break-even in ~${Math.max(1, breakEvenTurns - turnsSinceFold)} turn(s)`;
+    let breakEvenTurns = 1;
+    let paidBack = false;
+    let cumulativeSavedTokens = 0;
+    let paybackStatus = foldedSavings === 0 ? "No folds yet" : "Break-even in ~1 turn(s)";
 
+    const rounds = this.cacheRounds();
+    if (rounds.length > 0 && liveBlocks.length > 0) {
+      try {
+        const report = this.cacheReport();
+        if (report.folds.length > 0) {
+          const latest = report.folds[report.folds.length - 1]!;
+          breakEvenTurns = latest.breakevenTurns;
+          paidBack = report.folds.every((f) => f.paidBack);
+          cumulativeSavedTokens = Math.max(0, report.summary.netTokens);
+          if (paidBack) {
+            const pastTurns = Math.max(0, latest.requestsAfter - latest.breakevenTurns);
+            paybackStatus = `Paid back (${pastTurns} turns past break-even)`;
+          } else {
+            const remTurns = Math.max(1, latest.breakevenTurns - latest.requestsAfter);
+            paybackStatus = `Break-even in ~${remTurns} turn(s)`;
+          }
+        }
+      } catch {
+        // Fallback to turn estimation below if cacheReport throws
+      }
+    } else if (foldedSavings > 0) {
+      breakEvenTurns = Math.max(1, Math.ceil(summaryTokens / Math.max(1, foldedSavings)));
+      const oldestFoldTurn = liveBlocks.length > 0
+        ? Math.min(...liveBlocks.map((b) => {
+            const firstRef = b.ranges[0]?.start;
+            const m = firstRef ? bound.find((msg) => msg.ref === firstRef) : null;
+            return m ? m.turn : 1;
+          }))
+        : this.activeTurn;
+      const turnsSinceFold = Math.max(0, this.activeTurn - oldestFoldTurn);
+      paidBack = turnsSinceFold >= breakEvenTurns;
+      cumulativeSavedTokens = Math.max(0, foldedSavings * turnsSinceFold - summaryTokens);
+      paybackStatus = paidBack
+        ? `Paid back (${turnsSinceFold - breakEvenTurns} turns past break-even)`
+        : `Break-even in ~${Math.max(1, breakEvenTurns - turnsSinceFold)} turn(s)`;
+    }
     const vault: StatusVaultReport = {
       archivedTokens,
       summaryTokens,
@@ -1056,6 +1089,50 @@ export class OrigamiEngine {
     } catch (error) {
       this.disablePersistence(error);
     }
+  }
+
+  cacheReport(): CacheReport {
+    const rounds = this.cacheRounds();
+    const samples: CacheSample[] = rounds.map((r) => ({
+      at: r.ts,
+      input: r.totalIn,
+      cached: r.cacheRead,
+      write: r.cacheWrite,
+      foldEventId: r.foldEventId,
+    }));
+    const allBlocks = this.state.tree.all();
+    const blockById = new Map(allBlocks.map((b) => [b.id, b]));
+    const folds: FoldEvent[] = [];
+    const seenFoldIds = new Set<string>();
+
+    for (const r of rounds) {
+      if (r.foldEventId && !seenFoldIds.has(r.foldEventId)) {
+        seenFoldIds.add(r.foldEventId);
+        const b = blockById.get(r.foldEventId);
+        folds.push({
+          id: r.foldEventId,
+          at: r.ts,
+          tokensCompressed: b ? b.tokensBefore - b.tokensAfter : 0,
+          summaryTokens: b ? b.tokensAfter : 0,
+          topic: b?.topic,
+        });
+      }
+    }
+
+    for (const b of allBlocks) {
+      if (!seenFoldIds.has(b.id)) {
+        seenFoldIds.add(b.id);
+        folds.push({
+          id: b.id,
+          at: b.createdAt,
+          tokensCompressed: b.tokensBefore - b.tokensAfter,
+          summaryTokens: b.tokensAfter,
+          topic: b.topic,
+        });
+      }
+    }
+
+    return buildCacheReport(samples, folds);
   }
 
   search(query: string, limit = 10, options?: { planAware?: boolean }): FoldSearchHit[] {

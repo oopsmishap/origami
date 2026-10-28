@@ -315,8 +315,9 @@ export default function origamiExtension(api: ExtensionAPI): void {
     const usage = event.message.usage;
     if (!usage) return;
 
-    const cacheRead = usage.cacheRead ?? 0;
-    const cacheWrite = usage.cacheWrite ?? 0;
+    const rawUsage = usage as unknown as Record<string, unknown>;
+    const cacheRead = Number(usage.cacheRead ?? rawUsage.cache_read_input_tokens ?? rawUsage.cacheReadInputTokens ?? 0) || 0;
+    const cacheWrite = Number(usage.cacheWrite ?? rawUsage.cache_creation_input_tokens ?? rawUsage.cacheCreationInputTokens ?? rawUsage.cache_write ?? 0) || 0;
     const totalIn = (usage.input ?? 0) + cacheRead + cacheWrite;
 
     const round = {

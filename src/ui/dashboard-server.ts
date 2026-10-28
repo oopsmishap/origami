@@ -260,6 +260,14 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
           if (path === "/api/rounds") {
             return Response.json(sessionId ? withDb(record, (db) => db.roundsForSession(sessionId)) : []);
           }
+          // 5b. Cache Report API (exact decomposition and per-fold payback economics)
+          if (path === "/api/cache-report") {
+            if (rt) {
+              return Response.json(rt.engine.cacheReport());
+            }
+            return Response.json(null);
+          }
+
 
           // 6. Search API (all sessions)
           if (path === "/api/search") {
@@ -1333,6 +1341,58 @@ function renderDashboardHtml(): string {
 
     <!-- TAB 3: Cache Economics -->
     <section class="panel" id="tab-cache">
+      <!-- Decomposition & Summary Tiles -->
+      <div class="stat-grid" style="margin-bottom:14px;">
+        <div class="stat-tile">
+          <div class="stat-val" id="cache-hit-pct" style="color:var(--accent-green)">—</div>
+          <div class="stat-lbl">Overall Hit Rate</div>
+          <div class="stat-sub" id="cache-hit-sub">0 / 0 tokens cached</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-val" id="cache-fresh-pct">—</div>
+          <div class="stat-lbl">Fresh Growth</div>
+          <div class="stat-sub" id="cache-fresh-sub">Normal turn inputs</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-val" id="cache-repay-pct" style="color:var(--accent-amber)">—</div>
+          <div class="stat-lbl">Fold Compression Re-pay</div>
+          <div class="stat-sub" id="cache-repay-sub">Prefix invalidation cost</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-val" id="cache-ttl-pct" style="color:#a78bfa">—</div>
+          <div class="stat-lbl">TTL / Provider Eviction</div>
+          <div class="stat-sub" id="cache-ttl-sub">Idle & cluster drops</div>
+        </div>
+      </div>
+
+      <!-- Per-Fold Payback & Cadence Ledger Card -->
+      <div class="card" style="margin-bottom:14px;">
+        <div class="card-h">
+          <span class="card-title">Per-Fold Payback & Cadence Health</span>
+          <span class="card-hint">Measured prefix re-pay T, break-even rounds n*, and interleave cadence</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Fold</th>
+                <th class="num">Compressed</th>
+                <th class="num">Summary</th>
+                <th class="num">Measured Re-pay (T)</th>
+                <th class="num">Break-even (n*)</th>
+                <th class="num">Observed After</th>
+                <th>Payback Status</th>
+                <th>Cadence</th>
+              </tr>
+            </thead>
+            <tbody id="cache-folds-tbody">
+              <tr><td colspan="8" class="chart-empty">No folds recorded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Per-Request Cache Ledger Card -->
       <div class="card">
         <div class="card-h">
           <span class="card-title">Per-Request Cache Ledger</span>
@@ -2092,11 +2152,12 @@ function renderDashboardHtml(): string {
       try {
         const sRes = await apiFetch('/api/sessions');
         if (sRes.ok) renderSessions(await sRes.json());
-        const [stRes, bRes, rRes, audRes] = await Promise.all([
+        const [stRes, bRes, rRes, audRes, crRes] = await Promise.all([
           apiFetch(withSession('/api/status')),
           apiFetch(withSession('/api/blocks')),
           apiFetch(withSession('/api/rounds')),
           apiFetch(withSession('/api/audit')),
+          apiFetch(withSession('/api/cache-report')),
         ]);
         // A newer refresh (e.g. the user switched sessions) owns the view.
         if (seq !== refreshSeq) return;
@@ -2109,6 +2170,47 @@ function renderDashboardHtml(): string {
         const auditData = audRes && audRes.ok ? await audRes.json() : { events: [], summary: null };
         if (seq !== refreshSeq) return;
         renderAudit(auditData);
+        const cacheReport = crRes && crRes.ok ? await crRes.json() : null;
+        if (cacheReport && cacheReport.summary) {
+          const s = cacheReport.summary;
+          const totalMiss = Math.max(0, s.totalInput - s.totalCached);
+          const freshPct = totalMiss > 0 ? Math.round((s.newContent / totalMiss) * 100) : 0;
+          const repayPct = totalMiss > 0 ? Math.round((s.compRepay / totalMiss) * 100) : 0;
+          const ttlPct = totalMiss > 0 ? Math.round((s.ttlRepay / totalMiss) * 100) : 0;
+
+          if ($('cache-hit-pct')) $('cache-hit-pct').textContent = s.overallHitPct + '%';
+          if ($('cache-hit-sub')) $('cache-hit-sub').textContent = formatK(s.totalCached) + ' / ' + formatK(s.totalInput);
+          if ($('cache-fresh-pct')) $('cache-fresh-pct').textContent = freshPct + '%';
+          if ($('cache-fresh-sub')) $('cache-fresh-sub').textContent = formatK(s.newContent) + ' fresh tokens';
+          if ($('cache-repay-pct')) $('cache-repay-pct').textContent = repayPct + '%';
+          if ($('cache-repay-sub')) $('cache-repay-sub').textContent = formatK(s.compRepay) + ' re-pay tokens';
+          if ($('cache-ttl-pct')) $('cache-ttl-pct').textContent = ttlPct + '%';
+          if ($('cache-ttl-sub')) $('cache-ttl-sub').textContent = formatK(s.ttlRepay) + ' eviction tokens';
+
+          const foldsTbody = $('cache-folds-tbody');
+          if (foldsTbody) {
+            if (!cacheReport.folds || !cacheReport.folds.length) {
+              foldsTbody.innerHTML = '<tr><td colspan="8" class="chart-empty">No folds recorded yet.</td></tr>';
+            } else {
+              foldsTbody.innerHTML = cacheReport.folds.map((f) => {
+                const statusCls = f.paidBack ? 'status-pill status-pill-active' : 'status-pill status-pill-young';
+                const statusLbl = f.paidBack ? 'Paid back ✓' : 'Break-even in ~' + Math.max(1, f.breakevenTurns - f.requestsAfter) + 'T';
+                const cadCls = f.cadenceOk === null ? '' : f.cadenceOk ? 'style="color:var(--accent-green)"' : 'style="color:var(--accent-red)"';
+                const cadLbl = f.cadenceOk === null ? 'Active' : f.cadenceOk ? 'Healthy ✓' : 'Thrashed ✗';
+                return '<tr>' +
+                  '<td class="mono"><strong>' + escapeHtml(f.id) + '</strong></td>' +
+                  '<td class="num">' + formatK(f.S) + '</td>' +
+                  '<td class="num">' + formatK(f.sigma) + '</td>' +
+                  '<td class="num" style="color:var(--accent-amber)">' + formatK(f.T) + '</td>' +
+                  '<td class="num">' + f.breakevenTurns + ' turn' + (f.breakevenTurns === 1 ? '' : 's') + '</td>' +
+                  '<td class="num">' + f.requestsAfter + '</td>' +
+                  '<td><span class="' + statusCls + '">' + escapeHtml(statusLbl) + '</span></td>' +
+                  '<td ' + cadCls + '>' + escapeHtml(cadLbl) + '</td>' +
+                  '</tr>';
+              }).join('');
+            }
+          }
+        }
 
         const ccBanner = $('audit-cache-collapse-banner');
         const ccText = $('audit-cache-collapse-text');

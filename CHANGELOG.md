@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.10 — 2026-10-28
+
+### Features & Improvements
+- **Cache Miss Ground-Truth Reconciliation Engine (#800)**: Decomposes every turn's prompt cache misses into three conservation components: fresh content growth ($\Delta I$), fold prefix re-pay cost ($T$), and provider TTL or cluster eviction ($E$). Operates with exact token conservation ($M = \Delta I + T + E$).
+- **Per-Fold Payback & Cadence Health**: Tracks measured re-pay $T$, summary cost $\sigma$, gross token savings $S$, net prompt tokens saved, break-even rounds $n^*$, and interleave cadence health across all folds in the session.
+- **Dynamic Cadence Protection**: When a fold requires multiple rounds to amortize its measured re-pay penalty, `decideNudge` automatically adjusts post-fold cooldown to ensure the active fold breaks even before triggering subsequent advisory folds.
+- **Cache Write Alias Normalization**: Maps diverse provider usage payloads (including camelCase `cacheWrite`, snake_case `cache_creation_input_tokens`, and `cacheCreationInputTokens`) to accurately record cache write creation tokens.
+- **Web UI & CLI Tool Integration**: Added `/api/cache-report` API endpoint, Cache Miss Decomposition stat tiles and Per-Fold Payback & Cadence table in the Web UI, and upgraded the `fold_cache` tool CLI output with decomposition metrics and fold ledger.
+
 ## 0.2.9 — 2026-10-28
 
 ### Bug Fixes & Improvements

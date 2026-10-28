@@ -24,6 +24,8 @@ export interface OrigamiConfig {
   /** Delete archived DB rows older than this many days on startup; 0 keeps everything. */
   retentionDays: number;
   language: "preserve" | "english";
+  /** Turns after a fold before efficiency or promotion nudges can fire again. */
+  cooldownTurns?: number;
 }
 
 type PresetKeys =

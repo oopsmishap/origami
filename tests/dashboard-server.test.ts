@@ -191,6 +191,14 @@ describe("Standalone Web Dashboard Server", () => {
       expect(rounds[0]!.total_in).toBe(10_000);
       expect(rounds[0]!.cache_read).toBe(8_000);
 
+      // 4b. GET /api/cache-report -> exact decomposition and payback ledger
+      const crRes = await fetch(`${baseUrl}/api/cache-report`, { headers: authHeaders });
+      expect(crRes.status).toBe(200);
+      const crData = (await crRes.json()) as { summary: { totalInput: number; overallHitPct: number }; folds: unknown[] };
+      expect(crData.summary.totalInput).toBe(10_000);
+      expect(crData.summary.overallHitPct).toBe(80);
+      expect(Array.isArray(crData.folds)).toBe(true);
+
       // 5. GET /api/search -> block and archived-message FTS5 results
       const searchRes = await fetch(`${baseUrl}/api/search?q=caching`, { headers: authHeaders });
       expect(searchRes.status).toBe(200);
