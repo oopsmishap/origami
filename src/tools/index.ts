@@ -1,32 +1,52 @@
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
-import type { FoldSpec } from "../engine.ts";
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import { formatTokens, type FoldSpec } from "../engine.ts";
 import type { OrigamiRuntime } from "../runtime.ts";
 import {
-  formatFoldOutcome,
+  cacheCallView,
+  cacheResultView,
   foldCallView,
   foldResultView,
-  textResult,
-  searchResultView,
-  statusResultView,
-  cacheResultView,
-  unfoldResultView,
-  formatStatusReport,
   formatCacheRounds,
+  formatFoldOutcome,
   formatSearchHits,
-  plainFoldCard,
+  formatStatusReport,
+  renderInlineToolCall,
+  renderInlineToolResult,
+  searchCallView,
+  searchResultView,
+  statusCallView,
+  statusResultView,
+  textResult,
+  type ToolDetail,
+  unfoldCallView,
+  unfoldResultView,
 } from "./display.ts";
 
-interface Detail {
-  summary: string;
-  rows: string[];
+export type ToolMutationListener = (
+  event: "fold" | "unfold",
+  payload: unknown,
+  ctx?: ExtensionContext,
+) => void;
+
+type ToolSchema = ToolDefinition extends ToolDefinition<infer P, unknown> ? P : never;
+
+function registerInlineTool<TParams extends ToolSchema, TDetails = unknown>(
+  api: ExtensionAPI,
+  def: ToolDefinition<TParams, TDetails>,
+): void {
+  api.registerTool(Object.assign(def, { inline: true, mergeCallAndResult: true }));
 }
 
-export function registerTools(api: ExtensionAPI, getRuntime: (ctx?: ExtensionContext) => OrigamiRuntime): void {
+export function registerTools(
+  api: ExtensionAPI,
+  getRuntime: (ctx?: ExtensionContext) => OrigamiRuntime,
+  onMutation?: ToolMutationListener,
+): void {
   const t = api.typebox.Type;
 
-  api.registerTool({
+  registerInlineTool(api, {
     name: "fold",
-    label: "fold",
+    label: "Fold",
     description:
       'Fold conversation ranges into compact summary blocks. Tier 1 compresses message ranges ("m00012..m00048"); tier 2/3 distill whole blocks ("b1..b5" / "b1,b3"). Call with EXACTLY the ranges an [origami] nudge advertises.',
     parameters: t.Object({
@@ -38,53 +58,60 @@ export function registerTools(api: ExtensionAPI, getRuntime: (ctx?: ExtensionCon
         }),
         { description: "One or more disjoint fold ranges" },
       ),
-      tier: t.Optional(t.Union([t.Literal(1), t.Literal(2), t.Literal(3)], { description: "Fold tier: 1=message compression, 2=distillation, 3=ultra-dense" })),
+      tier: t.Optional(
+        t.Union([t.Literal(1), t.Literal(2), t.Literal(3)], {
+          description: "Fold tier: 1=message compression, 2=distillation, 3=ultra-dense",
+        }),
+      ),
     }),
     loadMode: "essential",
     approval: "read",
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const rt = getRuntime(_ctx);
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const rt = getRuntime(ctx);
       rt.sync();
       const result = rt.engine.executeFold({ folds: params.folds as FoldSpec[], tier: params.tier });
       if (!result.ok) {
         return textResult(`error: ${result.error} (fold ${result.foldIndex})`, { summary: result.error, rows: [] }, true);
       }
+      onMutation?.("fold", result.outcome, ctx);
       const text = formatFoldOutcome(result.outcome);
       return textResult(text, {
-        summary: `${result.outcome.foldCount} block(s) · reclaimed ${result.outcome.tokensReclaimed}t`,
-        rows: result.outcome.blocks.map((b) => `${b.id} · tier ${b.tier} · ${b.topic}`),
+        summary: `${result.outcome.foldCount} block(s) · -${formatTokens(result.outcome.tokensReclaimed)}t`,
+        rows: result.outcome.blocks.map(
+          (b) => `${b.id} (T${b.tier}) ${formatTokens(b.tokensBefore)}t → ${formatTokens(b.tokensAfter)}t · ${b.topic}`,
+        ),
       });
     },
     describeCall(args) {
-      const a = args as { folds?: FoldSpec[]; tier?: number };
+      const a = (args ?? {}) as { folds?: FoldSpec[]; tier?: number };
       return foldCallView({ folds: a.folds ?? [], tier: a.tier ?? 1 });
     },
     describeResult(result) {
-      return foldResultView(result.details as Detail | undefined, result.isError ? "error" : "success");
+      return foldResultView(result, result.details as ToolDetail | undefined, Boolean(result.isError));
     },
-    renderCall(args, _options, theme) {
-      const a = args as { folds?: FoldSpec[]; tier?: number };
-      return plainFoldCard(
-        theme,
-        `fold (tier ${a.tier ?? 1})`,
-        (a.folds ?? []).map((f) => `${f.range} · ${f.topic}`),
+    renderCall(args, options, uiTheme) {
+      const a = (args ?? {}) as { folds?: FoldSpec[]; tier?: number };
+      const folds = a.folds ?? [];
+      return renderInlineToolCall(
+        "Fold",
+        `tier ${a.tier ?? 1}`,
+        folds.map((f) => `${f.range} · ${f.topic}`),
+        options,
+        uiTheme,
+        folds.length > 0 ? [`${folds.length} range(s)`] : undefined,
       );
     },
-    renderResult(result, _options, theme) {
-      const d = result.details as Detail | undefined;
-      return plainFoldCard(
-        theme,
-        result.isError ? "fold failed" : "fold",
-        [d?.summary ?? "", ...(d?.rows ?? [])].filter((s) => s.length > 0),
-        result.isError ? "error" : "success",
-      );
+    renderResult(result, options, uiTheme, args) {
+      const a = (args ?? {}) as { tier?: number };
+      return renderInlineToolResult("Fold", "context.compaction", result, options, uiTheme, `tier ${a.tier ?? 1}`);
     },
   });
 
-  api.registerTool({
+  registerInlineTool(api, {
     name: "unfold",
-    label: "unfold",
-    description: "Unfold a folded block: reconstruct its original message bytes to an artifact file (default, cache-safe) or reactivate it inline in context.",
+    label: "Unfold",
+    description:
+      "Unfold a folded block: reconstruct its original message bytes to an artifact file (default, cache-safe) or reactivate it inline in context.",
     parameters: t.Object({
       id: t.String({ description: 'Block id to unfold, e.g. "b7"' }),
       mode: t.Optional(
@@ -95,121 +122,152 @@ export function registerTools(api: ExtensionAPI, getRuntime: (ctx?: ExtensionCon
     }),
     loadMode: "discoverable",
     approval: "read",
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const rt = getRuntime(_ctx);
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const rt = getRuntime(ctx);
       rt.sync();
       if (params.mode === "inline") {
         const result = rt.engine.executeUnfold(params.id);
         if (!result.ok) return textResult(`error: ${result.error}`, { summary: result.error, rows: [] }, true);
+        onMutation?.("unfold", { id: params.id, mode: "inline" }, ctx);
         return textResult(`block ${params.id} unfolded inline · ${result.refs.length} refs reactivated`, {
-          summary: `unfolded ${params.id} inline`,
+          summary: `${result.refs.length} refs reactivated inline`,
           rows: result.refs,
         });
       }
       const result = await rt.engine.unfoldArtifact(params.id);
       if (!result.ok) return textResult(`error: ${result.error}`, { summary: result.error, rows: [] }, true);
+      onMutation?.("unfold", { id: params.id, mode: "file", path: result.path }, ctx);
       return textResult(`block ${params.id} written to ${result.path}\n${result.toc}`, {
-        summary: `artifact: ${result.path}`,
+        summary: `artifact ${result.path}`,
         rows: result.refs,
       });
     },
-    describeResult(result) {
-      return unfoldResultView(result.details as Detail | undefined, Boolean(result.isError));
+    describeCall(args) {
+      return unfoldCallView((args ?? {}) as { id?: string; mode?: string });
     },
-    renderCall(args, _options, theme) {
-      const a = args as { id: string; mode?: string };
-      return plainFoldCard(theme, "unfold", [`${a.id}${a.mode ? ` · ${a.mode}` : ""}`]);
+    describeResult(result, _options, args) {
+      const a = (args ?? {}) as { id?: string };
+      return unfoldResultView(result, result.details as ToolDetail | undefined, Boolean(result.isError), a.id);
     },
-    renderResult(result, _options, theme) {
-      const d = result.details as Detail | undefined;
-      return plainFoldCard(
-        theme,
-        result.isError ? "unfold failed" : "unfold",
-        [d?.summary ?? "", ...(d?.rows ?? [])].filter((s) => s.length > 0),
-        result.isError ? "error" : "success",
-      );
+    renderCall(args, options, uiTheme) {
+      const a = (args ?? {}) as { id?: string; mode?: string };
+      return renderInlineToolCall("Unfold", a.id, [], options, uiTheme, [a.mode ?? "file"]);
+    },
+    renderResult(result, options, uiTheme, args) {
+      const a = (args ?? {}) as { id?: string };
+      return renderInlineToolResult("Unfold", "context.compaction", result, options, uiTheme, a.id);
     },
   });
 
-  api.registerTool({
+  registerInlineTool(api, {
     name: "fold_search",
-    label: "fold_search",
-    description: 'Search folded block history (topics + summaries) with full-text ranking. Supports "tier:" and "session:" filter prefixes.',
+    label: "Fold Search",
+    description:
+      'Search folded block history (topics + summaries) with full-text ranking. Supports "tier:" and "session:" filter prefixes.',
     parameters: t.Object({
       query: t.String({ description: "FTS5 search terms" }),
       limit: t.Optional(t.Integer({ description: "Max hits (default 10)" })),
     }),
     loadMode: "discoverable",
     approval: "read",
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const rt = getRuntime(_ctx);
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const rt = getRuntime(ctx);
       rt.sync();
       const hits = rt.engine.search(params.query, params.limit ?? 10);
       return textResult(formatSearchHits(hits), {
-        summary: `${hits.length} hit(s) for ${params.query}`,
-        rows: hits.map((h) => `${h.blockId} · tier ${h.tier} · ${h.topic}`),
+        summary: `${hits.length} hit(s)`,
+        rows: hits.map((h) => `${h.blockId} (T${h.tier}) · ${h.topic}`),
       });
     },
-    describeResult(result) {
-      return searchResultView(result.details as Detail | undefined);
+    describeCall(args) {
+      return searchCallView((args ?? {}) as { query?: string; limit?: number });
     },
-    renderCall(args, _options, theme) {
-      const a = args as { query: string };
-      return plainFoldCard(theme, "fold_search", [a.query]);
+    describeResult(result, _options, args) {
+      const a = (args ?? {}) as { query?: string };
+      return searchResultView(result, result.details as ToolDetail | undefined, Boolean(result.isError), a.query);
     },
-    renderResult(result, _options, theme) {
-      const d = result.details as Detail | undefined;
-      return plainFoldCard(theme, "fold_search", [d?.summary ?? "", ...(d?.rows ?? [])].filter((s) => s.length > 0));
+    renderCall(args, options, uiTheme) {
+      const a = (args ?? {}) as { query?: string };
+      return renderInlineToolCall("Fold Search", a.query, [], options, uiTheme);
+    },
+    renderResult(result, options, uiTheme, args) {
+      const a = (args ?? {}) as { query?: string };
+      return renderInlineToolResult("Fold Search", "tool.webSearch", result, options, uiTheme, a.query);
     },
   });
 
-  api.registerTool({
+  registerInlineTool(api, {
     name: "fold_status",
-    label: "fold_status",
+    label: "Fold Status",
     description: "Report context occupancy, token split, growth since last fold, fold blocks, and protected zones.",
     parameters: t.Object({}),
     loadMode: "discoverable",
     approval: "read",
-    async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
-      const rt = getRuntime(_ctx);
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const rt = getRuntime(ctx);
       rt.sync();
-      const text = formatStatusReport(rt.engine.status());
-      return textResult(text, { summary: text.split("\n")[0] ?? "", rows: text.split("\n").slice(1) });
+      const st = rt.engine.status();
+      const text = formatStatusReport(st);
+      const liveBlocks = st.blocks.filter((b) => !b.superseded).length;
+      return textResult(text, {
+        summary: `${st.occupancyPct}% (${formatTokens(st.usedTokens)}/${formatTokens(st.windowTokens)}) · ${liveBlocks}b -${formatTokens(st.tokenSplit.foldedSavings)}t`,
+        kvPairs: [
+          ["Occupancy", `${st.occupancyPct}% (${formatTokens(st.usedTokens)} / ${formatTokens(st.windowTokens)})`],
+          ["Growth", `${formatTokens(st.growthSinceFold)} / ${formatTokens(st.growthStep)}`],
+          ["Compressible", `${formatTokens(st.compressibleTokens)} / ${formatTokens(st.compressibleFloor)}`],
+          ["Reclaimed", `${formatTokens(st.tokenSplit.foldedSavings)} across ${liveBlocks} live block(s)`],
+        ],
+        rows: st.blocks.map(
+          (b) => `${b.id} (T${b.tier}) ${b.coverage} · ${formatTokens(b.tokensBefore)}t → ${formatTokens(b.tokensAfter)}t · ${b.topic}${b.superseded ? " [superseded]" : ""}`,
+        ),
+      });
+    },
+    describeCall(args) {
+      return statusCallView((args ?? {}) as object);
     },
     describeResult(result) {
-      return statusResultView(result.details as Detail | undefined);
+      return statusResultView(result, result.details as ToolDetail | undefined, Boolean(result.isError));
     },
-    renderCall(_args, _options, theme) {
-      return plainFoldCard(theme, "fold_status", ["…"]);
+    renderCall(_args, options, uiTheme) {
+      return renderInlineToolCall("Fold Status", undefined, [], options, uiTheme);
     },
-    renderResult(result, _options, theme) {
-      const d = result.details as Detail | undefined;
-      return plainFoldCard(theme, "fold_status", [d?.summary ?? "", ...(d?.rows ?? [])].filter((s) => s.length > 0));
+    renderResult(result, options, uiTheme) {
+      return renderInlineToolResult("Fold Status", "tool.eval", result, options, uiTheme);
     },
   });
 
-  api.registerTool({
+  registerInlineTool(api, {
     name: "fold_cache",
-    label: "fold_cache",
+    label: "Fold Cache",
     description: "Cache-economics ledger: per-round cache hit rates, fold re-pay cost vs stable-prefix savings, breakeven.",
     parameters: t.Object({}),
     loadMode: "discoverable",
     approval: "read",
-    async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
-      const rt = getRuntime(_ctx);
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const rt = getRuntime(ctx);
       rt.sync();
-      const text = formatCacheRounds(rt.engine.cacheRounds());
-      return textResult(text, { summary: text.split("\n")[0] ?? "", rows: text.split("\n").slice(1) });
+      const rounds = rt.engine.cacheRounds();
+      const text = formatCacheRounds(rounds);
+      const firstLine = text.split("\n")[0] ?? "no cache rounds";
+      return textResult(text, {
+        summary: firstLine,
+        rows: rounds.slice(-8).map((r, i) => {
+          const hit = r.totalIn > 0 ? `${Math.round((r.cacheRead / r.totalIn) * 100)}%` : "—";
+          return `#${rounds.length - Math.min(8, rounds.length) + i + 1} · in ${formatTokens(r.totalIn)} · hit ${hit}${r.foldEventId ? ` · ${r.foldEventId}` : ""}`;
+        }),
+      });
+    },
+    describeCall(args) {
+      return cacheCallView((args ?? {}) as object);
     },
     describeResult(result) {
-      return cacheResultView(result.details as Detail | undefined);
+      return cacheResultView(result, result.details as ToolDetail | undefined, Boolean(result.isError));
     },
-    renderCall(_args, _options, theme) {
-      return plainFoldCard(theme, "fold_cache", ["…"]);
+    renderCall(_args, options, uiTheme) {
+      return renderInlineToolCall("Fold Cache", undefined, [], options, uiTheme);
     },
-    renderResult(result, _options, theme) {
-      const d = result.details as Detail | undefined;
-      return plainFoldCard(theme, "fold_cache", [d?.summary ?? "", ...(d?.rows ?? [])].filter((s) => s.length > 0));
+    renderResult(result, options, uiTheme) {
+      return renderInlineToolResult("Fold Cache", "tool.eval", result, options, uiTheme);
     },
   });
 }

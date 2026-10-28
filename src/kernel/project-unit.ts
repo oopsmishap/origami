@@ -142,7 +142,8 @@ export function protectedZoneMap(
     const pinnedTurn = pinnedHeadRef !== null && m.turn === pinnedHeadTurn(bound, pinnedHeadRef);
     const kind = m.ephemeral || m.turn === activeTurn || pinnedTurn ? "protected" : foldedRefs.has(m.ref) ? "folded" : "compressible";
     if (run && run.kind === kind) {
-      run.end = m.ref;
+      if (!run.start && m.ref) run.start = m.ref;
+      if (m.ref) run.end = m.ref;
     } else {
       if (run) zones.push(run);
       run = { kind, start: m.ref, end: m.ref };

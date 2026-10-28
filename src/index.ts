@@ -1,28 +1,24 @@
 import type {
   ExtensionAPI,
-  ExtensionContext,
   ExtensionCommandContext,
+  ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
-import { settings, getAgentDir } from "@oh-my-pi/pi-coding-agent";
+import { getAgentDir, settings } from "@oh-my-pi/pi-coding-agent";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { countTokens, Encoding as NativeEncoding } from "@oh-my-pi/pi-natives";
 import { join } from "node:path";
 
-import { OrigamiRuntime, setRuntime, getRuntime } from "./runtime.ts";
-import type { HostBinding } from "./runtime.ts";
-import { openDb } from "./persist/db.ts";
-import type { OrigamiDb } from "./persist/db.ts";
 import { loadOrigamiConfig } from "./config-load.ts";
-import type { OrigamiConfig } from "./config.ts";
-import { configFromPreset } from "./config.ts";
+import { configFromPreset, type OrigamiConfig } from "./config.ts";
 import { doctrinePrompt } from "./kernel/doctrine.ts";
+import { openDb, type OrigamiDb } from "./persist/db.ts";
+import { getRuntime, OrigamiRuntime, setRuntime, type HostBinding } from "./runtime.ts";
+import { OrigamiFoldMessageComponent, type OrigamiFoldMessageDetails } from "./tools/display.ts";
 import { registerTools } from "./tools/index.ts";
-import { formatStatusChip } from "./ui/status.ts";
-import { buildWorkbenchModel } from "./ui/workbench-model.ts";
-import type { WorkbenchKeyOutcome } from "./ui/workbench-model.ts";
-import { WorkbenchComponent } from "./ui/workbench.ts";
-import { plainFoldCard } from "./tools/display.ts";
 import { startDashboardServer, type DashboardInstance } from "./ui/dashboard-server.ts";
+import { formatStatusChip } from "./ui/status.ts";
+import { buildWorkbenchModel, type WorkbenchKeyOutcome } from "./ui/workbench-model.ts";
+import { WorkbenchComponent } from "./ui/workbench.ts";
 
 const NATIVE_ENCODINGS: Readonly<Record<string, NativeEncoding>> = {
   O200kBase: NativeEncoding.O200kBase,
@@ -84,6 +80,16 @@ export default function origamiExtension(api: ExtensionAPI): void {
       projectedTokens: () => ctx.getContextUsage()?.tokens ?? 0,
       entries: () => ctx.sessionManager.getEntries(),
     };
+  }
+
+  function updateUiStatus(rt: OrigamiRuntime, ctx?: ExtensionContext | null): void {
+    const target = ctx ?? lastContext;
+    if (!target?.hasUI) return;
+    try {
+      target.ui.setStatus("origami", formatStatusChip(rt.engine.status(), target.ui.theme));
+    } catch {
+      // UI status update optional
+    }
   }
 
   function isSubagentDormant(ctx: ExtensionContext, config: OrigamiConfig): boolean {
@@ -155,16 +161,21 @@ export default function origamiExtension(api: ExtensionAPI): void {
     return entry.runtime;
   }
 
-  // 1. Register tools
-  registerTools(api, (ctx) => resolveRuntimeForTool(ctx));
+  // 1. Register inline tools + live SSE/status broadcast hook
+  registerTools(
+    api,
+    (ctx) => resolveRuntimeForTool(ctx),
+    (event, payload, ctx) => {
+      const activeRt = getRuntime();
+      if (activeRt) updateUiStatus(activeRt, ctx);
+      dashboard?.broadcast(event, payload);
+    },
+  );
 
-  // 2. Register fold message renderer
-  api.registerMessageRenderer<{ blockId?: string }>("origami:fold", (message, _options, theme) => {
+  // 2. Register first-party transcript fold divider renderer (role: omp.compaction)
+  api.registerMessageRenderer<OrigamiFoldMessageDetails>("origami:fold", (message, options) => {
     const content = typeof message.content === "string" ? message.content : "";
-    const lines = content.split("\n");
-    const header = lines[0] ?? "origami fold";
-    const rest = lines.slice(1).filter((l) => l.trim().length > 0);
-    return plainFoldCard(theme, header, rest);
+    return new OrigamiFoldMessageComponent(content, message.details, Boolean(options?.expanded));
   });
 
   // 3. Hooks
@@ -193,23 +204,31 @@ export default function origamiExtension(api: ExtensionAPI): void {
 
     const rt = entry.runtime;
     rt.sync();
+    updateUiStatus(rt, ctx);
 
-    if (ctx.hasUI) {
-      try {
-        ctx.ui.setStatus("origami", formatStatusChip(rt.engine.status()));
-      } catch {
-        // UI status update optional
-      }
-    }
-
-    const rendered = rt.engine.render(event.messages, (text: string, blockId: string, refTag?: string) => ({
-      role: "custom",
-      customType: "origami:fold",
-      content: refTag ? `${refTag} ${text}` : text,
-      display: true,
-      details: { blockId },
-      timestamp: Date.now(),
-    }));
+    const rendered = rt.engine.render(event.messages, (text: string, blockId: string, refTag?: string) => {
+      const block = rt.engine.state.tree.get(blockId);
+      const details: OrigamiFoldMessageDetails = {
+        blockId,
+        ...(block
+          ? {
+              tier: block.tier,
+              topic: block.topic,
+              coverage: block.ranges.map((r) => `${r.start}..${r.end}`).join(", "),
+              tokensBefore: block.tokensBefore,
+              tokensAfter: block.tokensAfter,
+            }
+          : {}),
+      };
+      return {
+        role: "custom",
+        customType: "origami:fold",
+        content: refTag ? `${refTag} ${text}` : text,
+        display: true,
+        details,
+        timestamp: Date.now(),
+      };
+    });
 
     const decision = rt.engine.decideNudge();
     const nudgeText = decision.text ?? rt.engine.nudgeText;
@@ -244,7 +263,11 @@ export default function origamiExtension(api: ExtensionAPI): void {
         summary: summary || "emergency archive before host compaction",
       },
     ];
-    rt.engine.executeFold({ folds: specs, tier: 1 });
+    const res = rt.engine.executeFold({ folds: specs, tier: 1 });
+    if (res.ok) {
+      updateUiStatus(rt, ctx);
+      dashboard?.broadcast("fold", res.outcome);
+    }
   });
 
   api.on("assistant_message", (event, ctx) => {
@@ -260,13 +283,16 @@ export default function origamiExtension(api: ExtensionAPI): void {
     const cacheWrite = usage.cacheWrite ?? 0;
     const totalIn = (usage.input ?? 0) + cacheRead + cacheWrite;
 
-    entry.runtime.engine.recordRound({
+    const round = {
       ts: Date.now(),
       totalIn,
       cacheRead,
       cacheWrite,
       foldEventId: null,
-    });
+    };
+    entry.runtime.engine.recordRound(round);
+    updateUiStatus(entry.runtime, ctx);
+    dashboard?.broadcast("round", round);
   });
 
   api.on("session_shutdown", (_event, ctx) => {
@@ -290,16 +316,21 @@ export default function origamiExtension(api: ExtensionAPI): void {
   });
 
   // 4. Workbench overlay
-  async function openWorkbench(ctx: ExtensionContext): Promise<void> {
+  async function openWorkbench(ctx: ExtensionContext, initialTab = 0): Promise<void> {
     if (!ctx.hasUI) return;
     const entry = getOrInitRuntime(ctx);
     const rt = entry.runtime;
-    rt.sync();
 
-    const report = rt.engine.status();
-    const rounds = rt.engine.cacheRounds();
-    const windowTokens = ctx.getContextUsage()?.contextWindow ?? 0;
-    const model = buildWorkbenchModel(report, rounds, windowTokens);
+    const buildCurrentModel = () => {
+      rt.sync();
+      const report = rt.engine.status();
+      const rounds = rt.engine.cacheRounds();
+      const windowTokens = ctx.getContextUsage()?.contextWindow ?? 0;
+      const recommended = rt.engine.recommendedRanges();
+      return buildWorkbenchModel(report, rounds, windowTokens, initialTab, 0, recommended);
+    };
+
+    const model = buildCurrentModel();
 
     await ctx.ui.custom<WorkbenchKeyOutcome>(
       (tui, _theme, _kb, done) =>
@@ -307,10 +338,22 @@ export default function origamiExtension(api: ExtensionAPI): void {
           model,
           actions: {
             model: () => model,
-            previewFold: () => rt.engine.recommendedRanges().map((r) => `${r.start}..${r.end} (${r.tokens}t)`),
-            unfoldSelected: async (id) => {
+            refresh: () => buildCurrentModel(),
+            previewFold: () =>
+              rt.engine.recommendedRanges().map((r) => `${r.start}..${r.end} (${formatStatusTokens(r.tokens)})`),
+            unfoldSelected: async (id, mode = "file") => {
+              rt.sync();
+              if (mode === "inline") {
+                const res = rt.engine.executeUnfold(id);
+                if (!res.ok) return `Unfold failed: ${res.error}`;
+                updateUiStatus(rt, ctx);
+                dashboard?.broadcast("unfold", { id, mode: "inline" });
+                return `Unfolded ${id} inline (${res.refs.length} messages reactivated)`;
+              }
               const res = await rt.engine.unfoldArtifact(id);
-              return res.ok ? `unfolded ${id} to ${res.path}` : `error: ${res.error}`;
+              if (!res.ok) return `Unfold failed: ${res.error}`;
+              dashboard?.broadcast("unfold", { id, mode: "file", path: res.path });
+              return `Unfolded ${id} → ${res.path}`;
             },
             drill: (id) => {
               const block = rt.engine.state.tree.get(id);
@@ -333,33 +376,54 @@ export default function origamiExtension(api: ExtensionAPI): void {
       { overlay: true },
     );
   }
+
   async function openWebDashboard(ctx: ExtensionContext): Promise<void> {
     if (!dashboard) {
       dashboard = await startDashboardServer({
         getRuntime: () => getRuntime(),
         openBrowser: true,
       });
-      if (ctx.hasUI) ctx.ui.notify(`origami dashboard running at ${dashboard.url}`, "info");
+      if (ctx.hasUI) ctx.ui.notify(`Origami dashboard running at ${dashboard.url}`, "info");
     } else {
       dashboard.broadcast("refresh", {});
+      if (ctx.hasUI) ctx.ui.notify(`Origami dashboard live at ${dashboard.url}`, "info");
     }
   }
 
   api.registerCommand("fold", {
-    description: "Open the origami fold workbench (or '/fold web' for browser dashboard)",
+    description: "Open the Origami context workbench ('/fold trajectory' for graph, '/fold web' for browser UI)",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
-      if (args.trim() === "web") {
+      const sub = args.trim().toLowerCase();
+      if (sub === "web" || sub === "dashboard") {
         await openWebDashboard(ctx);
         return;
       }
-      await openWorkbench(ctx);
+      if (sub === "trajectory" || sub === "graph" || sub === "chart") {
+        await openWorkbench(ctx, 1);
+        return;
+      }
+      if (sub === "blocks") {
+        await openWorkbench(ctx, 2);
+        return;
+      }
+      if (sub === "zones") {
+        await openWorkbench(ctx, 3);
+        return;
+      }
+      await openWorkbench(ctx, 0);
     },
   });
 
   api.registerShortcut("alt+f", {
-    description: "Open the origami fold workbench",
+    description: "Open the Origami context workbench",
     handler: async (ctx: ExtensionContext) => {
-      await openWorkbench(ctx);
+      await openWorkbench(ctx, 0);
     },
   });
+}
+
+function formatStatusTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`;
+  return `${tokens}t`;
 }

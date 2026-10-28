@@ -55,15 +55,49 @@ export interface FoldOutcome {
 export type FoldError = { ok: false; error: string; foldIndex: number };
 export type FoldResult = { ok: true; outcome: FoldOutcome } | FoldError;
 
+export interface StatusBlockRow {
+  id: string;
+  tier: number;
+  coverage: string;
+  tokens: number;
+  tokensBefore: number;
+  tokensAfter: number;
+  reclaimed: number;
+  topic: string;
+  summary: string;
+  children: string[];
+  superseded: boolean;
+  createdAt: number;
+}
+
+export interface StatusZoneRow {
+  kind: string;
+  start: string;
+  end: string;
+  tokens: number;
+  messages: number;
+}
+
 export interface StatusReport {
   occupancyPct: number;
-  tokenSplit: { system: number; tools: number; live: number; foldedSavings: number };
+  windowTokens: number;
+  usedTokens: number;
+  projectedTokens: number;
+  tokenSplit: {
+    overhead: number;
+    system: number;
+    conversation: number;
+    tools: number;
+    summaries: number;
+    live: number;
+    foldedSavings: number;
+  };
   growthSinceFold: number;
   growthStep: number;
   compressibleTokens: number;
   compressibleFloor: number;
-  blocks: { id: string; tier: number; coverage: string; tokens: number; topic: string; superseded: boolean }[];
-  zones: { kind: string; start: string; end: string }[];
+  blocks: StatusBlockRow[];
+  zones: StatusZoneRow[];
   folded: number;
   live: number;
   nudgeKind: string;
@@ -375,27 +409,92 @@ export class OrigamiEngine {
 
   status(): StatusReport {
     const bound = this.state.bound;
-    const rows = this.messageRows();
-    const coverage = foldCoverageStats(bound, this.state.foldedRefs());
-    const liveTokens = rows
-      .filter((r) => !r.ephemeral && !this.state.foldedRefs().has(r.ref) && r.turn < this.activeTurn)
-      .reduce((s, r) => s + r.tokens, 0);
+    const foldedRefs = this.state.foldedRefs();
+    const coverage = foldCoverageStats(bound, foldedRefs);
+
     let systemTokens = 0;
+    let conversationTokens = 0;
     let toolTokens = 0;
     for (const m of bound) {
       const tokens = this.state.ledger.countMessage(m);
-      if (m.ephemeral) systemTokens += tokens;
-      else if (m.role === "toolResult") toolTokens += tokens;
+      if (m.ephemeral) {
+        systemTokens += tokens;
+      } else if (!foldedRefs.has(m.ref)) {
+        if (m.role === "toolResult") toolTokens += tokens;
+        else conversationTokens += tokens;
+      }
     }
-    const foldedSavings = this.state.tree
-      .live()
-      .reduce((s, b) => s + Math.max(0, b.tokensBefore - b.tokensAfter), 0);
-    const window = this.host.windowTokens() || 1;
+
+    const liveBlocks = this.state.tree.live();
+    const summaryTokens = liveBlocks.reduce((s, b) => s + b.tokensAfter, 0);
+    const foldedSavings = liveBlocks.reduce((s, b) => s + Math.max(0, b.tokensBefore - b.tokensAfter), 0);
+    const liveTokens = conversationTokens + toolTokens;
+    const renderedBoundTokens = systemTokens + liveTokens + summaryTokens;
+
+    const windowTokens = Math.max(0, this.host.windowTokens());
+    const projectedTokens = Math.max(0, this.host.projectedTokens());
+    const usedTokens = projectedTokens > 0 ? projectedTokens : renderedBoundTokens;
+    const overheadTokens = Math.max(0, usedTokens - renderedBoundTokens);
+    const occupancyPct =
+      windowTokens > 0 ? Math.min(100, Math.round((usedTokens / windowTokens) * 100)) : 0;
+
+    const rawZones = protectedZoneMap(bound, this.activeTurn, foldedRefs, this.pinnedHeadRef);
+    const zones: StatusZoneRow[] = rawZones.map((z) => {
+      const validStart = /^m\d{5,}$/.test(z.start);
+      const validEnd = /^m\d{5,}$/.test(z.end);
+      if (!validStart && !validEnd) {
+        const ephCount = bound.filter((m) => m.ephemeral).length;
+        return {
+          kind: z.kind,
+          start: "sys",
+          end: "sys",
+          tokens: systemTokens,
+          messages: ephCount,
+        };
+      }
+      const startRef = validStart ? z.start : z.end;
+      const endRef = validEnd ? z.end : z.start;
+      const startNum = parseRef(startRef);
+      const endNum = parseRef(endRef);
+      let msgTokens = 0;
+      let messages = 0;
+      for (const m of bound) {
+        if (m.ephemeral || !/^m\d{5,}$/.test(m.ref)) continue;
+        const n = parseRef(m.ref);
+        if (n >= startNum && n <= endNum) {
+          messages++;
+          msgTokens += this.state.ledger.countMessage(m);
+        }
+      }
+      let tokens = msgTokens;
+      if (z.kind === "folded") {
+        const summaryInZone = liveBlocks
+          .filter((b) =>
+            b.ranges.some((r) => parseRef(r.start) <= endNum && parseRef(r.end) >= startNum),
+          )
+          .reduce((s, b) => s + b.tokensAfter, 0);
+        tokens = summaryInZone > 0 ? summaryInZone : msgTokens;
+      }
+      return {
+        kind: z.kind,
+        start: startRef,
+        end: endRef,
+        tokens,
+        messages,
+      };
+    });
+
     return {
-      occupancyPct: Math.min(100, Math.round((this.host.projectedTokens() / window) * 100)),
+      occupancyPct,
+      windowTokens,
+      usedTokens,
+      projectedTokens,
       tokenSplit: {
+        overhead: overheadTokens,
         system: systemTokens,
+        conversation: conversationTokens,
         tools: toolTokens,
+        summaries: summaryTokens,
         live: liveTokens,
         foldedSavings,
       },
@@ -408,10 +507,16 @@ export class OrigamiEngine {
         tier: b.tier,
         coverage: formatCoverage(b.ranges),
         tokens: b.tokensBefore,
+        tokensBefore: b.tokensBefore,
+        tokensAfter: b.tokensAfter,
+        reclaimed: Math.max(0, b.tokensBefore - b.tokensAfter),
         topic: b.topic,
+        summary: b.summary,
+        children: [...b.children],
         superseded: b.superseded,
+        createdAt: b.createdAt,
       })),
-      zones: protectedZoneMap(bound, this.activeTurn, this.state.foldedRefs(), this.pinnedHeadRef),
+      zones,
       folded: coverage.folded,
       live: coverage.live,
       nudgeKind: this.lastNudge.kind ?? "none",

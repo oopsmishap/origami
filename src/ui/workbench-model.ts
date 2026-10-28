@@ -1,38 +1,48 @@
-import type { CacheRound, StatusReport } from "../engine.ts";
+import type { CacheRound, StatusBlockRow, StatusReport, StatusZoneRow } from "../engine.ts";
+import type { NudgeRange } from "../kernel/nudge.ts";
 import { formatTokens } from "../kernel/nudge.ts";
+import { buildTrajectoryData, type TrajectoryData } from "./trajectory.ts";
 
-export interface BlockRow {
-  id: string;
-  tier: number;
-  coverage: string;
+export type BlockRow = StatusBlockRow;
+export type ZoneRow = StatusZoneRow;
+
+export const WORKBENCH_TABS = ["Overview", "Trajectory", "Blocks", "Zones"] as const;
+export const WORKBENCH_TAB_IDS = ["overview", "trajectory", "blocks", "zones"] as const;
+
+export interface WorkbenchCategory {
+  id: "overhead" | "conversation" | "tools" | "summaries" | "free";
+  label: string;
   tokens: number;
-  topic: string;
-  superseded: boolean;
-}
-
-export interface ZoneRow {
-  kind: string;
-  start: string;
-  end: string;
+  pct: number;
+  color: "syntaxKeyword" | "accent" | "warning" | "success" | "dim";
+  symbol: "context.content" | "context.messages" | "context.buffer" | "context.compaction" | "context.free";
 }
 
 export interface WorkbenchModel {
   tab: number;
   selected: number;
+  drillBlockId: string | null;
+  scroll: number;
+  showPreview: boolean;
+  statusMessage: string | null;
   occupancyPct: number;
   windowTokens: number;
+  usedTokens: number;
+  freeTokens: number;
   liveTokens: number;
   foldedSavings: number;
   growthSinceFold: number;
   growthStep: number;
   compressibleTokens: number;
   compressibleFloor: number;
+  tokenSplit: StatusReport["tokenSplit"];
+  categories: WorkbenchCategory[];
   blocks: BlockRow[];
   zones: ZoneRow[];
   rounds: CacheRound[];
+  recommended: NudgeRange[];
+  trajectory: TrajectoryData;
 }
-
-export const WORKBENCH_TABS = ["Blocks", "Cache", "Zones"] as const;
 
 export function buildWorkbenchModel(
   report: StatusReport,
@@ -40,90 +50,172 @@ export function buildWorkbenchModel(
   windowTokens: number,
   tab = 0,
   selected = 0,
+  recommended: readonly NudgeRange[] = [],
 ): WorkbenchModel {
-  const liveTokens = report.tokenSplit.live + report.tokenSplit.tools + report.tokenSplit.system;
+  const effectiveWindow = Math.max(0, windowTokens || report.windowTokens || 0);
+  const usedTokens = report.usedTokens;
+  const freeTokens = effectiveWindow > 0 ? Math.max(0, effectiveWindow - usedTokens) : 0;
+  const denom = effectiveWindow > 0 ? effectiveWindow : Math.max(1, usedTokens);
+  const pctOf = (v: number) => Math.round((v / denom) * 1000) / 10;
+
+  const sysAndSchema = report.tokenSplit.overhead + report.tokenSplit.system;
+  const categories: WorkbenchCategory[] = [
+    {
+      id: "overhead",
+      label: "System & Tool Schemas",
+      tokens: sysAndSchema,
+      pct: pctOf(sysAndSchema),
+      color: "syntaxKeyword",
+      symbol: "context.content",
+    },
+    {
+      id: "conversation",
+      label: "Conversation",
+      tokens: report.tokenSplit.conversation,
+      pct: pctOf(report.tokenSplit.conversation),
+      color: "accent",
+      symbol: "context.messages",
+    },
+    {
+      id: "tools",
+      label: "Tool Outputs",
+      tokens: report.tokenSplit.tools,
+      pct: pctOf(report.tokenSplit.tools),
+      color: "warning",
+      symbol: "context.buffer",
+    },
+    {
+      id: "summaries",
+      label: "Fold Summaries",
+      tokens: report.tokenSplit.summaries,
+      pct: pctOf(report.tokenSplit.summaries),
+      color: "success",
+      symbol: "context.compaction",
+    },
+    {
+      id: "free",
+      label: "Free Window",
+      tokens: freeTokens,
+      pct: pctOf(freeTokens),
+      color: "dim",
+      symbol: "context.free",
+    },
+  ];
+
+  const trajectory = buildTrajectoryData({
+    rounds,
+    blocks: report.blocks,
+    windowTokens: effectiveWindow,
+    baselineTokens: sysAndSchema,
+  });
+
   return {
-    tab,
-    selected: Math.max(0, Math.min(selected, report.blocks.length - 1)),
+    tab: Math.max(0, Math.min(tab, WORKBENCH_TABS.length - 1)),
+    selected: report.blocks.length > 0 ? Math.max(0, Math.min(selected, report.blocks.length - 1)) : 0,
+    drillBlockId: null,
+    scroll: 0,
+    showPreview: false,
+    statusMessage: null,
     occupancyPct: report.occupancyPct,
-    windowTokens,
-    liveTokens,
+    windowTokens: effectiveWindow,
+    usedTokens,
+    freeTokens,
+    liveTokens: usedTokens,
     foldedSavings: report.tokenSplit.foldedSavings,
     growthSinceFold: report.growthSinceFold,
     growthStep: report.growthStep,
     compressibleTokens: report.compressibleTokens,
     compressibleFloor: report.compressibleFloor,
+    tokenSplit: report.tokenSplit,
+    categories,
     blocks: report.blocks,
     zones: report.zones,
-    rounds: rounds.slice(-20),
+    rounds: [...rounds],
+    recommended: [...recommended],
+    trajectory,
   };
 }
 
-function band(model: WorkbenchModel): string {
-  const window = model.windowTokens || 1;
-  const live = Math.round((model.liveTokens / window) * 100);
-  const folded = Math.round((model.foldedSavings / window) * 100);
-  const free = Math.max(0, 100 - live - folded);
-  return `context band   live ${live}% · folded ${folded}% · free ${free}%`;
-}
+export function syncWorkbenchModel(target: WorkbenchModel, next: WorkbenchModel): void {
+  const prevTab = target.tab;
+  const prevSelectedId = target.blocks[target.selected]?.id;
+  const prevDrill = target.drillBlockId;
+  const prevScroll = target.scroll;
+  const prevPreview = target.showPreview;
+  const prevStatus = target.statusMessage;
 
-function blocksLines(model: WorkbenchModel): string[] {
-  const lines: string[] = [];
-  for (let i = 0; i < model.blocks.length; i++) {
-    const b = model.blocks[i]!;
-    const marker = i === model.selected ? "▶ " : "  ";
-    const dim = b.superseded ? " (superseded)" : "";
-    lines.push(`${marker}${b.id}  tier ${b.tier}  ${b.coverage}  ${formatTokens(b.tokens)}  ${b.topic}${dim}`);
-  }
-  if (lines.length === 0) lines.push("  (no fold blocks yet)");
-  return lines;
-}
+  Object.assign(target, next);
+  target.tab = prevTab;
+  target.showPreview = prevPreview;
+  target.statusMessage = prevStatus;
 
-function cacheLines(model: WorkbenchModel): string[] {
-  const lines = ["ts              total_in   cache_read  cache_write  fold"];
-  for (const r of model.rounds) {
-    lines.push(
-      `${new Date(r.ts).toISOString().slice(11, 19)}  ${String(r.totalIn).padStart(8)}  ` +
-        `${String(r.cacheRead).padStart(10)}  ${String(r.cacheWrite).padStart(11)}  ${r.foldEventId ?? ""}`,
-    );
+  if (prevSelectedId) {
+    const idx = target.blocks.findIndex((b) => b.id === prevSelectedId);
+    target.selected = idx >= 0 ? idx : Math.max(0, Math.min(target.selected, target.blocks.length - 1));
   }
-  if (model.rounds.length === 0) lines.push("(no rounds recorded yet)");
-  const last = model.rounds[model.rounds.length - 1];
-  if (last && last.totalIn > 0) {
-    const hit = Math.round((last.cacheRead / last.totalIn) * 100);
-    lines.push(`latest cache hit rate ${hit}%`);
+  if (prevDrill && target.blocks.some((b) => b.id === prevDrill)) {
+    target.drillBlockId = prevDrill;
+    target.scroll = prevScroll;
+  } else {
+    target.drillBlockId = null;
+    target.scroll = 0;
   }
-  return lines;
-}
-
-function zonesLines(model: WorkbenchModel): string[] {
-  const lines: string[] = [];
-  for (const z of model.zones) {
-    lines.push(`${z.kind.padEnd(12)} ${z.start}..${z.end}`);
-  }
-  if (lines.length === 0) lines.push("  (no zones)");
-  return lines;
 }
 
 export function workbenchLines(model: WorkbenchModel): string[] {
+  const winStr =
+    model.windowTokens > 0
+      ? `${formatTokens(model.usedTokens)} / ${formatTokens(model.windowTokens)} (${model.occupancyPct}%)`
+      : `${formatTokens(model.usedTokens)} tokens`;
   const growth = `${formatTokens(model.growthSinceFold)}↑/${formatTokens(model.growthStep)}`;
+  const liveBlocks = model.blocks.filter((b) => !b.superseded).length;
   const lines = [
-    band(model),
-    `growth ${growth}   compressible ${formatTokens(model.compressibleTokens)} / floor ${formatTokens(model.compressibleFloor)}`,
+    `window ${winStr} · reclaimed ${formatTokens(model.foldedSavings)} across ${liveBlocks} block(s)`,
+    `growth ${growth} · compressible ${formatTokens(model.compressibleTokens)} / floor ${formatTokens(model.compressibleFloor)}`,
     "",
   ];
-  if (model.tab === 0) lines.push(...blocksLines(model));
-  else if (model.tab === 1) lines.push(...cacheLines(model));
-  else lines.push(...zonesLines(model));
-  lines.push("");
-  lines.push("[←/→] tab  [↑/↓] select  [f] fold preview  [u] unfold  [Enter] drill  [Esc] close");
+  if (model.tab === 0) {
+    for (const c of model.categories) {
+      lines.push(`  ${c.label.padEnd(24)} ${formatTokens(c.tokens).padStart(8)}  ${c.pct.toFixed(1).padStart(5)}%`);
+    }
+  } else if (model.tab === 1) {
+    if (model.trajectory.lines.length === 0) {
+      lines.push("  (no request rounds recorded yet)");
+    } else {
+      for (const l of model.trajectory.lines.slice(-12)) {
+        const hit = l.hitPct != null ? `${l.hitPct.toFixed(1)}%` : "—";
+        lines.push(`  #${l.seq}  in ${formatTokens(l.input)}  cached ${formatTokens(l.cached)}  hit ${hit}`);
+      }
+    }
+  } else if (model.tab === 2) {
+    if (model.blocks.length === 0) {
+      lines.push("  (no fold blocks yet)");
+    } else {
+      for (let i = 0; i < model.blocks.length; i++) {
+        const b = model.blocks[i]!;
+        const marker = i === model.selected ? "▶ " : "  ";
+        lines.push(
+          `${marker}${b.id}  T${b.tier}  ${b.coverage}  ${formatTokens(b.tokensBefore)}→${formatTokens(b.tokensAfter)}  ${b.topic}${b.superseded ? " [superseded]" : ""}`,
+        );
+      }
+    }
+  } else {
+    if (model.zones.length === 0) {
+      lines.push("  (no zones)");
+    } else {
+      for (const z of model.zones) {
+        lines.push(`  ${z.kind.padEnd(14)} ${z.start}..${z.end}  ${formatTokens(z.tokens)}t`);
+      }
+    }
+  }
   return lines;
 }
 
 export interface WorkbenchActions {
   model(): WorkbenchModel;
+  refresh?(): WorkbenchModel;
   previewFold(): string[];
-  unfoldSelected(id: string): Promise<string>;
+  unfoldSelected(id: string, mode?: "file" | "inline"): Promise<string>;
   drill(id: string): string[];
 }
 
@@ -131,11 +223,48 @@ export interface WorkbenchKeyOutcome {
   handled: boolean;
   close?: boolean;
   message?: string;
+  pendingUnfold?: { id: string; mode: "file" | "inline" };
 }
 
-export function handleWorkbenchKey(model: WorkbenchModel, data: string, actions: WorkbenchActions): WorkbenchKeyOutcome {
+export function handleWorkbenchKey(
+  model: WorkbenchModel,
+  data: string,
+  actions: WorkbenchActions,
+): WorkbenchKeyOutcome {
+  // In-overlay block detail sub-view navigation
+  if (model.drillBlockId !== null) {
+    if (data === "\x1b" || data === "\x7f" || data === "\b" || data === "q" || data === "\r" || data === "\n") {
+      model.drillBlockId = null;
+      model.scroll = 0;
+      return { handled: true };
+    }
+    if (data === "\x1b[A" || data === "k") {
+      model.scroll = Math.max(0, model.scroll - 1);
+      return { handled: true };
+    }
+    if (data === "\x1b[B" || data === "j") {
+      model.scroll += 1;
+      return { handled: true };
+    }
+    if (data === "\x1b[5~") {
+      model.scroll = Math.max(0, model.scroll - 8);
+      return { handled: true };
+    }
+    if (data === "\x1b[6~") {
+      model.scroll += 8;
+      return { handled: true };
+    }
+    if (data === "u") {
+      return { handled: true, pendingUnfold: { id: model.drillBlockId, mode: "file" } };
+    }
+    if (data === "i") {
+      return { handled: true, pendingUnfold: { id: model.drillBlockId, mode: "inline" } };
+    }
+    return { handled: false };
+  }
+
   if (data === "\x1b" || data === "q") return { handled: true, close: true };
-  if (data === "\x1b[D" || data === "h") {
+  if (data === "\x1b[D" || data === "h" || data === "\x1b[Z") {
     model.tab = (model.tab + WORKBENCH_TABS.length - 1) % WORKBENCH_TABS.length;
     return { handled: true };
   }
@@ -143,30 +272,62 @@ export function handleWorkbenchKey(model: WorkbenchModel, data: string, actions:
     model.tab = (model.tab + 1) % WORKBENCH_TABS.length;
     return { handled: true };
   }
-  if (data === "1" || data === "2" || data === "3") {
+  if (data === "1" || data === "2" || data === "3" || data === "4") {
     model.tab = Number(data) - 1;
     return { handled: true };
   }
   if (data === "\x1b[A" || data === "k") {
-    model.selected = Math.max(0, model.selected - 1);
+    if (model.blocks.length > 0) {
+      model.selected = Math.max(0, model.selected - 1);
+    }
     return { handled: true };
   }
   if (data === "\x1b[B" || data === "j") {
-    model.selected = Math.min(model.blocks.length - 1, model.selected + 1);
+    if (model.blocks.length > 0) {
+      model.selected = Math.min(model.blocks.length - 1, model.selected + 1);
+    }
     return { handled: true };
   }
   if (data === "f") {
-    return { handled: true, message: actions.previewFold().join("\n") };
+    model.showPreview = !model.showPreview;
+    if (model.showPreview) {
+      model.tab = 0;
+      const ranges = actions.previewFold();
+      model.statusMessage =
+        ranges.length > 0
+          ? `Fold preview: ${ranges.slice(0, 3).join(", ")}${ranges.length > 3 ? ` (+${ranges.length - 3} more)` : ""}`
+          : "No compressible ranges above floor yet.";
+    } else {
+      model.statusMessage = null;
+    }
+    return { handled: true };
   }
-  if (data === "u") {
+  if (data === "u" || data === "i") {
     const block = model.blocks[model.selected];
-    if (!block) return { handled: true, message: "no block selected" };
-    return { handled: true, message: `unfold ${block.id} requested` };
+    if (!block) {
+      model.statusMessage = "No fold block selected.";
+      return { handled: true };
+    }
+    const mode = data === "i" ? "inline" : "file";
+    if (mode === "inline" && block.superseded) {
+      model.statusMessage = `Block ${block.id} is already superseded/unfolded.`;
+      return { handled: true };
+    }
+    return { handled: true, pendingUnfold: { id: block.id, mode } };
   }
   if (data === "\r" || data === "\n") {
     const block = model.blocks[model.selected];
-    if (!block) return { handled: true, message: "no block selected" };
-    return { handled: true, message: actions.drill(block.id).join("\n") };
+    if (!block) {
+      if (model.tab !== 2) {
+        model.tab = 2;
+        return { handled: true };
+      }
+      model.statusMessage = "No fold block selected.";
+      return { handled: true };
+    }
+    model.drillBlockId = block.id;
+    model.scroll = 0;
+    return { handled: true };
   }
   return { handled: false };
 }

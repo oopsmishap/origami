@@ -1,7 +1,7 @@
 import type { Server } from "bun";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
-import type { OrigamiRuntime } from "../runtime.ts";
 import { openDb } from "../persist/db.ts";
+import type { OrigamiRuntime } from "../runtime.ts";
 
 export interface DashboardServerOptions {
   port?: number;
@@ -63,7 +63,6 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
           const path = url.pathname;
           const rt = opts.getRuntime();
 
-          // CORS headers for local tools
           const corsHeaders: Record<string, string> = {
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -102,38 +101,85 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
             if (!rt) return Response.json({ error: "no active session" }, { status: 503, headers: corsHeaders });
             rt.sync();
             const report = rt.engine.status();
+            const recommended = rt.engine.recommendedRanges();
             return Response.json(
               {
                 sessionId: rt.engine.sessionId,
-                windowTokens: rt.engine.windowTokens,
-                liveTokens: report.tokenSplit.live,
+                liveTokens: report.usedTokens,
+                conversationTokens: report.tokenSplit.live,
+                baselineTokens: report.tokenSplit.overhead + report.tokenSplit.system,
                 savedTokens: report.tokenSplit.foldedSavings,
+                recommended,
                 ...report,
               },
               { headers: corsHeaders },
             );
           }
 
-          // 3. Blocks API
+          // 3. Blocks API (merged SQLite + live fold tree state)
           if (path === "/api/blocks") {
+            const ownDb = !rt?.db;
             const db = rt?.db ?? openDb(`${getAgentDir()}/origami.db`);
-            const sessionId = url.searchParams.get("session") || rt?.engine.sessionId || "";
-            const blocks = sessionId ? db.blocksForSession(sessionId) : [];
-            return Response.json(blocks, { headers: corsHeaders });
+            try {
+              const sessionId = url.searchParams.get("session") || rt?.engine.sessionId || "";
+              const dbBlocks = sessionId ? db.blocksForSession(sessionId) : [];
+
+              if (rt && sessionId === rt.engine.sessionId) {
+                rt.sync();
+                const treeMap = new Map(rt.engine.state.tree.all().map((b) => [b.id, b]));
+                const merged = dbBlocks.map((row) => {
+                  const live = treeMap.get(row.block_id);
+                  treeMap.delete(row.block_id);
+                  return {
+                    ...row,
+                    coverage: live ? live.ranges.map((r) => `${r.start}..${r.end}`).join(", ") : "",
+                    children: live ? [...live.children] : [],
+                    superseded: live ? live.superseded : false,
+                  };
+                });
+                for (const leftover of treeMap.values()) {
+                  merged.push({
+                    session_id: sessionId,
+                    block_id: leftover.id,
+                    tier: leftover.tier,
+                    topic: leftover.topic,
+                    summary: leftover.summary,
+                    body: `${leftover.topic}\n${leftover.summary}`,
+                    tokens_before: leftover.tokensBefore,
+                    tokens_after: leftover.tokensAfter,
+                    created_at: leftover.createdAt,
+                    coverage: leftover.ranges.map((r) => `${r.start}..${r.end}`).join(", "),
+                    children: [...leftover.children],
+                    superseded: leftover.superseded,
+                  });
+                }
+                merged.sort((a, b) => a.created_at - b.created_at);
+                return Response.json(merged, { headers: corsHeaders });
+              }
+
+              return Response.json(dbBlocks, { headers: corsHeaders });
+            } finally {
+              if (ownDb) db.close();
+            }
           }
 
           // 4. Cache Rounds API
           if (path === "/api/rounds") {
+            const ownDb = !rt?.db;
             const db = rt?.db ?? openDb(`${getAgentDir()}/origami.db`);
-            const sessionId = url.searchParams.get("session") || rt?.engine.sessionId || "";
-            const rounds = sessionId ? db.roundsForSession(sessionId) : [];
-            return Response.json(rounds, { headers: corsHeaders });
+            try {
+              const sessionId = url.searchParams.get("session") || rt?.engine.sessionId || "";
+              const rounds = sessionId ? db.roundsForSession(sessionId) : [];
+              return Response.json(rounds, { headers: corsHeaders });
+            } finally {
+              if (ownDb) db.close();
+            }
           }
 
           // 5. Search API
           if (path === "/api/search") {
             const q = url.searchParams.get("q") ?? "";
-            const limit = Number.parseInt(url.searchParams.get("limit") ?? "15", 10);
+            const limit = Number.parseInt(url.searchParams.get("limit") ?? "20", 10);
             if (!rt) return Response.json([], { headers: corsHeaders });
             const hits = rt.engine.search(q, limit);
             return Response.json(hits, { headers: corsHeaders });
@@ -142,6 +188,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
           // 6. Action: Unfold
           if (path === "/api/unfold" && req.method === "POST") {
             if (!rt) return Response.json({ error: "no active session" }, { status: 503, headers: corsHeaders });
+            rt.sync();
             const body = (await req.json()) as { id: string; mode?: "file" | "inline" };
             if (body.mode === "inline") {
               const res = rt.engine.executeUnfold(body.id);
@@ -156,6 +203,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
           // 7. Action: Manual Fold
           if (path === "/api/fold" && req.method === "POST") {
             if (!rt) return Response.json({ error: "no active session" }, { status: 503, headers: corsHeaders });
+            rt.sync();
             const body = (await req.json()) as { range: string; topic: string; summary: string; tier?: 1 | 2 | 3 };
             const res = rt.engine.executeFold({
               folds: [{ range: body.range, topic: body.topic, summary: body.summary }],
@@ -211,543 +259,1715 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
 
 function renderDashboardHtml(): string {
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Origami Context Dashboard</title>
+  <title>Origami Context Dashboard · oh-my-pi</title>
   <style>
     :root {
-      --bg: #0d1117;
-      --surface: #161b22;
-      --surface-hover: #1f242c;
-      --border: #30363d;
-      --fg: #c9d1d9;
-      --fg-bright: #f0f6fc;
-      --muted: #8b949e;
-      --accent: #58a6ff;
-      --accent-dim: rgba(88, 166, 255, 0.15);
-      --success: #3fb950;
-      --warning: #d29922;
-      --error: #f85149;
-      --tier1: #388bfd;
-      --tier2: #a371f7;
-      --tier3: #f0883e;
-      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-      --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --bg-page: #0a0a0f;
+      --bg-surface: #111118;
+      --bg-elevated: #16161e;
+      --bg-hover: #1c1c26;
+      --border-subtle: rgba(255, 255, 255, 0.06);
+      --border-default: rgba(255, 255, 255, 0.10);
+      --border-strong: rgba(255, 255, 255, 0.18);
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent: #06b6d4;
+      --accent-cyan: #06b6d4;
+      --accent-violet: #8b5cf6;
+      --accent-pink: #ec4899;
+      --accent-green: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-red: #ef4444;
+      --border: rgba(255, 255, 255, 0.08);
+      --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.35);
+      --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+    }
+
+    html[data-theme="light"] {
+      --bg-page: #f8fafc;
+      --bg-surface: #ffffff;
+      --bg-elevated: #f1f5f9;
+      --bg-hover: #e2e8f0;
+      --border-subtle: rgba(15, 23, 42, 0.06);
+      --border-default: rgba(15, 23, 42, 0.12);
+      --border-strong: rgba(15, 23, 42, 0.22);
+      --text-primary: #0f172a;
+      --text-secondary: #475569;
+      --text-muted: #64748b;
+      --accent: #0891b2;
+      --accent-cyan: #0891b2;
+      --accent-violet: #7c3aed;
+      --accent-pink: #db2777;
+      --accent-green: #059669;
+      --accent-amber: #d97706;
+      --accent-red: #dc2626;
+      --border: rgba(15, 23, 42, 0.10);
+      --shadow-card: 0 2px 12px rgba(15, 23, 42, 0.06);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background: var(--bg);
-      color: var(--fg);
+      background: var(--bg-page);
+      color: var(--text-primary);
       font-family: var(--font-sans);
-      font-size: 14px;
+      font-size: 13.5px;
       line-height: 1.5;
-      padding: 24px;
+      min-height: 100vh;
     }
 
-    header {
+    /* Top Header Chrome (omp stats style) */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 30;
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      margin-bottom: 24px;
-      padding-bottom: 16px;
-      border-bottom: 1px solid var(--border);
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 24px;
+      background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-default);
     }
     .brand {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
+      min-width: 0;
     }
-    .brand svg {
+    .brand-mark {
       width: 28px;
       height: 28px;
-      fill: var(--accent);
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, rgba(6, 182, 212, 0.18), rgba(139, 92, 246, 0.18));
+      border: 1px solid rgba(6, 182, 212, 0.35);
+      color: var(--accent-cyan);
+      flex: none;
     }
-    .brand h1 {
-      font-size: 20px;
-      font-weight: 600;
-      color: var(--fg-bright);
+    .brand-mark svg { width: 16px; height: 16px; fill: currentColor; }
+    .brand-title {
+      font-size: 15px;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
     }
+    .omp-tag {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
+      color: var(--text-secondary);
+    }
+
+    /* Segmented Pill Tabs */
+    .seg-tabs {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      padding: 3px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 9px;
+    }
+    .seg-tab {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      padding: 6px 12px;
+      font-size: 12.5px;
+      font-weight: 550;
+      border-radius: 6px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    .seg-tab:hover { color: var(--text-primary); }
+    .seg-tab.active {
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--border-default);
+    }
+    .tab-count {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: var(--bg-hover);
+      color: var(--text-muted);
+    }
+    .seg-tab.active .tab-count {
+      color: var(--accent-cyan);
+    }
+
     .header-meta {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 8px;
+      flex-wrap: wrap;
     }
-    .badge {
+    .chip {
       display: inline-flex;
       align-items: center;
       gap: 6px;
       padding: 4px 10px;
       border-radius: 999px;
-      font-size: 12px;
-      font-weight: 500;
-      background: var(--surface);
-      border: 1px solid var(--border);
+      font-size: 11.5px;
+      font-family: var(--font-mono);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
+      color: var(--text-secondary);
     }
     .status-dot {
-      width: 8px;
-      height: 8px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
-      background: var(--success);
-      box-shadow: 0 0 8px var(--success);
+      background: var(--accent-green);
+      box-shadow: 0 0 8px var(--accent-green);
+    }
+    .status-dot.offline {
+      background: var(--accent-amber);
+      box-shadow: none;
     }
 
-    /* KPI Grid */
+    /* Main Container */
+    .shell {
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 20px 24px 48px;
+    }
+
+    /* KPI Strip */
     .kpi-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+    @media (max-width: 1024px) {
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .topbar { flex-wrap: wrap; }
+      .seg-tabs { order: 3; width: 100%; overflow-x: auto; }
+    }
+    @media (max-width: 600px) {
+      .kpi-grid { grid-template-columns: 1fr; }
     }
     .kpi-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 16px;
-      position: relative;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      padding: 15px 17px;
+      box-shadow: var(--shadow-card);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
     }
-    .kpi-label {
-      font-size: 12px;
-      color: var(--muted);
+    .kpi-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.05em;
       margin-bottom: 6px;
     }
     .kpi-value {
       font-size: 24px;
       font-weight: 700;
-      color: var(--fg-bright);
       font-family: var(--font-mono);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.02em;
+      color: var(--text-primary);
     }
     .kpi-sub {
       font-size: 12px;
-      color: var(--muted);
+      color: var(--text-secondary);
       margin-top: 4px;
+      font-variant-numeric: tabular-nums;
     }
-    .progress-bar {
+    .meter-track {
       width: 100%;
       height: 6px;
-      background: var(--border);
-      border-radius: 3px;
+      background: var(--bg-elevated);
+      border-radius: 999px;
       margin-top: 10px;
       overflow: hidden;
-    }
-    .progress-fill {
-      height: 100%;
-      background: var(--accent);
-      border-radius: 3px;
-      transition: width 0.3s ease;
-    }
-
-    /* Tabs */
-    .tabs {
       display: flex;
-      gap: 8px;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 20px;
     }
-    .tab-btn {
-      background: none;
-      border: none;
-      color: var(--muted);
-      padding: 10px 16px;
-      font-size: 14px;
-      font-weight: 500;
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      transition: all 0.2s;
-    }
-    .tab-btn:hover {
-      color: var(--fg-bright);
-    }
-    .tab-btn.active {
-      color: var(--accent);
-      border-bottom-color: var(--accent);
+    .meter-seg {
+      height: 100%;
+      transition: width 0.25s ease;
     }
 
-    /* Content Panels */
+    /* Panels & Cards */
     .panel { display: none; }
     .panel.active { display: block; }
 
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-card);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .card-h {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 13px 18px;
+      border-bottom: 1px solid var(--border-subtle);
+      flex-wrap: wrap;
+    }
+    .card-title {
+      font-size: 13.5px;
+      font-weight: 650;
+      color: var(--text-primary);
+    }
+    .card-hint {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .card-b {
+      padding: 16px 18px;
+    }
+
+    /* Overview Grid */
+    .overview-split {
+      display: grid;
+      grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+    @media (max-width: 1080px) {
+      .overview-split { grid-template-columns: 1fr; }
+    }
+
+    /* billion-context Trajectory & Hit-Rate Charts */
+    .chart-wrap { width: 100%; overflow-x: auto; position: relative; }
+    .chart-svg { width: 100%; height: auto; display: block; }
+    #traj-chart, #hit-chart { cursor: crosshair; user-select: none; }
+    .chart-status {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      padding: 6px 10px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+    }
+    .chart-status[hidden] { display: none !important; }
+    .chart-brush {
+      position: absolute;
+      background: rgba(6, 182, 212, 0.16);
+      border-left: 1.5px solid var(--accent-cyan);
+      border-right: 1.5px solid var(--accent-cyan);
+      pointer-events: none;
+    }
+    .chart-legend {
+      display: flex;
+      gap: 14px;
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      margin-top: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .chart-legend .dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      margin-right: 5px;
+      vertical-align: -1px;
+    }
+    .chart-zoom-note {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+    .chart-empty {
+      padding: 32px 16px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    /* Window Composition List */
+    .comp-bar {
+      display: flex;
+      height: 12px;
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--bg-elevated);
+      margin-bottom: 14px;
+      border: 1px solid var(--border-subtle);
+    }
+    .comp-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .comp-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 12.5px;
+      padding: 4px 0;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .comp-row:last-child { border-bottom: none; }
+    .comp-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-secondary);
+    }
+    .swatch {
+      width: 9px;
+      height: 9px;
+      border-radius: 2px;
+      flex: none;
+    }
+    .comp-val {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      color: var(--text-primary);
+    }
+    .comp-pct {
+      color: var(--text-muted);
+      margin-left: 6px;
+      display: inline-block;
+      min-width: 44px;
+      text-align: right;
+    }
+
     /* Tables */
+    .table-wrap { width: 100%; overflow-x: auto; }
     table {
       width: 100%;
       border-collapse: collapse;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      overflow: hidden;
     }
     th, td {
-      padding: 12px 16px;
+      padding: 10px 16px;
       text-align: left;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 13px;
     }
     th {
-      background: rgba(255, 255, 255, 0.02);
+      background: var(--bg-elevated);
       font-weight: 600;
-      color: var(--muted);
-      font-size: 12px;
+      color: var(--text-muted);
+      font-size: 11px;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+    }
+    th.num, td.num {
+      text-align: right;
+      font-family: var(--font-mono);
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
     }
     tr:last-child td { border-bottom: none; }
-    tr:hover td { background: var(--surface-hover); }
+    tbody tr.clickable { cursor: pointer; transition: background 0.12s; }
+    tbody tr.clickable:hover td { background: var(--bg-hover); }
+    tbody tr.superseded-row td { opacity: 0.6; }
 
+    /* Pills & Buttons */
+    .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     .tag-tier {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 7px;
+      border-radius: 5px;
       font-size: 11px;
       font-weight: 600;
       font-family: var(--font-mono);
     }
-    .tag-tier1 { background: rgba(56, 139, 253, 0.15); color: var(--tier1); }
-    .tag-tier2 { background: rgba(163, 113, 247, 0.15); color: var(--tier2); }
-    .tag-tier3 { background: rgba(240, 136, 62, 0.15); color: var(--tier3); }
+    .tag-tier1 { background: rgba(6, 182, 212, 0.14); color: var(--accent-cyan); border: 1px solid rgba(6, 182, 212, 0.28); }
+    .tag-tier2 { background: rgba(139, 92, 246, 0.14); color: var(--accent-violet); border: 1px solid rgba(139, 92, 246, 0.28); }
+    .tag-tier3 { background: rgba(245, 158, 11, 0.14); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.28); }
 
-    .mono { font-family: var(--font-mono); }
+    .status-pill {
+      display: inline-block;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 10.5px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+    }
+    .status-live { background: rgba(16, 185, 129, 0.14); color: var(--accent-green); }
+    .status-superseded { background: var(--bg-elevated); color: var(--text-muted); }
+
     .btn {
-      background: var(--surface);
-      color: var(--fg);
-      border: 1px solid var(--border);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      border: 1px solid var(--border-default);
       padding: 6px 12px;
-      border-radius: 6px;
+      border-radius: var(--radius-sm);
       cursor: pointer;
       font-size: 12px;
-      font-weight: 500;
-      transition: all 0.2s;
+      font-weight: 550;
+      transition: all 0.15s ease;
     }
-    .btn:hover { background: var(--surface-hover); color: var(--fg-bright); border-color: var(--accent); }
-    .btn-sm { padding: 4px 8px; font-size: 11px; }
+    .btn:hover { background: var(--bg-hover); border-color: var(--accent-cyan); color: var(--accent-cyan); }
+    .btn-primary {
+      background: rgba(6, 182, 212, 0.15);
+      border-color: rgba(6, 182, 212, 0.4);
+      color: var(--accent-cyan);
+    }
+    .btn-primary:hover { background: rgba(6, 182, 212, 0.25); }
+    .btn-sm { padding: 3px 9px; font-size: 11.5px; }
 
-    /* Search */
-    .search-box {
-      margin-bottom: 16px;
-      display: flex;
-      gap: 12px;
-    }
-    .search-input {
-      flex: 1;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 10px 14px;
-      color: var(--fg-bright);
-      font-size: 14px;
-      outline: none;
-    }
-    .search-input:focus { border-color: var(--accent); }
-
-    /* Zone Map visual */
-    .zones-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 20px;
-    }
+    /* Proportional Zone Bar */
     .zone-bar {
       display: flex;
-      height: 32px;
-      border-radius: 6px;
+      height: 34px;
+      border-radius: var(--radius-sm);
       overflow: hidden;
-      margin-bottom: 16px;
+      margin-bottom: 14px;
+      border: 1px solid var(--border-default);
+      gap: 1px;
+      background: var(--bg-page);
     }
     .zone-seg {
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: 11px;
+      font-family: var(--font-mono);
       font-weight: 600;
       color: #fff;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      padding: 0 4px;
+      padding: 0 6px;
+      min-width: 18px;
     }
-    .zone-protected { background: #6e7681; }
-    .zone-folded { background: var(--tier2); }
-    .zone-compressible { background: var(--success); }
+    .zone-protected { background: #475569; }
+    .zone-folded { background: var(--accent-violet); }
+    .zone-compressible { background: var(--accent-green); }
 
-    .zone-legend {
+    /* Search */
+    .search-toolbar {
       display: flex;
-      gap: 20px;
-      font-size: 12px;
-      color: var(--muted);
+      gap: 10px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
     }
-    .zone-legend-item { display: flex; align-items: center; gap: 6px; }
-    .zone-legend-color { width: 12px; height: 12px; border-radius: 3px; }
+    .search-input {
+      flex: 1;
+      min-width: 220px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      padding: 8px 13px;
+      color: var(--text-primary);
+      font-size: 13px;
+      outline: none;
+    }
+    .search-input:focus { border-color: var(--accent-cyan); }
+
+    /* Slide-over Block Detail Drawer (omp stats RequestDetail pattern) */
+    .drawer-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 50;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.18s ease;
+    }
+    .drawer-backdrop.open { opacity: 1; pointer-events: auto; }
+    .drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: min(560px, 94vw);
+      background: var(--bg-surface);
+      border-left: 1px solid var(--border-strong);
+      box-shadow: none;
+      pointer-events: none;
+      z-index: 51;
+      transform: translateX(calc(100% + 4px));
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex;
+      flex-direction: column;
+    }
+    .drawer.open {
+      transform: translateX(0);
+      pointer-events: auto;
+      box-shadow: -8px 0 32px rgba(0, 0, 0, 0.45);
+    }
+    .drawer-head {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-default);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .drawer-body {
+      padding: 18px 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .drawer-kv {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 8px 14px;
+      font-size: 12.5px;
+      padding-bottom: 14px;
+      margin-bottom: 14px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .drawer-kv .k { color: var(--text-muted); }
+    .drawer-summary {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 14px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text-primary);
+    }
+    .drawer-foot {
+      padding: 12px 20px;
+      border-top: 1px solid var(--border-default);
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      background: var(--bg-elevated);
+    }
+
+    /* Toast Host */
+    .toast-host {
+      position: fixed;
+      bottom: 18px;
+      right: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 80;
+    }
+    .toast {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-left: 3px solid var(--accent-cyan);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      font-size: 12.5px;
+      color: var(--text-primary);
+      box-shadow: var(--shadow-card);
+      max-width: 400px;
+      word-break: break-word;
+    }
+    .toast.ok { border-left-color: var(--accent-green); }
+    .toast.err { border-left-color: var(--accent-red); }
   </style>
 </head>
 <body>
-  <header>
+  <header class="topbar">
     <div class="brand">
-      <svg viewBox="0 0 24 24"><path d="M12 2L2 9l10 13 10-13-10-7zm0 3.2L18.4 9 12 18.2 5.6 9 12 5.2z"/></svg>
-      <h1>Origami Context Dashboard</h1>
+      <div class="brand-mark">
+        <svg viewBox="0 0 24 24"><path d="M12 2L2 9l10 13 10-13-10-7zm0 3.2L18.4 9 12 18.2 5.6 9 12 5.2z"/></svg>
+      </div>
+      <span class="brand-title">Origami Context Dashboard</span>
+      <span class="omp-tag">oh-my-pi</span>
     </div>
+
+    <nav class="seg-tabs" role="tablist">
+      <button class="seg-tab active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
+      <button class="seg-tab" data-tab="blocks" onclick="switchTab('blocks')">Fold Blocks <span class="tab-count" id="cnt-blocks">0</span></button>
+      <button class="seg-tab" data-tab="cache" onclick="switchTab('cache')">Cache Economics <span class="tab-count" id="cnt-rounds">0</span></button>
+      <button class="seg-tab" data-tab="zones" onclick="switchTab('zones')">Context Zones</button>
+      <button class="seg-tab" data-tab="search" onclick="switchTab('search')">FTS5 Search</button>
+    </nav>
+
     <div class="header-meta">
-      <span class="badge" id="session-badge">Session: loading...</span>
-      <span class="badge"><span class="status-dot"></span> Live</span>
+      <span class="chip" id="session-badge">session: —</span>
+      <span class="chip"><span class="status-dot" id="sse-dot"></span> <span id="sse-label">Live</span></span>
+      <button class="btn btn-sm" onclick="toggleTheme()" id="theme-btn" title="Switch light/dark theme">Theme</button>
     </div>
   </header>
 
-  <div class="kpi-grid">
-    <div class="kpi-card">
-      <div class="kpi-label">Window Occupancy</div>
-      <div class="kpi-value" id="kpi-occupancy">0%</div>
-      <div class="kpi-sub" id="kpi-occupancy-sub">0 / 0 tokens</div>
-      <div class="progress-bar"><div class="progress-fill" id="occupancy-fill" style="width: 0%"></div></div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Growth Since Fold</div>
-      <div class="kpi-value" id="kpi-growth">0t</div>
-      <div class="kpi-sub" id="kpi-growth-sub">Threshold: 50.0K</div>
-      <div class="progress-bar"><div class="progress-fill" id="growth-fill" style="width: 0%; background: var(--warning);"></div></div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Tokens Reclaimed</div>
-      <div class="kpi-value" id="kpi-saved" style="color: var(--success);">0t</div>
-      <div class="kpi-sub" id="kpi-saved-sub">Across 0 fold(s)</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Prompt Cache Read Rate</div>
-      <div class="kpi-value" id="kpi-cache">0%</div>
-      <div class="kpi-sub" id="kpi-cache-sub">Stable prefix retention</div>
-    </div>
-  </div>
-
-  <div class="tabs">
-    <button class="tab-btn active" onclick="switchTab('blocks')">Fold Blocks</button>
-    <button class="tab-btn" onclick="switchTab('cache')">Cache Economics</button>
-    <button class="tab-btn" onclick="switchTab('zones')">Context Zones</button>
-    <button class="tab-btn" onclick="switchTab('search')">FTS5 Search</button>
-  </div>
-
-  <!-- Blocks Panel -->
-  <div class="panel active" id="tab-blocks">
-    <table>
-      <thead>
-        <tr>
-          <th>Block</th>
-          <th>Tier</th>
-          <th>Topic</th>
-          <th>Tokens</th>
-          <th>Created</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody id="blocks-tbody">
-        <tr><td colspan="6" style="text-align: center; color: var(--muted);">No fold blocks yet.</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Cache Economics Panel -->
-  <div class="panel" id="tab-cache">
-    <table>
-      <thead>
-        <tr>
-          <th>Timestamp</th>
-          <th>Total Input</th>
-          <th>Cache Read</th>
-          <th>Cache Write</th>
-          <th>Hit Rate</th>
-          <th>Fold Event</th>
-        </tr>
-      </thead>
-      <tbody id="cache-tbody">
-        <tr><td colspan="6" style="text-align: center; color: var(--muted);">No cache rounds recorded yet.</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Zones Panel -->
-  <div class="panel" id="tab-zones">
-    <div class="zones-card">
-      <div class="zone-bar" id="zones-bar">
-        <div class="zone-seg zone-protected" style="flex: 1;">Head</div>
+  <main class="shell">
+    <!-- KPI Strip -->
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-head"><span>Window Occupancy</span><span id="kpi-nudge-pill" class="mono"></span></div>
+        <div class="kpi-value" id="kpi-occupancy">0%</div>
+        <div class="kpi-sub" id="kpi-occupancy-sub">0 / 0 tokens</div>
+        <div class="meter-track" id="occupancy-meter">
+          <div class="meter-seg" style="width: 0%; background: var(--accent-cyan);"></div>
+        </div>
       </div>
-      <div class="zone-legend">
-        <div class="zone-legend-item"><span class="zone-legend-color zone-protected"></span> Protected (Head / In-Flight)</div>
-        <div class="zone-legend-item"><span class="zone-legend-color zone-folded"></span> Folded Spans</div>
-        <div class="zone-legend-item"><span class="zone-legend-color zone-compressible"></span> Compressible Runs</div>
+
+      <div class="kpi-card">
+        <div class="kpi-head"><span>Growth Since Fold</span></div>
+        <div class="kpi-value" id="kpi-growth">0t</div>
+        <div class="kpi-sub" id="kpi-growth-sub">Step threshold: 50.0K</div>
+        <div class="meter-track">
+          <div class="meter-seg" id="growth-fill" style="width: 0%; background: var(--accent-amber);"></div>
+        </div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-head"><span>Tokens Reclaimed</span></div>
+        <div class="kpi-value" id="kpi-saved" style="color: var(--accent-green);">0t</div>
+        <div class="kpi-sub" id="kpi-saved-sub">Across 0 live block(s)</div>
+        <div class="meter-track">
+          <div class="meter-seg" id="saved-fill" style="width: 0%; background: var(--accent-green);"></div>
+        </div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-head"><span>Prompt Cache Read Rate</span></div>
+        <div class="kpi-value" id="kpi-cache">—</div>
+        <div class="kpi-sub" id="kpi-cache-sub">Waiting for model rounds</div>
+        <div class="meter-track">
+          <div class="meter-seg" id="cache-fill" style="width: 0%; background: var(--accent-violet);"></div>
+        </div>
       </div>
     </div>
-  </div>
 
-  <!-- Search Panel -->
-  <div class="panel" id="tab-search">
-    <div class="search-box">
-      <input type="text" id="search-input" class="search-input" placeholder="Search blocks FTS5 (e.g. auth, tier:1, refactor)..." onkeyup="handleSearch(event)" />
-      <button class="btn" onclick="runSearch()">Search</button>
+    <!-- TAB 1: Overview & Context Trajectory -->
+    <section class="panel active" id="tab-overview">
+      <div class="overview-split">
+        <div>
+          <!-- billion-context Context Trajectory Graph -->
+          <div class="card">
+            <div class="card-h">
+              <span class="card-title">Context Trajectory</span>
+              <div style="display:flex;align-items:center;gap:10px;">
+                <span class="card-hint">Per-request input tokens &amp; cached prefix area &middot; red dashed marks are compression folds</span>
+                <button class="btn btn-sm" id="traj-scale-btn" type="button" onclick="toggleTrajScale()" title="Toggle Y-axis between active token band and full context window ceiling">Y: Auto</button>
+              </div>
+            </div>
+            <div class="card-b">
+              <div class="chart-status" id="traj-status" hidden></div>
+              <div class="chart-wrap" id="traj-chart">
+                <div class="chart-empty">No usage samples recorded for this session yet.</div>
+              </div>
+              <div class="chart-legend" id="traj-legend" hidden></div>
+              <div class="chart-zoom-note" id="traj-hint" hidden>
+                Drag across either chart to zoom into a sample range — trajectory and hit-rate views stay linked; double-click or press Esc to reset.
+              </div>
+            </div>
+          </div>
+
+          <!-- billion-context Linked Cache Hit-Rate Graph -->
+          <div class="card">
+            <div class="card-h">
+              <span class="card-title">Cache Hit Rate Trend</span>
+              <span class="card-hint">Per-request prompt cache hit % · dips colored by ledger miss attribution</span>
+            </div>
+            <div class="card-b">
+              <div class="chart-status" id="hit-status" hidden></div>
+              <div class="chart-wrap" id="hit-chart">
+                <div class="chart-empty">No cache rounds recorded for this session yet.</div>
+              </div>
+              <div class="chart-legend" id="hit-legend" hidden></div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <!-- Window Composition Card -->
+          <div class="card">
+            <div class="card-h">
+              <span class="card-title">Window Composition</span>
+              <span class="card-hint" id="comp-total-hint">0 tokens</span>
+            </div>
+            <div class="card-b">
+              <div class="comp-bar" id="comp-bar"></div>
+              <div class="comp-list" id="comp-list"></div>
+            </div>
+          </div>
+
+          <!-- Recommended Fold Candidates Card -->
+          <div class="card">
+            <div class="card-h">
+              <span class="card-title">Compressible Candidates</span>
+              <span class="card-hint" id="cand-floor-hint">Floor: —</span>
+            </div>
+            <div class="card-b" id="cand-body">
+              <div class="card-hint">No candidate ranges above floor yet.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: Fold Blocks -->
+    <section class="panel" id="tab-blocks">
+      <div class="card">
+        <div class="card-h">
+          <span class="card-title">Fold Block Hierarchy</span>
+          <span class="card-hint">Click any block to inspect its full summary, lineage, or unfold</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Block</th>
+                <th>Tier</th>
+                <th>Status</th>
+                <th>Coverage</th>
+                <th>Topic</th>
+                <th class="num">Compression</th>
+                <th class="num">Created</th>
+                <th class="num">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="blocks-tbody">
+              <tr><td colspan="8" class="chart-empty">No fold blocks yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: Cache Economics -->
+    <section class="panel" id="tab-cache">
+      <div class="card">
+        <div class="card-h">
+          <span class="card-title">Per-Request Cache Ledger</span>
+          <span class="card-hint">Prompt cache reads, writes, hit rates, and fold rebuild attribution</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th class="num">#</th>
+                <th>Timestamp</th>
+                <th class="num">Total Input</th>
+                <th class="num">Cache Read</th>
+                <th class="num">Cache Write</th>
+                <th class="num">Missed</th>
+                <th class="num">Hit Rate</th>
+                <th>Attribution</th>
+              </tr>
+            </thead>
+            <tbody id="cache-tbody">
+              <tr><td colspan="8" class="chart-empty">No cache rounds recorded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: Context Zones -->
+    <section class="panel" id="tab-zones">
+      <div class="card">
+        <div class="card-h">
+          <span class="card-title">Token-Weighted Context Zones</span>
+          <span class="card-hint">Proportional span widths by active window tokens</span>
+        </div>
+        <div class="card-b">
+          <div class="zone-bar" id="zones-bar">
+            <div class="zone-seg zone-protected" style="flex: 1;">Head</div>
+          </div>
+          <div class="chart-legend" style="margin-bottom: 16px;">
+            <span><span class="dot" style="background:#475569"></span>Protected (Pinned Head / Active Turn)</span>
+            <span><span class="dot" style="background:var(--accent-violet)"></span>Folded Summary Spans</span>
+            <span><span class="dot" style="background:var(--accent-green)"></span>Compressible Conversation Runs</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Zone Kind</th>
+                  <th>Message Span</th>
+                  <th class="num">Messages</th>
+                  <th class="num">Tokens</th>
+                  <th class="num">Zone Share</th>
+                </tr>
+              </thead>
+              <tbody id="zones-tbody">
+                <tr><td colspan="5" class="chart-empty">No zones bound yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 5: FTS5 Search -->
+    <section class="panel" id="tab-search">
+      <div class="card">
+        <div class="card-h">
+          <span class="card-title">FTS5 Fold Memory Search</span>
+          <span class="card-hint">Supports full-text terms plus <code>tier:1</code>, <code>tier:2</code>, and <code>session:...</code> filters</span>
+        </div>
+        <div class="card-b">
+          <div class="search-toolbar">
+            <input type="text" id="search-input" class="search-input" placeholder="Search folded topics & summaries (e.g. auth, tier:1, occupancy)..." oninput="debouncedSearch()" onkeydown="if(event.key==='Enter') runSearch()" />
+            <button class="btn btn-primary" onclick="runSearch()">Search</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Block</th>
+                  <th>Tier</th>
+                  <th>Topic</th>
+                  <th>Matched Snippet</th>
+                </tr>
+              </thead>
+              <tbody id="search-tbody">
+                <tr><td colspan="4" class="chart-empty">Enter search terms above to query SQLite FTS5 index.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Slide-Over Block Inspector Drawer -->
+  <div class="drawer-backdrop" id="drawer-backdrop" onclick="closeDrawer()"></div>
+  <aside class="drawer" id="block-drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <div id="drawer-title" class="card-title">Block Detail</div>
+      <button class="btn btn-sm" onclick="closeDrawer()">Esc · Close</button>
     </div>
-    <table>
-      <thead>
-        <tr>
-          <th>Block</th>
-          <th>Tier</th>
-          <th>Topic</th>
-          <th>Snippet</th>
-        </tr>
-      </thead>
-      <tbody id="search-tbody">
-        <tr><td colspan="4" style="text-align: center; color: var(--muted);">Type a search query above.</td></tr>
-      </tbody>
-    </table>
-  </div>
+    <div class="drawer-body">
+      <div class="drawer-kv" id="drawer-kv"></div>
+      <div class="drawer-summary" id="drawer-summary"></div>
+    </div>
+    <div class="drawer-foot" id="drawer-foot"></div>
+  </aside>
+
+  <div class="toast-host" id="toast-host"></div>
 
   <script>
-    let activeTab = 'blocks';
-    function switchTab(tab) {
-      activeTab = tab;
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.innerText.toLowerCase().includes(tab)));
-      document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + tab));
-      refreshData();
+    const $ = (id) => document.getElementById(id);
+
+    // Theme persistence
+    (function initTheme() {
+      const saved = localStorage.getItem('origami-theme');
+      if (saved === 'light' || saved === 'dark') {
+        document.documentElement.setAttribute('data-theme', saved);
+      }
+    })();
+
+    function toggleTheme() {
+      const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+      const next = cur === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('origami-theme', next);
+    }
+
+    function toast(msg, kind) {
+      const host = $('toast-host');
+      if (!host) return;
+      const el = document.createElement('div');
+      el.className = 'toast ' + (kind || '');
+      el.textContent = msg;
+      host.appendChild(el);
+      setTimeout(() => { el.remove(); }, 4200);
+    }
+
+    function escapeHtml(str) {
+      return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
     }
 
     function formatK(n) {
+      n = Number(n) || 0;
       if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
       if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-      return String(n);
+      return String(Math.round(n));
     }
+
+    function fmtDT(ms) {
+      if (!ms) return '—';
+      const d = new Date(ms);
+      const p = (v) => String(v).padStart(2, '0');
+      return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+    }
+
+    let activeTab = 'overview';
+    function switchTab(tab) {
+      activeTab = tab;
+      document.querySelectorAll('.seg-tab').forEach((b) => {
+        b.classList.toggle('active', b.getAttribute('data-tab') === tab);
+      });
+      document.querySelectorAll('.panel').forEach((p) => {
+        p.classList.toggle('active', p.id === 'tab-' + tab);
+      });
+    }
+
+    // ─── billion-context Trajectory + Hit-Rate Renderer & Linked Brush Zoom ───
+    const TRAJ_W = 960, TRAJ_H = 260, TRAJ_PL = 56, TRAJ_PR = 16, TRAJ_PT = 14, TRAJ_PB = 26;
+    const TRAJ_MIN_SAMPLES = 5;
+    const CAUSE_COLOR = { cold: '#6e7681', comp: '#d29922', seam: '#ef4444', rest: '#8b949e' };
+    const CAUSE_LABEL = {
+      cold: 'cold start (no prior cache)',
+      comp: 'post-fold rebuild',
+      seam: 'prefix divergence',
+      rest: 'cache TTL expiry',
+    };
+
+    function classifyLineCauses(lines, folds) {
+      const GAP_MS = 600000;
+      let foldTailClaims = 0;
+      return lines.map((l, i) => {
+        if (i === 0) return !(l.cached || 0) ? 'cold' : 'new';
+        const p = lines[i - 1];
+        const missed = Math.max(0, (l.input || 0) - (l.cached || 0));
+        const growth = Math.max(0, (l.input || 0) - (p.input || 0));
+        const warm = (l.hitPct != null ? l.hitPct : 0) >= 85;
+        const foldBetween = (folds || []).some((f) => (f.at || 0) >= (p.at || 0) && (f.at || 0) <= (l.at || 0));
+        const foldOwned = l.foldEventId != null || foldBetween;
+        let tailComp = false;
+        if (warm) {
+          foldTailClaims = 0;
+        } else if (foldBetween && l.foldEventId == null) {
+          foldTailClaims = 3;
+        } else if (foldTailClaims > 0 && missed > growth + 256) {
+          foldTailClaims -= 1;
+          tailComp = true;
+        } else if (l.foldEventId != null && !warm) {
+          foldTailClaims = 3;
+        }
+        if ((foldOwned || tailComp) && missed > growth + 256) return 'comp';
+        if ((l.at || 0) - (p.at || 0) > GAP_MS && missed > growth + 2048) return 'rest';
+        if ((p.hitPct || 0) >= 85 && (l.hitPct != null ? l.hitPct : 100) < 50 && missed > growth + 4096) return 'seam';
+        return 'new';
+      });
+    }
+
+    function foldMarkLines(folds, lines, x, PT, ih) {
+      let out = '';
+      const buckets = [];
+      (folds || []).forEach((f) => {
+        let idx = -1;
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].foldEventId === f.id || (lines[i].at || 0) >= (f.at || 0)) { idx = i; break; }
+        }
+        if (idx < 0) idx = lines.length - 1;
+        if (idx < 0) return;
+        const fx = x(idx);
+        const bk = buckets.find((b) => Math.abs(b.fx - fx) <= 1.5);
+        if (bk) bk.items.push(f); else buckets.push({ fx, items: [f] });
+      });
+      buckets.forEach((bk) => {
+        const n = bk.items.length;
+        const ids = bk.items.map((m) => m.id || ('#' + m.seq)).filter(Boolean).slice(0, 5).join('·');
+        const saved = bk.items.reduce((a, m) => a + (m.S || 0), 0);
+        out += '<line x1="' + bk.fx.toFixed(1) + '" y1="' + PT + '" x2="' + bk.fx.toFixed(1) + '" y2="' + (PT + ih) + '" stroke="var(--accent-red)" stroke-width="1.3" stroke-dasharray="3 3"><title>'
+          + escapeHtml('fold' + (n > 1 ? ' ×' + n : '') + (ids ? ' ' + ids + ' · ' : ' ') + fmtDT(bk.items[0].at) + (saved > 0 ? ' · -' + formatK(saved) : ''))
+          + '</title></line>';
+      });
+      return out;
+    }
+
+    function seqTickLines(lines, x, W, H, PL, PR) {
+      const barW = lines.length > 1 ? (W - PL - PR) / (lines.length - 1) : 1;
+      const tStep = Math.max(1, Math.ceil(24 / barW));
+      const xtArr = [];
+      for (let i = lines.length - 1; i >= 0; i -= tStep) {
+        const l = lines[i];
+        xtArr.push('<text transform="translate(' + x(i).toFixed(1) + ',' + (H - 28) + ') rotate(-90)" text-anchor="end" font-size="10" fill="var(--text-muted)">' + l.seq + '</text>');
+      }
+      const xtTime =
+        (lines[0] && lines[0].at ? '<text x="' + PL + '" y="' + (H - 8) + '" text-anchor="start" font-size="9.5" fill="var(--text-muted)">' + escapeHtml(fmtDT(lines[0].at)) + '</text>' : '') +
+        (lines.length > 1 && lines[lines.length - 1].at ? '<text x="' + (W - PR) + '" y="' + (H - 8) + '" text-anchor="end" font-size="9.5" fill="var(--text-muted)">' + escapeHtml(fmtDT(lines[lines.length - 1].at)) + '</text>' : '');
+      return xtArr.join('') + xtTime;
+    }
+
+    function trajectorySvg(lines, folds, win, baseIn, forceCeiling) {
+      lines = (lines || []).filter(Boolean);
+      if (!lines.length) return '';
+      const W = TRAJ_W, H = TRAJ_H, PL = TRAJ_PL, PR = TRAJ_PR, PT = TRAJ_PT, PB = TRAJ_PB;
+      const iw = W - PL - PR, ih = H - PT - PB;
+      let peakIn = 0;
+      lines.forEach((l) => { if ((l.input || 0) > peakIn) peakIn = l.input; });
+      const showCeilingLine = Boolean(win && win > 0 && (forceCeiling || peakIn >= win * 0.45));
+      let maxY = showCeilingLine ? Math.max(win, peakIn) * 1.05 : peakIn * 1.12;
+      if (maxY <= 0) maxY = 1;
+      const x = (i) => PL + (lines.length === 1 ? iw / 2 : (i / (lines.length - 1)) * iw);
+      const y = (v) => PT + ih - (Math.max(0, v) / maxY) * ih;
+
+      let grid = '', ticks = '';
+      for (let g = 0; g <= 4; g++) {
+        const v = (maxY / 4) * g;
+        const yy = y(v);
+        grid += '<line x1="' + PL + '" y1="' + yy.toFixed(1) + '" x2="' + (W - PR) + '" y2="' + yy.toFixed(1) + '" stroke="var(--border-subtle)" stroke-width="1"/>';
+        ticks += '<text x="' + (PL - 6) + '" y="' + (yy + 3).toFixed(1) + '" text-anchor="end" font-size="10" fill="var(--text-muted)">' + formatK(v) + '</text>';
+      }
+
+      let area = 'M' + x(0).toFixed(1) + ',' + y(lines[0].input || 0).toFixed(1);
+      let stroke = '';
+      lines.forEach((l, i) => {
+        area += ' L' + x(i).toFixed(1) + ',' + y(l.cached || 0).toFixed(1);
+        stroke += (i === 0 ? 'M' : 'L') + x(i).toFixed(1) + ',' + y(l.input || 0).toFixed(1) + ' ';
+      });
+      area += ' L' + x(lines.length - 1).toFixed(1) + ',' + (PT + ih).toFixed(1) + ' L' + x(0).toFixed(1) + ',' + (PT + ih).toFixed(1) + ' Z';
+
+      const causes = classifyLineCauses(lines, folds);
+      let bands = '', hovers = '';
+      const swSeg = lines.length === 1 ? iw : iw / (lines.length - 1);
+      lines.forEach((l, i) => {
+        const c = causes[i];
+        const yIn = y(l.input || 0), yCa = y(l.cached || 0);
+        const x0 = Math.max(PL, x(i) - swSeg / 2), x1 = Math.min(W - PR, x(i) + swSeg / 2);
+        if (c !== 'new') {
+          bands += '<rect x="' + x0.toFixed(1) + '" y="' + yIn.toFixed(1) + '" width="' + Math.max(1, x1 - x0).toFixed(1) + '" height="' + Math.max(3, yCa - yIn).toFixed(1) + '" fill="' + CAUSE_COLOR[c] + '" opacity="0.35" rx="1"/>';
+          bands += '<line x1="' + x(i).toFixed(1) + '" x2="' + x(i).toFixed(1) + '" y1="' + (yCa - 2).toFixed(1) + '" y2="' + (PT + ih).toFixed(1) + '" stroke="' + CAUSE_COLOR[c] + '" stroke-width="1" opacity="0.45"/>';
+        }
+        const hitPctLine = (l.input || 0) > 0 ? ((l.cached || 0) / l.input * 100).toFixed(1) + '%' : '—';
+        hovers += '<rect x="' + x0.toFixed(1) + '" y="' + PT + '" width="' + Math.max(1, x1 - x0).toFixed(1) + '" height="' + ih + '" fill="transparent"><title>'
+          + escapeHtml('#' + l.seq + ' · ' + fmtDT(l.at) + '\\nin ' + formatK(l.input || 0) + ' · cached ' + formatK(l.cached || 0) + ' · missed ' + formatK(Math.max(0, (l.input || 0) - (l.cached || 0))) + ' · hit ' + hitPctLine + (c === 'new' ? '' : '\\n' + CAUSE_LABEL[c]))
+          + '</title></rect>';
+      });
+
+      const singleDot = lines.length === 1
+        ? '<circle cx="' + x(0).toFixed(1) + '" cy="' + y(lines[0].input || 0).toFixed(1) + '" r="3.5" fill="var(--accent-cyan)"/>'
+        : '';
+      const foldMarks = foldMarkLines(folds, lines, x, PT, ih);
+
+      let ceiling = '';
+      if (win && win > 0) {
+        if (showCeilingLine) {
+          const yy = y(win);
+          ceiling = '<line x1="' + PL + '" y1="' + yy.toFixed(1) + '" x2="' + (W - PR) + '" y2="' + yy.toFixed(1) + '" stroke="var(--accent-red)" stroke-width="1.5" stroke-dasharray="6 4"/>'
+            + '<text x="' + (W - PR) + '" y="' + Math.max(10, yy - 4).toFixed(1) + '" text-anchor="end" font-size="10" fill="var(--accent-red)">context window ' + formatK(win) + '</text>';
+        } else {
+          ceiling = '<text x="' + (W - PR) + '" y="' + (PT + 10) + '" text-anchor="end" font-size="10" fill="var(--text-muted)">context window ' + formatK(win) + ' (' + Math.round((peakIn / win) * 100) + '% peak)</text>';
+        }
+      }
+
+      let baseline = '';
+      const baseMeasured = Boolean(baseIn && baseIn > 0);
+      const baseVal = baseMeasured
+        ? baseIn
+        : lines.length >= 20
+          ? (() => { const ds = lines.map((l) => Math.max(0, (l.input || 0) - (l.cached || 0))).sort((a, b) => a - b); return ds[Math.floor(ds.length * 0.1)] || 0; })()
+          : 0;
+      if (baseVal >= 200 && baseVal < maxY) {
+        const yy = y(baseVal);
+        baseline = '<line x1="' + PL + '" y1="' + yy.toFixed(1) + '" x2="' + (W - PR) + '" y2="' + yy.toFixed(1) + '" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="2 4"/>'
+          + '<text x="' + (PL + 4) + '" y="' + Math.max(10, yy - 4).toFixed(1) + '" font-size="9.5" fill="var(--text-muted)">' + (baseMeasured ? 'baseline (sys+tools) ' : 'est. baseline ') + formatK(baseVal) + '</text>';
+      }
+
+      const xt = seqTickLines(lines, x, W, H, PL, PR);
+      return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart-svg" role="img">' + grid
+        + '<path d="' + area + '" fill="var(--accent-cyan)" opacity="0.18"/>'
+        + bands + hovers
+        + '<path d="' + stroke.trim() + '" fill="none" stroke="var(--accent-cyan)" stroke-width="1.8"/>'
+        + singleDot + foldMarks + ceiling + baseline + ticks + xt + '</svg>';
+    }
+
+    function hitRateSvg(lines, folds) {
+      lines = (lines || []).filter(Boolean);
+      if (!lines.length) return '';
+      const W = TRAJ_W, H = TRAJ_H, PL = TRAJ_PL, PR = TRAJ_PR, PT = TRAJ_PT, PB = TRAJ_PB;
+      const iw = W - PL - PR, ih = H - PT - PB;
+      const x = (i) => PL + (lines.length === 1 ? iw / 2 : (i / (lines.length - 1)) * iw);
+      const y = (pct) => PT + ih - (Math.max(0, Math.min(100, pct)) / 100) * ih;
+      const hp = (l) => l.hitPct != null ? l.hitPct : ((l.input || 0) > 0 ? ((l.cached || 0) / l.input) * 100 : null);
+
+      let grid = '', ticks = '';
+      for (let g = 0; g <= 4; g++) {
+        const v = 25 * g;
+        const yy = y(v);
+        grid += '<line x1="' + PL + '" y1="' + yy.toFixed(1) + '" x2="' + (W - PR) + '" y2="' + yy.toFixed(1) + '" stroke="var(--border-subtle)" stroke-width="1"/>';
+        ticks += '<text x="' + (PL - 6) + '" y="' + (yy + 3).toFixed(1) + '" text-anchor="end" font-size="10" fill="var(--text-muted)">' + v + '%</text>';
+      }
+
+      const causes = classifyLineCauses(lines, folds);
+      let stroke = '', started = false;
+      lines.forEach((l, i) => {
+        const v = hp(l);
+        if (v == null) { started = false; return; }
+        stroke += (started ? 'L' : 'M') + x(i).toFixed(1) + ',' + y(v).toFixed(1) + ' ';
+        started = true;
+      });
+
+      let dots = '', hovers = '';
+      const swSeg = lines.length === 1 ? iw : iw / (lines.length - 1);
+      lines.forEach((l, i) => {
+        const c = causes[i];
+        const v = hp(l);
+        const x0 = Math.max(PL, x(i) - swSeg / 2), x1 = Math.min(W - PR, x(i) + swSeg / 2);
+        if (v != null && c !== 'new') dots += '<circle cx="' + x(i).toFixed(1) + '" cy="' + y(v).toFixed(1) + '" r="2.8" fill="' + CAUSE_COLOR[c] + '"/>';
+        const hitTxt = v == null ? '—' : v.toFixed(1) + '%';
+        hovers += '<rect x="' + x0.toFixed(1) + '" y="' + PT + '" width="' + Math.max(1, x1 - x0).toFixed(1) + '" height="' + ih + '" fill="transparent"><title>'
+          + escapeHtml('#' + l.seq + ' · ' + fmtDT(l.at) + '\\nin ' + formatK(l.input || 0) + ' · cached ' + formatK(l.cached || 0) + ' · missed ' + formatK(Math.max(0, (l.input || 0) - (l.cached || 0))) + ' · hit ' + hitTxt + (c === 'new' ? '' : '\\n' + CAUSE_LABEL[c]))
+          + '</title></rect>';
+      });
+
+      const singleDot = lines.length === 1 && hp(lines[0]) != null && causes[0] === 'new'
+        ? '<circle cx="' + x(0).toFixed(1) + '" cy="' + y(hp(lines[0])).toFixed(1) + '" r="3.2" fill="var(--accent-green)"/>'
+        : '';
+      const foldMarks = foldMarkLines(folds, lines, x, PT, ih);
+      const xt = seqTickLines(lines, x, W, H, PL, PR);
+      return '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart-svg" role="img">' + grid
+        + (stroke.trim() ? '<path d="' + stroke.trim() + '" fill="none" stroke="var(--accent-green)" stroke-width="1.8"/>' : '')
+        + dots + singleDot + hovers + foldMarks + ticks + xt + '</svg>';
+    }
+
+    function chartIdxFromX(x, n) {
+      if (n <= 1) return 0;
+      const iw = TRAJ_W - TRAJ_PL - TRAJ_PR;
+      return Math.max(0, Math.min(n - 1, Math.round(((x - TRAJ_PL) / iw) * (n - 1))));
+    }
+
+    const chartZooms = [];
+    function makeChartZoom(cfg) {
+      const z = { range: null, drag: null, state: null, boundOnce: false, cfg };
+      z.visible = function () {
+        if (!z.state) return null;
+        const L = z.state.lines;
+        let a = 0, b = L.length - 1;
+        if (z.range) {
+          a = Math.max(0, Math.min(L.length - 1, z.range[0]));
+          b = Math.max(a, Math.min(L.length - 1, z.range[1]));
+        }
+        const lines = L.slice(a, b + 1);
+        if (!z.range) return { lines, folds: z.state.folds || [], offset: a };
+        const t0 = lines[0] ? (lines[0].at || 0) : 0;
+        const t1 = lines.length ? (lines[lines.length - 1].at || 0) : 0;
+        const seqSet = new Set(lines.map((l) => l.seq));
+        return {
+          lines,
+          folds: (z.state.folds || []).filter((f) => (f.seq != null && seqSet.has(f.seq)) || ((f.at || 0) >= t0 && (f.at || 0) <= t1)),
+          offset: a,
+        };
+      };
+      function updateStatus(v) {
+        const st = $(cfg.statusId);
+        if (!st) return;
+        if (!z.range || !v || !v.lines.length) { st.hidden = true; st.innerHTML = ''; return; }
+        const L = z.state.lines;
+        const a = v.offset, b = v.offset + v.lines.length - 1;
+        const times = v.lines.map((l) => l.at).filter(Boolean);
+        st.hidden = false;
+        st.innerHTML = '<span class="mono" style="font-size:12px">View #' + L[a].seq + '–#' + L[b].seq
+          + (times.length ? ' (' + escapeHtml(fmtDT(times[0])) + ' → ' + escapeHtml(fmtDT(times[times.length - 1])) + ')' : '')
+          + '</span><button id="' + cfg.resetId + '" class="btn btn-sm" type="button">Reset view</button>';
+        const rb = $(cfg.resetId);
+        if (rb) rb.addEventListener('click', () => z.setRange(null));
+      }
+      z.render = function () {
+        const wrap = $(cfg.elId);
+        if (!wrap) return;
+        const v = z.visible();
+        if (!v || !v.lines.length) {
+          wrap.innerHTML = '<div class="chart-empty">' + escapeHtml(cfg.emptyText) + '</div>';
+          updateStatus(null);
+          return;
+        }
+        wrap.innerHTML = cfg.render(v.lines, v.folds);
+        updateStatus(v);
+      };
+      z.setRange = function (r) {
+        const nr = r && r[1] > r[0] ? [r[0], r[1]] : null;
+        const same = (nr === null && z.range === null) || (nr !== null && z.range !== null && nr[0] === z.range[0] && nr[1] === z.range[1]);
+        if (same) return;
+        z.range = nr;
+        z.render();
+        if (cfg.link && z.state) {
+          cfg.link.members.forEach((m) => {
+            if (m !== z && m.state && m.state.lines.length === z.state.lines.length) m.setRange(nr);
+          });
+        }
+      };
+      function localX(wrap, ev) {
+        const r = wrap && wrap.getBoundingClientRect ? wrap.getBoundingClientRect() : null;
+        if (!r || !(r.width > 0)) return null;
+        const x = (ev.clientX - r.left) * (TRAJ_W / r.width);
+        return Math.max(TRAJ_PL, Math.min(TRAJ_W - TRAJ_PR, x));
+      }
+      function overlayShow(wrap, xa, xb) {
+        if (!z.drag || !z.drag.overlay) return;
+        const r = wrap.getBoundingClientRect();
+        if (!r || !(r.width > 0)) return;
+        const o = z.drag.overlay;
+        o.style.left = (Math.min(xa, xb) * (r.width / TRAJ_W)).toFixed(1) + 'px';
+        o.style.width = (Math.abs(xb - xa) * (r.width / TRAJ_W)).toFixed(1) + 'px';
+        o.style.top = (TRAJ_PT * (r.height / TRAJ_H)).toFixed(1) + 'px';
+        o.style.height = ((TRAJ_H - TRAJ_PT - TRAJ_PB) * (r.height / TRAJ_H)).toFixed(1) + 'px';
+      }
+      function onDown(ev) {
+        if (!z.state || ev.button !== 0) return;
+        const wrap = $(cfg.elId);
+        const v = z.visible();
+        if (!wrap || !v || v.lines.length < TRAJ_MIN_SAMPLES) return;
+        ev.preventDefault();
+        const x0 = localX(wrap, ev);
+        if (x0 == null) return;
+        const o = document.createElement('div');
+        o.className = 'chart-brush';
+        wrap.appendChild(o);
+        z.drag = { x0, cur: x0, n: v.lines.length, offset: v.offset, overlay: o };
+        overlayShow(wrap, x0, x0);
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      }
+      function onMove(ev) {
+        if (!z.drag) return;
+        const wrap = $(cfg.elId);
+        const x = localX(wrap, ev);
+        if (x == null) return;
+        z.drag.cur = x;
+        overlayShow(wrap, z.drag.x0, x);
+      }
+      function onUp(ev) {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        if (!z.drag) return;
+        const d0 = z.drag;
+        z.drag = null;
+        if (d0.overlay) d0.overlay.remove();
+        const x1 = localX($(cfg.elId), ev);
+        if (x1 == null) return;
+        const i0 = chartIdxFromX(Math.min(d0.x0, x1), d0.n);
+        const i1 = chartIdxFromX(Math.max(d0.x0, x1), d0.n);
+        if (i1 - i0 + 1 < TRAJ_MIN_SAMPLES || i1 - i0 + 1 >= d0.n) return;
+        z.setRange([d0.offset + i0, d0.offset + i1]);
+      }
+      z.bind = function (state, preserveZoom) {
+        z.state = state && state.lines && state.lines.length ? state : null;
+        if (!preserveZoom || !z.state) z.range = null;
+        const wrap = $(cfg.elId);
+        if (wrap && !z.boundOnce) {
+          z.boundOnce = true;
+          wrap.addEventListener('mousedown', onDown);
+          wrap.addEventListener('dblclick', () => z.setRange(null));
+        }
+        z.render();
+      };
+      chartZooms.push(z);
+      if (cfg.link) cfg.link.members.push(z);
+      return z;
+    }
+
+    const trajAux = { win: 0, baseIn: 0, forceCeiling: false };
+    function toggleTrajScale() {
+      trajAux.forceCeiling = !trajAux.forceCeiling;
+      const btn = $('traj-scale-btn');
+      if (btn) btn.textContent = trajAux.forceCeiling ? 'Y: Window' : 'Y: Auto';
+      trajZoom.render();
+    }
+    const detailChartLink = { members: [] };
+    const trajZoom = makeChartZoom({
+      elId: 'traj-chart',
+      statusId: 'traj-status',
+      resetId: 'traj-reset',
+      emptyText: 'No usage samples recorded for this session yet.',
+      link: detailChartLink,
+      render: (lines, folds) => trajectorySvg(lines, folds, trajAux.win, trajAux.baseIn, trajAux.forceCeiling),
+    });
+    const hitZoom = makeChartZoom({
+      elId: 'hit-chart',
+      statusId: 'hit-status',
+      resetId: 'hit-reset',
+      emptyText: 'No cache rounds recorded for this session yet.',
+      link: detailChartLink,
+      render: (lines, folds) => hitRateSvg(lines, folds),
+    });
+
+    window.bili_trajSvg = trajectorySvg;
+    window.bili_hitSvg = hitRateSvg;
+    window.bili_causes = classifyLineCauses;
+    window.bili_trajZoom = trajZoom;
+    window.bili_hitZoom = hitZoom;
+
+    function legendChip(style, label, dashedColor) {
+      if (dashedColor) {
+        return '<span><span class="dot" style="background:none;border-top:2px dashed ' + dashedColor + ';height:0;border-radius:0;width:14px"></span>' + escapeHtml(label) + '</span>';
+      }
+      return '<span><span class="dot" style="' + style + '"></span>' + escapeHtml(label) + '</span>';
+    }
+
+    let cachedBlocks = [];
+    let selectedDrawerId = null;
+
+    function openBlockDrawer(blockId) {
+      const b = cachedBlocks.find((x) => x.block_id === blockId);
+      if (!b) return;
+      selectedDrawerId = blockId;
+      $('drawer-title').innerHTML = '<span class="mono">' + escapeHtml(b.block_id) + '</span> · ' + escapeHtml(b.topic);
+      const saved = Math.max(0, (b.tokens_before || 0) - (b.tokens_after || 0));
+      const pct = b.tokens_before > 0 ? Math.round((saved / b.tokens_before) * 100) : 0;
+      $('drawer-kv').innerHTML =
+        '<div class="k">Tier</div><div><span class="tag-tier tag-tier' + b.tier + '">Tier ' + b.tier + '</span></div>' +
+        '<div class="k">Status</div><div><span class="status-pill ' + (b.superseded ? 'status-superseded' : 'status-live') + '">' + (b.superseded ? 'Superseded' : 'Live in window') + '</span></div>' +
+        (b.coverage ? '<div class="k">Coverage</div><div class="mono">' + escapeHtml(b.coverage) + '</div>' : '') +
+        '<div class="k">Compression</div><div class="mono">' + formatK(b.tokens_before) + 't → ' + formatK(b.tokens_after) + 't (-' + formatK(saved) + 't, ' + pct + '%)</div>' +
+        (b.children && b.children.length ? '<div class="k">Distilled From</div><div class="mono">' + escapeHtml(b.children.join(', ')) + '</div>' : '') +
+        '<div class="k">Created</div><div class="mono">' + escapeHtml(fmtDT(b.created_at)) + '</div>';
+      $('drawer-summary').textContent = b.summary || '(empty summary)';
+      $('drawer-foot').innerHTML =
+        '<button class="btn btn-primary" id="drawer-unfold-file" onclick="unfoldBlock(\\'' + escapeHtml(b.block_id) + '\\', \\'file\\')">Unfold to Artifact File</button>' +
+        (!b.superseded ? '<button class="btn" id="drawer-unfold-inline" onclick="unfoldBlock(\\'' + escapeHtml(b.block_id) + '\\', \\'inline\\')">Unfold Inline</button>' : '');
+      $('drawer-backdrop').classList.add('open');
+      $('block-drawer').classList.add('open');
+    }
+
+    function closeDrawer() {
+      selectedDrawerId = null;
+      $('drawer-backdrop').classList.remove('open');
+      $('block-drawer').classList.remove('open');
+    }
+
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') {
+        if (selectedDrawerId) { closeDrawer(); return; }
+        chartZooms.forEach((z) => { if (z.range) z.setRange(null); });
+      }
+    });
 
     async function refreshData() {
       try {
-        const res = await fetch('/api/status');
-        if (!res.ok) return;
-        const st = await res.json();
-        document.getElementById('session-badge').innerText = 'Session: ' + (st.sessionId || 'active');
+        const [stRes, bRes, rRes] = await Promise.all([
+          fetch('/api/status'),
+          fetch('/api/blocks'),
+          fetch('/api/rounds'),
+        ]);
+        if (!stRes.ok) return;
+        const st = await stRes.json();
+        const blocks = bRes.ok ? await bRes.json() : [];
+        const rounds = rRes.ok ? await rRes.json() : [];
+        cachedBlocks = blocks;
 
-        // KPIs
-        const pct = Math.round(st.occupancyPct * 100);
-        document.getElementById('kpi-occupancy').innerText = pct + '%';
-        document.getElementById('kpi-occupancy-sub').innerText = formatK(st.liveTokens) + ' / ' + formatK(st.windowTokens) + ' tokens';
-        document.getElementById('occupancy-fill').style.width = pct + '%';
+        $('session-badge').textContent = 'session: ' + (st.sessionId ? st.sessionId.slice(0, 14) : 'active');
+        $('cnt-blocks').textContent = String(blocks.length);
+        $('cnt-rounds').textContent = String(rounds.length);
 
-        const gPct = Math.min(100, Math.round((st.growthSinceFold / st.growthStep) * 100));
-        document.getElementById('kpi-growth').innerText = formatK(st.growthSinceFold) + 't';
-        document.getElementById('kpi-growth-sub').innerText = 'Threshold: ' + formatK(st.growthStep) + ' (' + gPct + '%)';
-        document.getElementById('growth-fill').style.width = gPct + '%';
+        // 1. Fixed Window Occupancy KPI (st.occupancyPct is ALREADY 0..100 integer!)
+        const pct = Math.max(0, Math.min(100, Math.round(Number(st.occupancyPct) || 0)));
+        const usedTokens = Number(st.usedTokens != null ? st.usedTokens : st.liveTokens) || 0;
+        const winTokens = Number(st.windowTokens) || 0;
+        $('kpi-occupancy').textContent = pct + '%';
+        $('kpi-occupancy-sub').textContent = formatK(usedTokens) + ' / ' + formatK(winTokens) + ' tokens';
+        $('kpi-nudge-pill').textContent = st.nudgeKind && st.nudgeKind !== 'none' ? st.nudgeKind : '';
 
-        document.getElementById('kpi-saved').innerText = formatK(st.savedTokens) + 't';
-        document.getElementById('kpi-saved-sub').innerText = 'Across ' + (st.blocks ? st.blocks.length : 0) + ' block(s)';
+        // Stacked meter inside Occupancy KPI + Window Composition card
+        const split = st.tokenSplit || {};
+        const sysTok = (split.overhead || 0) + (split.system || 0);
+        const convTok = split.conversation != null ? split.conversation : Math.max(0, (split.live || 0) - (split.tools || 0));
+        const toolTok = split.tools || 0;
+        const sumTok = split.summaries || 0;
+        const freeTok = winTokens > 0 ? Math.max(0, winTokens - usedTokens) : 0;
+        const denom = winTokens > 0 ? winTokens : Math.max(1, usedTokens);
 
-        // Zones bar
-        if (st.zones && st.zones.length > 0) {
-          const bar = document.getElementById('zones-bar');
-          bar.innerHTML = st.zones.map(z => {
-            const cls = 'zone-' + z.kind;
-            return '<div class="zone-seg ' + cls + '" style="flex: 1;" title="' + z.start + '..' + z.end + ' (' + z.kind + ')">' + z.start + '..' + z.end + '</div>';
+        const cats = [
+          { label: 'System & Tool Schemas', tok: sysTok, color: 'var(--accent-violet)' },
+          { label: 'Conversation', tok: convTok, color: 'var(--accent-cyan)' },
+          { label: 'Tool Outputs', tok: toolTok, color: 'var(--accent-amber)' },
+          { label: 'Fold Summaries', tok: sumTok, color: 'var(--accent-green)' },
+          { label: 'Free Window', tok: freeTok, color: 'var(--bg-hover)' },
+        ];
+
+        $('occupancy-meter').innerHTML = cats.slice(0, 4).map((c) => {
+          const w = Math.max(0, (c.tok / denom) * 100).toFixed(2);
+          return '<div class="meter-seg" style="width:' + w + '%;background:' + c.color + '"></div>';
+        }).join('');
+
+        $('comp-total-hint').textContent = formatK(usedTokens) + (winTokens > 0 ? ' / ' + formatK(winTokens) : '') + ' tokens';
+        $('comp-bar').innerHTML = cats.map((c) => {
+          const w = Math.max(0, (c.tok / denom) * 100).toFixed(2);
+          return '<div style="width:' + w + '%;background:' + c.color + '" title="' + escapeHtml(c.label + ': ' + formatK(c.tok)) + '"></div>';
+        }).join('');
+        $('comp-list').innerHTML = cats.map((c) => {
+          const share = ((c.tok / denom) * 100).toFixed(1) + '%';
+          return '<div class="comp-row"><span class="comp-label"><span class="swatch" style="background:' + c.color + '"></span>' + escapeHtml(c.label) + '</span>'
+            + '<span class="comp-val">' + formatK(c.tok) + '<span class="comp-pct">' + share + '</span></span></div>';
+        }).join('');
+
+        // 2. Growth & Compressible Candidates
+        const step = Math.max(1, Number(st.growthStep) || 50000);
+        const gPct = Math.min(100, Math.round(((st.growthSinceFold || 0) / step) * 100));
+        $('kpi-growth').textContent = formatK(st.growthSinceFold || 0) + 't';
+        $('kpi-growth-sub').textContent = 'Step: ' + formatK(step) + ' (' + gPct + '%) · Pool: ' + formatK(st.compressibleTokens || 0);
+        $('growth-fill').style.width = gPct + '%';
+
+        $('cand-floor-hint').textContent = 'Floor: ' + formatK(st.compressibleFloor || 0);
+        const recs = st.recommended || [];
+        $('cand-body').innerHTML = recs.length === 0
+          ? '<div class="card-hint">No compressible message spans above floor yet.</div>'
+          : '<div class="comp-list">' + recs.slice(0, 6).map((r) => {
+              const sNum = parseInt(String(r.start || '').replace(/\\D+/g, ''), 10) || 0;
+              const eNum = parseInt(String(r.end || '').replace(/\\D+/g, ''), 10) || 0;
+              const msgCnt = eNum >= sNum && sNum > 0 ? (eNum - sNum + 1) : 1;
+              return '<div class="comp-row"><span class="mono" style="color:var(--accent-cyan)">' + escapeHtml(r.start + '..' + r.end) + '</span>'
+                + '<span class="comp-val">' + formatK(r.tokens) + 't · ' + msgCnt + ' msg' + (msgCnt === 1 ? '' : 's') + '</span></div>';
+            }).join('') + '</div>';
+
+        // 3. Reclaimed KPI
+        const liveBlockCount = blocks.filter((b) => !b.superseded).length;
+        const savedTokens = Number(st.savedTokens) || 0;
+        $('kpi-saved').textContent = formatK(savedTokens) + 't';
+        $('kpi-saved-sub').textContent = 'Across ' + liveBlockCount + ' live' + (blocks.length > liveBlockCount ? ' / ' + blocks.length + ' total' : '') + ' block(s)';
+        const savedRatio = (usedTokens + savedTokens) > 0 ? Math.min(100, Math.round((savedTokens / (usedTokens + savedTokens)) * 100)) : 0;
+        $('saved-fill').style.width = savedRatio + '%';
+
+        // 4. Trajectory + Cache Hit Rate Charts & Cache Economics Table
+        const lines = rounds.map((r, idx) => {
+          const inp = Number(r.total_in) || 0;
+          const ca = Math.min(inp, Number(r.cache_read) || 0);
+          return {
+            seq: idx + 1,
+            at: Number(r.ts) || 0,
+            input: inp,
+            cached: ca,
+            write: Number(r.cache_write) || 0,
+            hitPct: inp > 0 ? (ca / inp) * 100 : null,
+            foldEventId: r.fold_event_id || null,
+          };
+        });
+
+        const foldMarks = blocks.map((b) => {
+          let seq = null;
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].foldEventId === b.block_id || lines[i].at >= b.created_at) { seq = lines[i].seq; break; }
+          }
+          return {
+            id: b.block_id,
+            seq,
+            at: Number(b.created_at) || 0,
+            S: Math.max(0, (Number(b.tokens_before) || 0) - (Number(b.tokens_after) || 0)),
+          };
+        });
+        const knownIds = new Set(foldMarks.map((f) => f.id));
+        lines.forEach((l) => {
+          if (l.foldEventId && !knownIds.has(l.foldEventId)) {
+            foldMarks.push({ id: l.foldEventId, seq: l.seq, at: l.at, S: 0 });
+            knownIds.add(l.foldEventId);
+          }
+        });
+
+        trajAux.win = winTokens;
+        trajAux.baseIn = Number(st.baselineTokens) || sysTok || 0;
+        trajZoom.bind({ lines, folds: foldMarks }, true);
+        hitZoom.bind({ lines, folds: foldMarks }, true);
+
+        const hasSamples = lines.length > 0;
+        $('traj-legend').hidden = !hasSamples;
+        $('traj-hint').hidden = !hasSamples;
+        $('hit-legend').hidden = !hasSamples;
+
+        if (hasSamples) {
+          const causes = classifyLineCauses(lines, foldMarks);
+          const present = {};
+          causes.forEach((c) => { if (c !== 'new') present[c] = true; });
+          $('traj-legend').innerHTML =
+            legendChip('background:var(--accent-cyan)', 'input tokens') +
+            legendChip('background:var(--accent-cyan);opacity:0.35', 'cached prefix') +
+            (foldMarks.length ? legendChip('', 'fold event', 'var(--accent-red)') : '') +
+            (winTokens > 0 ? legendChip('', 'context window', 'var(--accent-red)') : '') +
+            (present.comp ? legendChip('background:' + CAUSE_COLOR.comp, 'post-fold rebuild') : '') +
+            (present.cold ? legendChip('background:' + CAUSE_COLOR.cold, 'cold start') : '') +
+            (present.seam ? legendChip('background:' + CAUSE_COLOR.seam, 'prefix divergence') : '') +
+            (present.rest ? legendChip('background:' + CAUSE_COLOR.rest, 'cache TTL gap') : '') +
+            (trajAux.baseIn >= 200 ? legendChip('', 'baseline (sys+tools)', 'var(--text-muted)') : '');
+
+          $('hit-legend').innerHTML =
+            legendChip('background:var(--accent-green)', 'hit %') +
+            ['comp', 'cold', 'seam', 'rest'].filter((c) => present[c]).map((c) => legendChip('background:' + CAUSE_COLOR[c], CAUSE_LABEL[c])).join('') +
+            (foldMarks.length ? legendChip('', 'fold event', 'var(--accent-red)') : '');
+        }
+
+        let totalIn = 0, totalRead = 0;
+        lines.forEach((l) => { totalIn += l.input; totalRead += l.cached; });
+        if (totalIn > 0) {
+          const hitPct = Math.round((totalRead / totalIn) * 100);
+          $('kpi-cache').textContent = hitPct + '%';
+          $('kpi-cache-sub').textContent = formatK(totalRead) + ' / ' + formatK(totalIn) + ' cache read';
+          $('cache-fill').style.width = hitPct + '%';
+        } else {
+          $('kpi-cache').textContent = '0%';
+          $('kpi-cache-sub').textContent = '0 / 0 cache read';
+          $('cache-fill').style.width = '0%';
+        }
+
+        const cacheTbody = $('cache-tbody');
+        if (!lines.length) {
+          cacheTbody.innerHTML = '<tr><td colspan="8" class="chart-empty">No cache rounds recorded yet.</td></tr>';
+        } else {
+          const causes = classifyLineCauses(lines, foldMarks);
+          cacheTbody.innerHTML = lines.slice(-40).reverse().map((l) => {
+            const c = causes[l.seq - 1];
+            const rHit = l.hitPct != null ? l.hitPct.toFixed(1) + '%' : '—';
+            const missed = Math.max(0, l.input - l.cached);
+            const attr = [];
+            if (l.foldEventId) attr.push('<span class="tag-tier tag-tier1">fold ' + escapeHtml(l.foldEventId) + '</span>');
+            if (c !== 'new') attr.push('<span style="color:' + CAUSE_COLOR[c] + ';font-size:12px">' + escapeHtml(CAUSE_LABEL[c]) + '</span>');
+            if (!attr.length) attr.push('<span style="color:var(--text-muted);font-size:12px">warm prefix</span>');
+            return '<tr>' +
+              '<td class="num">#' + l.seq + '</td>' +
+              '<td class="mono">' + escapeHtml(fmtDT(l.at)) + '</td>' +
+              '<td class="num">' + formatK(l.input) + '</td>' +
+              '<td class="num" style="color:var(--accent-green)">' + formatK(l.cached) + '</td>' +
+              '<td class="num" style="color:var(--accent-amber)">' + formatK(l.write) + '</td>' +
+              '<td class="num">' + formatK(missed) + '</td>' +
+              '<td class="num">' + rHit + '</td>' +
+              '<td>' + attr.join(' · ') + '</td>' +
+              '</tr>';
           }).join('');
         }
 
-        // Blocks table
-        const bRes = await fetch('/api/blocks');
-        if (bRes.ok) {
-          const blocks = await bRes.json();
-          const tbody = document.getElementById('blocks-tbody');
-          if (blocks.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--muted);">No fold blocks yet.</td></tr>';
-          } else {
-            tbody.innerHTML = blocks.map(b => {
-              const tierCls = 'tag-tier tag-tier' + b.tier;
-              return '<tr>' +
-                '<td class="mono"><strong>' + b.block_id + '</strong></td>' +
-                '<td><span class="' + tierCls + '">Tier ' + b.tier + '</span></td>' +
-                '<td>' + escapeHtml(b.topic) + '</td>' +
-                '<td class="mono">' + formatK(b.tokens_before) + 't → ' + formatK(b.tokens_after) + 't</td>' +
-                '<td class="mono">' + new Date(b.created_at).toLocaleTimeString() + '</td>' +
-                '<td><button class="btn btn-sm" onclick="unfoldBlock(\\'' + b.block_id + '\\')">Unfold (File)</button></td>' +
-                '</tr>';
-            }).join('');
-          }
+        // 5. Fold Blocks Table
+        const blocksTbody = $('blocks-tbody');
+        if (!blocks.length) {
+          blocksTbody.innerHTML = '<tr><td colspan="8" class="chart-empty">No fold blocks yet.</td></tr>';
+        } else {
+          blocksTbody.innerHTML = blocks.slice().reverse().map((b) => {
+            const tierCls = 'tag-tier tag-tier' + b.tier;
+            const saved = Math.max(0, (b.tokens_before || 0) - (b.tokens_after || 0));
+            const pctSaved = b.tokens_before > 0 ? Math.round((saved / b.tokens_before) * 100) : 0;
+            const statusCls = b.superseded ? 'status-pill status-superseded' : 'status-pill status-live';
+            return '<tr class="clickable ' + (b.superseded ? 'superseded-row' : '') + '" data-block-id="' + escapeHtml(b.block_id) + '" onclick="openBlockDrawer(\\'' + escapeHtml(b.block_id) + '\\')">' +
+              '<td class="mono"><strong>' + escapeHtml(b.block_id) + '</strong></td>' +
+              '<td><span class="' + tierCls + '">Tier ' + b.tier + '</span></td>' +
+              '<td><span class="' + statusCls + '">' + (b.superseded ? 'Superseded' : 'Live') + '</span></td>' +
+              '<td class="mono" style="color:var(--text-secondary)">' + escapeHtml(b.coverage || '—') + '</td>' +
+              '<td>' + escapeHtml(b.topic) + '</td>' +
+              '<td class="num">' + formatK(b.tokens_before) + ' → <span style="color:var(--accent-green)">' + formatK(b.tokens_after) + '</span> <span style="color:var(--text-muted)">(-' + pctSaved + '%)</span></td>' +
+              '<td class="num">' + escapeHtml(fmtDT(b.created_at)) + '</td>' +
+              '<td class="num" onclick="event.stopPropagation()">' +
+                '<button class="btn btn-sm" onclick="unfoldBlock(\\'' + escapeHtml(b.block_id) + '\\', \\'file\\')">Unfold</button>' +
+              '</td>' +
+              '</tr>';
+          }).join('');
         }
 
-        // Rounds table
-        const rRes = await fetch('/api/rounds');
-        if (rRes.ok) {
-          const rounds = await rRes.json();
-          let totalIn = 0, totalRead = 0;
-          for (const r of rounds) { totalIn += r.total_in; totalRead += r.cache_read; }
-          const hitPct = totalIn > 0 ? Math.round((totalRead / totalIn) * 100) : 0;
-          document.getElementById('kpi-cache').innerText = hitPct + '%';
-          document.getElementById('kpi-cache-sub').innerText = formatK(totalRead) + ' / ' + formatK(totalIn) + ' cache read';
+        if (selectedDrawerId) openBlockDrawer(selectedDrawerId);
 
-          const tbody = document.getElementById('cache-tbody');
-          if (rounds.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--muted);">No cache rounds recorded yet.</td></tr>';
-          } else {
-            tbody.innerHTML = rounds.slice(-20).reverse().map(r => {
-              const rHit = r.total_in > 0 ? Math.round((r.cache_read / r.total_in) * 100) : 0;
-              return '<tr>' +
-                '<td class="mono">' + new Date(r.ts).toLocaleTimeString() + '</td>' +
-                '<td class="mono">' + formatK(r.total_in) + '</td>' +
-                '<td class="mono" style="color: var(--success);">' + formatK(r.cache_read) + '</td>' +
-                '<td class="mono" style="color: var(--warning);">' + formatK(r.cache_write) + '</td>' +
-                '<td class="mono">' + rHit + '%</td>' +
-                '<td class="mono">' + (r.fold_event_id ? '<span class="badge">' + r.fold_event_id + '</span>' : '—') + '</td>' +
-                '</tr>';
-            }).join('');
-          }
+        // 6. Token-Weighted Context Zones
+        const zones = st.zones || [];
+        if (zones.length > 0) {
+          const totalZ = Math.max(1, zones.reduce((s, z) => s + Math.max(1, Number(z.tokens) || 1), 0));
+          $('zones-bar').innerHTML = zones.map((z) => {
+            const weight = Math.max(1, Number(z.tokens) || 1);
+            const cls = 'zone-seg zone-' + z.kind;
+            return '<div class="' + cls + '" style="flex:' + weight + ';" title="' + escapeHtml(z.kind + ' · ' + z.start + '..' + z.end + ' · ' + formatK(z.tokens || 0) + 't') + '">' + escapeHtml(z.start + '..' + z.end) + '</div>';
+          }).join('');
+          $('zones-tbody').innerHTML = zones.map((z) => {
+            const share = (((Number(z.tokens) || 0) / totalZ) * 100).toFixed(1) + '%';
+            return '<tr>' +
+              '<td><span class="status-pill" style="background:var(--bg-elevated);color:var(--text-primary)">' + escapeHtml(z.kind) + '</span></td>' +
+              '<td class="mono">' + escapeHtml(z.start + '..' + z.end) + '</td>' +
+              '<td class="num">' + (z.messages != null ? z.messages : '—') + '</td>' +
+              '<td class="num">' + formatK(z.tokens || 0) + '</td>' +
+              '<td class="num">' + share + '</td>' +
+              '</tr>';
+          }).join('');
         }
       } catch (err) {
         console.error('Refresh error', err);
       }
     }
 
-    async function unfoldBlock(id) {
-      if (!confirm('Unfold block ' + id + ' to artifact file?')) return;
-      const res = await fetch('/api/unfold', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, mode: 'file' })
-      });
-      const data = await res.json();
-      if (data.ok) alert('Block ' + id + ' unfolded to:\\n' + data.path);
-      else alert('Unfold failed: ' + (data.error || 'unknown error'));
-      refreshData();
-    }
-
-    async function runSearch() {
-      const q = document.getElementById('search-input').value.trim();
-      if (!q) return;
-      const res = await fetch('/api/search?q=' + encodeURIComponent(q));
-      if (!res.ok) return;
-      const hits = await res.json();
-      const tbody = document.getElementById('search-tbody');
-      if (hits.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--muted);">No matches for "' + escapeHtml(q) + '".</td></tr>';
-      } else {
-        tbody.innerHTML = hits.map(h => {
-          return '<tr>' +
-            '<td class="mono"><strong>' + h.blockId + '</strong></td>' +
-            '<td><span class="tag-tier tag-tier' + h.tier + '">Tier ' + h.tier + '</span></td>' +
-            '<td>' + escapeHtml(h.topic) + '</td>' +
-            '<td class="mono">' + escapeHtml(h.snippet || '') + '</td>' +
-            '</tr>';
-        }).join('');
+    async function unfoldBlock(id, mode) {
+      try {
+        const res = await fetch('/api/unfold', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, mode: mode || 'file' }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          toast(
+            mode === 'inline'
+              ? 'Unfolded ' + id + ' inline into active context'
+              : 'Unfolded ' + id + ' → ' + data.path,
+            'ok',
+          );
+        } else {
+          toast('Unfold failed: ' + (data.error || 'unknown error'), 'err');
+        }
+        refreshData();
+      } catch (e) {
+        toast('Network error while unfolding ' + id, 'err');
       }
     }
 
-    function handleSearch(e) {
-      if (e.key === 'Enter') runSearch();
+    let searchTimer = null;
+    function debouncedSearch() {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(runSearch, 200);
     }
 
-    function escapeHtml(str) {
-      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    async function runSearch() {
+      const q = $('search-input').value.trim();
+      const tbody = $('search-tbody');
+      if (!q) {
+        tbody.innerHTML = '<tr><td colspan="4" class="chart-empty">Enter search terms above to query SQLite FTS5 index.</td></tr>';
+        return;
+      }
+      const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+      if (!res.ok) return;
+      const hits = await res.json();
+      if (!hits.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="chart-empty">No matches for "' + escapeHtml(q) + '".</td></tr>';
+      } else {
+        tbody.innerHTML = hits.map((h) =>
+          '<tr class="clickable" onclick="openBlockDrawer(\\'' + escapeHtml(h.blockId) + '\\')">' +
+            '<td class="mono"><strong>' + escapeHtml(h.blockId) + '</strong></td>' +
+            '<td><span class="tag-tier tag-tier' + h.tier + '">Tier ' + h.tier + '</span></td>' +
+            '<td>' + escapeHtml(h.topic) + '</td>' +
+            '<td class="mono" style="font-size:12px;color:var(--text-secondary)">' + escapeHtml(h.snippet || '') + '</td>' +
+          '</tr>'
+        ).join('');
+      }
     }
 
-    // Connect SSE for live updates
+    // Live SSE connection
     const events = new EventSource('/api/events');
-    events.addEventListener('fold', () => refreshData());
-    events.addEventListener('unfold', () => refreshData());
-    events.addEventListener('round', () => refreshData());
+    events.addEventListener('open', () => {
+      $('sse-dot').classList.remove('offline');
+      $('sse-label').textContent = 'Live';
+    });
+    events.addEventListener('error', () => {
+      $('sse-dot').classList.add('offline');
+      $('sse-label').textContent = 'Reconnecting';
+    });
+    ['fold', 'unfold', 'round', 'refresh'].forEach((ev) => {
+      events.addEventListener(ev, () => refreshData());
+    });
 
-    // Initial load + periodic polling fallback
     refreshData();
-    setInterval(refreshData, 3000);
+    setInterval(refreshData, 4000);
   </script>
 </body>
 </html>`;
