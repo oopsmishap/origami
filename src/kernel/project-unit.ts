@@ -198,6 +198,27 @@ export function protectedTailTurn(
   return turn;
 }
 
+export function isEphemeralFolded(
+  idx: number,
+  bound: readonly BoundMessage[],
+  foldedRefs: ReadonlySet<string>,
+): boolean {
+  let prevFolded = false;
+  for (let k = idx - 1; k >= 0; k--) {
+    if (!bound[k]!.ephemeral) {
+      prevFolded = foldedRefs.has(bound[k]!.ref);
+      break;
+    }
+  }
+  let nextFolded = false;
+  for (let k = idx + 1; k < bound.length; k++) {
+    if (!bound[k]!.ephemeral) {
+      nextFolded = foldedRefs.has(bound[k]!.ref);
+      break;
+    }
+  }
+  return prevFolded && nextFolded;
+}
 export function protectedZoneMap(
   bound: readonly BoundMessage[],
   protectedFromTurn: number,
@@ -208,9 +229,17 @@ export function protectedZoneMap(
   const zones: Zone[] = [];
   let run: Zone | null = null;
   const headTurn = pinnedHeadRef !== null ? pinnedHeadTurn(bound, pinnedHeadRef) : -1;
-  for (const m of bound) {
+  for (let i = 0; i < bound.length; i++) {
+    const m = bound[i]!;
     const pinnedTurn = pinnedHeadRef !== null && m.turn === headTurn;
-    const kind = m.ephemeral || m.turn >= protectedFromTurn || pinnedTurn ? "protected" : foldedRefs.has(m.ref) ? "folded" : "compressible";
+    let kind: "protected" | "compressible" | "folded";
+    if (pinnedTurn || m.turn >= protectedFromTurn) {
+      kind = "protected";
+    } else if (m.ephemeral) {
+      kind = isEphemeralFolded(i, bound, foldedRefs) ? "folded" : "compressible";
+    } else {
+      kind = foldedRefs.has(m.ref) ? "folded" : "compressible";
+    }
     if (run && run.kind === kind) {
       if (!run.start && m.ref) run.start = m.ref;
       if (m.ref) run.end = m.ref;

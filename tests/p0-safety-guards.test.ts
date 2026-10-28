@@ -288,4 +288,26 @@ describe("P0 Safety: Tool Pairing Atomicity Guard", () => {
     expect(ranges[0]!.start).toBe("m00001");
     expect(ranges[0]!.end).toBe("m00001");
   });
+
+  it("recommendRanges spans across intermediate ephemeral messages without splitting runs", () => {
+    const bound = [
+      { ref: "m00001", ephemeral: false, turn: 1, tokens: 100, tool: false },
+      { ref: "m00002", ephemeral: false, turn: 2, tokens: 150, tool: false },
+      // Intermediate ephemeral message in turn 2
+      { ref: "", ephemeral: true, turn: 2, tokens: 50, tool: false },
+      { ref: "m00003", ephemeral: false, turn: 2, tokens: 200, tool: false },
+      { ref: "m00004", ephemeral: false, turn: 3, tokens: 100, tool: false },
+    ];
+
+    const ranges = recommendRanges({
+      bound,
+      foldedRefs: new Set(),
+      protectedFromTurn: 3,
+      pinnedHeadRef: "m00001",
+    });
+
+    expect(ranges).toHaveLength(1);
+    expect(ranges[0]!.start).toBe("m00002");
+    expect(ranges[0]!.end).toBe("m00003");
+  });
 });

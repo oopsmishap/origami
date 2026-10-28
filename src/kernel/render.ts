@@ -67,6 +67,62 @@ export function planRender(input: {
     });
   }
 
+  // Remove obsolete ephemeral developer/system messages inside folded history:
+  // An ephemeral message at index i (i >= pinnedHeadIndex) is removed if:
+  // 1. Both its nearest preceding non-ephemeral message and nearest succeeding
+  //    non-ephemeral message are removed (surrounded by folded history), OR
+  // 2. All non-ephemeral messages in its turn are removed.
+  for (let i = pinnedHeadIndex; i < bound.length; i++) {
+    const m = bound[i]!;
+    if (!m.ephemeral || removed.has(i)) continue;
+
+    let prevNonEph = -1;
+    for (let k = i - 1; k >= 0; k--) {
+      if (!bound[k]!.ephemeral) {
+        prevNonEph = k;
+        break;
+      }
+    }
+
+    let nextNonEph = -1;
+    for (let k = i + 1; k < bound.length; k++) {
+      if (!bound[k]!.ephemeral) {
+        nextNonEph = k;
+        break;
+      }
+    }
+
+    const surroundedByFolded =
+      prevNonEph !== -1 &&
+      removed.has(prevNonEph) &&
+      nextNonEph !== -1 &&
+      removed.has(nextNonEph);
+
+    if (surroundedByFolded) {
+      removed.add(i);
+      continue;
+    }
+
+    const turn = m.turn;
+    if (turn > 0) {
+      let turnHasNonEph = false;
+      let allTurnNonEphRemoved = true;
+      for (let k = 0; k < bound.length; k++) {
+        const t = bound[k]!;
+        if (t.turn === turn && !t.ephemeral) {
+          turnHasNonEph = true;
+          if (!removed.has(k)) {
+            allTurnNonEphRemoved = false;
+            break;
+          }
+        }
+      }
+      if (turnHasNonEph && allTurnNonEphRemoved) {
+        removed.add(i);
+      }
+    }
+  }
+
   for (const i of [...removed].sort((a, b) => a - b)) {
     ops.push({ kind: "remove", index: i });
   }

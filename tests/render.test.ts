@@ -95,6 +95,70 @@ describe("planRender + applyRender", () => {
     const out = applyRender(bound, ops, makeFold);
     expect(out.map((m: { ref?: string; blockId?: string }) => m.ref ?? m.blockId)).toEqual(["m00001", "b1", "m00004", "m00005"]);
   });
+
+  it("removes ephemeral developer messages strictly inside a folded block", () => {
+    const bound: BoundMessage[] = [
+      msg("m00001", 1, "user"),
+      msg("m00002", 2, "user"),
+      msg("", 2, "developer", { ephemeral: true, text: "<system-reminder rule=\"ts-set-map\">" }),
+      msg("m00003", 2, "assistant"),
+      msg("m00004", 3, "user"),
+    ].map((m, i) => ({ ...m, index: i }));
+
+    const ops = planRender({
+      bound,
+      blocks: [block("b1", [{ start: "m00002", end: "m00003" }])],
+      pinnedHeadIndex: 0,
+    });
+    const out = applyRender(bound, ops, makeFold);
+    expect(out.map((m: { ref?: string; blockId?: string }) => m.ref ?? m.blockId)).toEqual(["m00001", "b1", "m00004"]);
+  });
+
+  it("removes ephemeral developer messages sandwiched between two adjacent folded blocks", () => {
+    const bound: BoundMessage[] = [
+      msg("m00001", 1, "user"),
+      msg("m00002", 2, "user"),
+      msg("", 2, "developer", { ephemeral: true, text: "<system-reminder rule=\"ts-no-any\">" }),
+      msg("m00003", 3, "user"),
+      msg("m00004", 4, "user"),
+    ].map((m, i) => ({ ...m, index: i }));
+
+    const ops = planRender({
+      bound,
+      blocks: [
+        block("b1", [{ start: "m00002", end: "m00002" }]),
+        block("b2", [{ start: "m00003", end: "m00003" }]),
+      ],
+      pinnedHeadIndex: 0,
+    });
+    const out = applyRender(bound, ops, makeFold);
+    expect(out.map((m: { ref?: string; blockId?: string }) => m.ref ?? m.blockId)).toEqual(["m00001", "b1", "b2", "m00004"]);
+  });
+
+  it("preserves ephemeral messages in uncovered/live history and protected tail", () => {
+    const bound: BoundMessage[] = [
+      msg("m00001", 1, "user"),
+      msg("m00002", 2, "user"),
+      msg("m00003", 2, "assistant"),
+      msg("m00004", 3, "user"),
+      msg("", 3, "developer", { ephemeral: true, text: "<system-reminder rule=\"active\">" }),
+      msg("m00005", 3, "assistant"),
+    ].map((m, i) => ({ ...m, index: i }));
+
+    const ops = planRender({
+      bound,
+      blocks: [block("b1", [{ start: "m00002", end: "m00003" }])],
+      pinnedHeadIndex: 0,
+    });
+    const out = applyRender(bound, ops, makeFold);
+    expect(out.map((m: { ref?: string; blockId?: string; role?: string }) => (m.ref ? m.ref : m.blockId ? m.blockId : m.role))).toEqual([
+      "m00001",
+      "b1",
+      "m00004",
+      "developer",
+      "m00005",
+    ]);
+  });
 });
 
 describe("ref tags", () => {

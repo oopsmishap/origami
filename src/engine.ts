@@ -3,7 +3,7 @@ import { formatRef, parseRangeSpec, parseRef } from "./kernel/types.ts";
 import { messageFacts } from "./kernel/message-facts.ts";
 import { SessionState } from "./kernel/state.ts";
 import type { SessionEntryLike } from "./kernel/state.ts";
-import { detectUncoveredRuns, projectUnit, protectedTailTurn, protectedZoneMap, spanHits, type UncoveredRun } from "./kernel/project-unit.ts";
+import { detectUncoveredRuns, isEphemeralFolded, projectUnit, protectedTailTurn, protectedZoneMap, spanHits, type UncoveredRun } from "./kernel/project-unit.ts";
 import { checkInvariants, renderableBlocks } from "./kernel/invariants.ts";
 import { historicalFoldCallRefs } from "./kernel/fold-calls.ts";
 import { buildToolPairPartnerMap } from "./kernel/tool-pairs.ts";
@@ -822,10 +822,13 @@ export class OrigamiEngine {
     let systemTokens = 0;
     let conversationTokens = 0;
     let toolTokens = 0;
-    for (const m of bound) {
+    for (let i = 0; i < bound.length; i++) {
+      const m = bound[i]!;
       const tokens = this.state.ledger.countMessage(m);
       if (m.ephemeral) {
-        systemTokens += tokens;
+        if (!isEphemeralFolded(i, bound, foldedRefs)) {
+          systemTokens += tokens;
+        }
       } else if (!foldedRefs.has(m.ref)) {
         if (m.role === "toolResult") toolTokens += tokens;
         else conversationTokens += tokens;
@@ -901,12 +904,22 @@ export class OrigamiEngine {
       const validStart = /^m\d{5,}$/.test(z.start);
       const validEnd = /^m\d{5,}$/.test(z.end);
       if (!validStart && !validEnd) {
-        const ephCount = bound.filter((m) => m.ephemeral).length;
+        let ephTokens = 0;
+        let ephCount = 0;
+        for (let i = 0; i < bound.length; i++) {
+          const m = bound[i]!;
+          if (!m.ephemeral) continue;
+          const k = m.turn >= this.protectedFromTurn ? "protected" : isEphemeralFolded(i, bound, foldedRefs) ? "folded" : "compressible";
+          if (k === z.kind) {
+            ephCount++;
+            ephTokens += this.state.ledger.countMessage(m);
+          }
+        }
         return {
           kind: z.kind,
           start: "sys",
           end: "sys",
-          tokens: systemTokens,
+          tokens: ephTokens,
           messages: ephCount,
         };
       }
@@ -916,8 +929,25 @@ export class OrigamiEngine {
       const endNum = parseRef(endRef);
       let msgTokens = 0;
       let messages = 0;
-      for (const m of bound) {
-        if (m.ephemeral || !/^m\d{5,}$/.test(m.ref)) continue;
+      for (let i = 0; i < bound.length; i++) {
+        const m = bound[i]!;
+        if (m.ephemeral) {
+          if (z.kind !== "folded") {
+            let pRef = 0;
+            for (let k = i - 1; k >= 0; k--) {
+              if (!bound[k]!.ephemeral && /^m\d{5,}$/.test(bound[k]!.ref)) {
+                pRef = parseRef(bound[k]!.ref);
+                break;
+              }
+            }
+            if (pRef >= startNum && pRef <= endNum) {
+              messages++;
+              msgTokens += this.state.ledger.countMessage(m);
+            }
+          }
+          continue;
+        }
+        if (!/^m\d{5,}$/.test(m.ref)) continue;
         const n = parseRef(m.ref);
         if (n >= startNum && n <= endNum) {
           messages++;

@@ -158,4 +158,19 @@ describe("protectedZoneMap", () => {
     expect(zones[2]).toEqual({ kind: "compressible", start: "m00007", end: "m00012" });
     expect(zones[3]).toEqual({ kind: "protected", start: "m00013", end: "m00015" });
   });
+
+  it("preserves contiguous folded zone across internal ephemeral messages", () => {
+    const bound: BoundMessage[] = [
+      msg("m00001", 1, "user"),
+      msg("m00002", 2, "user"),
+      msg("", 2, "developer", { ephemeral: true }),
+      msg("m00003", 2, "assistant"),
+      msg("m00004", 3, "user"),
+    ];
+    const zones = protectedZoneMap(bound, 3, new Set(["m00002", "m00003"]), "m00001");
+    expect(zones).toHaveLength(3);
+    expect(zones[0]).toEqual({ kind: "protected", start: "m00001", end: "m00001" });
+    expect(zones[1]).toEqual({ kind: "folded", start: "m00002", end: "m00003" });
+    expect(zones[2]).toEqual({ kind: "protected", start: "m00004", end: "m00004" });
+  });
 });

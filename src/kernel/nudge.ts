@@ -192,20 +192,39 @@ export function recommendRanges(input: {
   const rawRuns: { startIdx: number; endIdx: number }[] = [];
   let currentStart = -1;
 
+  const pushRun = (startIdx: number, endIdx: number) => {
+    while (endIdx >= startIdx && bound[endIdx]!.ephemeral) endIdx--;
+    while (startIdx <= endIdx && bound[startIdx]!.ephemeral) startIdx++;
+    if (startIdx <= endIdx && bound[startIdx]!.ref && bound[endIdx]!.ref) {
+      rawRuns.push({ startIdx, endIdx });
+    }
+  };
+
   for (let i = 0; i < bound.length; i++) {
     const m = bound[i]!;
-    const foldable = !m.ephemeral && !foldedRefs.has(m.ref) && m.turn < protectedFromTurn && m.turn !== pinnedTurn;
-    if (foldable) {
-      if (currentStart === -1) currentStart = i;
-    } else {
+    const isProtected = m.turn >= protectedFromTurn || m.turn === pinnedTurn;
+    const isFolded = !m.ephemeral && foldedRefs.has(m.ref);
+
+    if (isProtected || isFolded) {
       if (currentStart !== -1) {
-        rawRuns.push({ startIdx: currentStart, endIdx: i - 1 });
+        pushRun(currentStart, i - 1);
         currentStart = -1;
       }
+      continue;
+    }
+
+    if (m.ephemeral) {
+      // Intermediate ephemeral message within foldable region: allow run to continue across it,
+      // but do not start a new run on an ephemeral message.
+      continue;
+    }
+
+    if (currentStart === -1) {
+      currentStart = i;
     }
   }
   if (currentStart !== -1) {
-    rawRuns.push({ startIdx: currentStart, endIdx: bound.length - 1 });
+    pushRun(currentStart, bound.length - 1);
   }
 
   const cleanRuns: NudgeRange[] = [];
@@ -247,7 +266,10 @@ export function recommendRanges(input: {
       }
     }
 
-    if (start <= end) {
+    while (end >= start && bound[end]!.ephemeral) end--;
+    while (start <= end && bound[start]!.ephemeral) start++;
+
+    if (start <= end && bound[start]!.ref && bound[end]!.ref) {
       let tokens = 0;
       let messages = 0;
       let toolTokens = 0;
