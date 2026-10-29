@@ -9,7 +9,12 @@ Origami replaces destructive full-window compaction with incremental, reversible
 - Tier 3 condenses lower-tier blocks across long sessions.
 - Newest messages, the latest user turn, and the initial prompt stay protected.
 - Efficiency nudges are advisory; emergency nudges are mandatory.
-- Folded originals are archived locally and remain searchable and recoverable.
+- Advisory folds pass a timing gate: context above the fill floor (`minFoldFillPct` of the window, capped by `minFoldFillCapTokens`), a task boundary (a fresh user turn, an idle cold cache, or twice the growth step of unfolded work), and, once cache telemetry exists, break-even within `paybackHorizonTurns`. `fold_status` prints the current `Fold gate:` line. Emergency folds ignore the gate.
+- User and tool-result messages carry `[#mNNNNN]` ref tags (`refTags`) so summaries and recalls can cite exact refs.
+- Every block records a manifest of the file paths, symbols, errors, commits and tools in its source. When the current turn touches manifest items of a folded block, a tail `[origami recall]` hint names that block (at most `recallHintMax`, each block at most once per 5 turns).
+- Summary lint: paths, commits and errors from the manifest that a summary omits are attached to the block as `Also covered`, and the block's token count measures the full rendered text.
+- Pinned ledger: user messages of a tier-1 fold are pinned as intents, and `keep` records (`constraint`, `decision`, `objective`) are pinned explicitly. Pinned records render under `Pinned:` and are carried verbatim through every tier-2/3 merge; objectives and intents are dropped with `retire` on a merge.
+- Folded originals are archived locally and remain searchable (topics, summaries, manifests and pinned records) and recoverable.
 
 Blocks are `active`, `consumed` by a higher tier, or `unfolded`. Status checks enforce unique coverage, valid parent-child state, and branch membership.
 
@@ -27,7 +32,8 @@ Origami enforces structural safety checks before committing any context changes:
 - Safe anchor attribution: Distillation merges inherit the maximum anchor of their consumed children rather than advancing to the newest conversation ref, ensuring uncompressed turn growth is never erased.
 - Mixed-tier batch folding: A single `fold` execution can combine Tier 1 raw message compression and Tier 2 summary distillation, letting agents reclaim prompt space and declutter block trees in one turn.
 - Cache collapse alerts: Telemetry monitors large prompt rounds (≥8K tokens) and flags when cache read rates drop below 10% after earlier healthy performance.
-- Nudge anti-amplification: Bookkeeping tool calls across all turns are excluded from growth tracking. Advisory efficiency and promotion nudges observe a 2-turn post-fold cooldown, preventing repetitive reminders while keeping emergency window protection active.
+- Nudge anti-amplification: Bookkeeping tool calls across all turns are excluded from growth tracking. Advisory efficiency and promotion nudges observe a post-fold cooldown (2 turns, extended up to 8 while the latest fold has not paid back), preventing repetitive reminders while keeping emergency window protection active.
+- Single compaction authority: Origami disables omp's own compaction settings for the main session. If host compaction or shake still runs, Origami does not fold in response; it warns once and attributes the resulting cache misses to `Host rewrite`.
 - Recall federation: Queries directed to cross-session memory (`recall`) are automatically cross-checked against the active session's SQLite index, appending matching fold blocks and message references without altering external memory.
 - Plan-aware retrieval: Full-text search extracts active tasks and planning state from the recent message window, boosting relevant candidate blocks above unrelated matches.
 
@@ -36,9 +42,10 @@ Origami tracks the long-term economics of context management:
 - Archived Stored: Raw message tokens preserved in local SQLite storage.
 - Active Summaries: Compact summary tokens occupying active prompt window space.
 - Compression Ratio: Multiplier of archived original tokens over in-context summaries (e.g. 45.4×).
-- Payback Status: Fold generation cost (summary tokens plus prefix re-cache penalty) is amortized against ongoing egress avoidance. Most folds break even within 1 to 2 turns, indicated by a checkmark (`✓`) in the status chip and detailed payback turn counts in the workbench and web dashboard.
-- Cache Miss Reconciliation: Ground-truth decomposition separates missed tokens into normal turn growth, fold prefix invalidation re-pay, and provider TTL or cluster eviction.
-- Cadence Protection: Every fold evaluates measured re-pay against subsequent request savings. If a fold requires more turns to break even, post-fold cooldown automatically extends to protect prompt cache efficiency.
+- Payback Status: A fold's one-time cost is `(1 − r)·T + q·σ − r·S` and its per-turn saving `r·(S − σ)`, where `S` is the replaced tokens (raw source for tier 1, child summaries for tier 2/3), `σ` the summary tokens, `T` the measured re-paid prefix, `r` = `cacheReadPrice` and `q` = `outputPrice`, all in units of one uncached input token. Break-even is their ratio; a fold whose summary is not smaller than its source never pays back.
+- Cache Miss Reconciliation: Ground-truth decomposition separates missed tokens into normal turn growth, fold prefix invalidation re-pay, host compaction rewrites, and an unattributed remainder (TTL expiry or provider eviction).
+- Cadence Protection: If the latest tier-1 fold has not yet broken even, post-fold cooldown extends to its break-even turns (at most 8).
+- Background candidates (`speculativeFolds`, off by default): after a turn ends, a side turn that shares the session's model and prompt cache drafts one fold for a timely range. It is never written to history; the main model sees it as an `[origami]` note and answers with `fold_candidate`.
 ## Workbench
 
 Open with `/fold` or `Alt+F`.
@@ -75,6 +82,7 @@ The API rejects missing tokens, foreign origins, non-loopback hosts, and invalid
 | `fold_search` | Search block summaries and archived original messages. Supports `tier:N` and `session:ID`. |
 | `fold_status` | Inspect occupancy, token split, fold state, and protected zones. |
 | `fold_cache` | Inspect cache hit rates and fold cache economics. |
+| `fold_candidate` | Accept, edit or reject a background fold candidate (`speculativeFolds`). |
 
 ## Local data
 

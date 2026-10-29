@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.0 — 2026-10-29
+
+### Features & Improvements
+- **Correct fold economics**: Break-even now uses the cache-priced formula `((1 − r)·T + q·σ − r·S) / (r·(S − σ))` in units of one uncached input token (`cacheReadPrice` 0.1, `outputPrice` 4). Tier 2/3 merges are measured against their children's summaries instead of raw source, and folds whose summary is not smaller never pay back (`never`). The previous formula subtracted σ twice and ignored cache pricing. Payback-extended cooldown is capped at 8 turns.
+- **Fold timing gate**: Advisory nudges wait for a fill floor (balanced: min(45% of window, 160K)), a task boundary (user turn, cold cache after `cacheTtlMs`, or 2× growth step), and break-even within `paybackHorizonTurns` (10). Emergency folds are unaffected. `fold_status` shows the gate.
+- **Single compaction authority**: `auto_compaction_start` no longer triggers an Origami fold; host compaction/shake is recorded per round (`host_rewrite`, schema v5) and reported as `Host rewrite` in the cache decomposition. The residual bucket is now `Unattributed`.
+- **Ref tags, manifests and recall hints**: User and tool-result messages carry `[#mNNNNN]` tags (`refTags`). Blocks store a manifest of paths, symbols, errors, commits and tools (schema v6, indexed for `fold_search`), and a tail `[origami recall]` hint points at folded blocks matching the current turn (`recallHintMax`).
+- **Summary lint**: Manifest paths, commits and errors a summary omits are attached as `Also covered`; `tokensAfter` measures the full rendered block.
+- **Pinned ledger**: Tier-1 folds pin user messages as intents; `keep` pins constraints, decisions and objectives. Pinned records survive every merge verbatim; `retire` drops finished objectives and intents on merge.
+- **Background fold candidates** (opt-in `speculativeFolds`): a side turn drafts one fold after a turn ends; the model answers with the new `fold_candidate` tool.
+- **Session replay harness**: `bun run replay` replays real session journals offline (simulated or recorded folds) with far-recall probes.
+
+### Notes
+- The CI benchmark runs 400 turns: with the fill floor, 200 turns no longer reach the first fold.
+- Database schema v6. Older Origami versions refuse to open a newer database; to downgrade, set `PRAGMA user_version` to the older version's schema (4 for 0.2.10, 3 for 0.2.3). The added columns are ignored by older code, and the migrations re-run safely on upgrade.
+- Compaction disarm is reapplied on every main-session start instead of once per process.
+
+### Known limitations
+- Manifest error extraction matches any tool-result line containing words like `error` or `failed`, so file reads of source code add noise to `Also covered` and recall hints.
+- Merged blocks inherit every pinned record; pinned intents accumulate until the model retires them.
+
 ## 0.2.10 — 2026-10-28
 
 ### Features & Improvements
