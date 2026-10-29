@@ -32,7 +32,7 @@ import type { CompactionStrategyName } from "./strategy-runtime.ts";
 
 export interface RunnerCliArgs {
   modes: ScenarioMode[];
-  scale: ContextScale;
+  scales: ContextScale[];
   strategies: CompactionStrategyName[];
   model: string;
   mock: boolean;
@@ -54,7 +54,7 @@ const ALL_MODES: ScenarioMode[] = ["programming", "research", "general", "memory
 export function parseCliArgs(argv: string[]): RunnerCliArgs {
   const args = argv.slice(2);
   let modes: ScenarioMode[] = [];
-  let scale: ContextScale = "low";
+  let scales: ContextScale[] = [];
   let strategies: CompactionStrategyName[] = [];
   let model = "openrouter/nvidia/nemotron-3.5-super-vl:free";
   let mock = false;
@@ -76,11 +76,14 @@ export function parseCliArgs(argv: string[]): RunnerCliArgs {
         process.exit(1);
       }
     } else if (a === "--scale" || a === "-s") {
-      const val = args[++i]!;
-      if (val in SCALE_TURNS) scale = val as ContextScale;
-      else {
-        console.error(`Unknown scale: ${val}. Available: low (20), medium (60), high (150), insane (300)`);
-        process.exit(1);
+      const raw = args[++i]!;
+      const parts = raw.split(",").map((s) => s.trim().toLowerCase());
+      for (const p of parts) {
+        if (p in SCALE_TURNS) scales.push(p as ContextScale);
+        else {
+          console.error(`Unknown scale: ${p}. Available: low (20), medium (60), high (150), insane (300)`);
+          process.exit(1);
+        }
       }
     } else if (a === "--strategy") {
       const val = args[++i]!;
@@ -102,11 +105,12 @@ export function parseCliArgs(argv: string[]): RunnerCliArgs {
       outDir = args[++i]!;
     }
   }
+  if (scales.length === 0) scales = ["low"];
 
   if (modes.length === 0) modes = ["programming"];
   if (strategies.length === 0) strategies = [...ALL_STRATEGIES];
 
-  return { modes, scale, strategies, model, mock, web, port, outDir };
+  return { modes, scales, strategies, model, mock, web, port, outDir };
 }
 
 function printHelp(): void {
@@ -240,12 +244,12 @@ export async function runBenchmark(cliArgs: RunnerCliArgs): Promise<AgenticRunRe
   }
 
   const results: AgenticRunResult[] = [];
-  const totalRuns = cliArgs.modes.length * cliArgs.strategies.length;
+  const totalRuns = cliArgs.scales.length * cliArgs.modes.length * cliArgs.strategies.length;
   let runIndex = 0;
 
   console.log(`\n\x1b[1m\x1b[35m=== Origami Agentic Context Benchmark ===\x1b[0m`);
   console.log(`Model:      \x1b[36m${cliArgs.model}\x1b[0m`);
-  console.log(`Scale:      \x1b[33m${cliArgs.scale}\x1b[0m (${SCALE_TURNS[cliArgs.scale]} turns/run)`);
+  console.log(`Scales:     \x1b[33m${cliArgs.scales.map(s => `${s} (${SCALE_TURNS[s]}t)`).join(", ")}\x1b[0m`);
   console.log(`Modes:      ${cliArgs.modes.join(", ")}`);
   console.log(`Strategies: ${cliArgs.strategies.join(", ")}`);
   console.log(`Total Runs: ${totalRuns} run(s) ${cliArgs.mock ? "(\x1b[32mMock Mode\x1b[0m)" : ""}\n`);
@@ -253,94 +257,99 @@ export async function runBenchmark(cliArgs: RunnerCliArgs): Promise<AgenticRunRe
   broadcaster.updateState({
     status: "running",
     model: cliArgs.model,
-    scale: cliArgs.scale,
-    totalTurns: SCALE_TURNS[cliArgs.scale],
+    scales: cliArgs.scales,
     totalRuns
   });
 
-  for (const mode of cliArgs.modes) {
-    const scenario: ScenarioDefinition = SCENARIO_REGISTRY[mode];
+  for (const scale of cliArgs.scales) {
+    for (const mode of cliArgs.modes) {
+      const scenario: ScenarioDefinition = SCENARIO_REGISTRY[mode];
 
-    for (const strategy of cliArgs.strategies) {
-      runIndex++;
-      const runBanner = `[${runIndex}/${totalRuns}] Mode: ${mode.toUpperCase()} · Strategy: ${strategy.toUpperCase()}`;
-      console.log(`\x1b[1m\x1b[34m------------------------------------------------------------\x1b[0m`);
-      console.log(`\x1b[1m\x1b[34m${runBanner}\x1b[0m`);
-      console.log(`\x1b[1m\x1b[34m------------------------------------------------------------\x1b[0m`);
+      for (const strategy of cliArgs.strategies) {
+        runIndex++;
+        const runBanner = `[${runIndex}/${totalRuns}] Scale: ${scale.toUpperCase()} (${SCALE_TURNS[scale]}t) · Mode: ${mode.toUpperCase()} · Strategy: ${strategy.toUpperCase()}`;
+        console.log(`\x1b[1m\x1b[34m------------------------------------------------------------\x1b[0m`);
+        console.log(`\x1b[1m\x1b[34m${runBanner}\x1b[0m`);
+        console.log(`\x1b[1m\x1b[34m------------------------------------------------------------\x1b[0m`);
 
-      broadcaster.updateState({
-        currentRun: {
-          index: runIndex,
-          mode,
+        broadcaster.updateState({
+          currentRun: {
+            index: runIndex,
+            scale,
+            mode,
+            strategy,
+            totalTurns: SCALE_TURNS[scale]
+          }
+        });
+
+        const runResult = await AgentRunner.run({
+          scenario,
+          scale,
           strategy,
-          totalTurns: SCALE_TURNS[cliArgs.scale]
-        }
-      });
+          model: cliArgs.model,
+          mock: cliArgs.mock,
+          cleanupWorkspace: true,
+          onTurnStart: (turn, total) => {
+            const probeTag = turn.isProbe ? " \x1b[35m[Probe Needle]\x1b[0m" : "";
+            process.stdout.write(
+              `\r  Turn \x1b[1m${turn.turnIndex}/${total}\x1b[0m${probeTag} ... `
+            );
+          },
+          onToolCall: (turnIdx, call) => {
+            broadcaster.broadcast("tool_call", {
+              scale,
+              strategy,
+              turn: turnIdx,
+              tool: call.name,
+              outputSnippet: call.output.slice(0, 160)
+            });
+          },
+          onTurnEnd: (metric: TurnMetricRecord) => {
+            const cacheHit = Math.round(metric.cacheHitRate * 100);
+            const probeStatus = metric.isProbe
+              ? metric.probeOutcome?.passed
+                ? " \x1b[32m[Probe: Pass ✓]\x1b[0m"
+                : " \x1b[31m[Probe: Fail ✗]\x1b[0m"
+              : "";
+            const maint = metric.maintenanceNote ? ` \x1b[36m(${metric.maintenanceNote})\x1b[0m` : "";
 
-      const runResult = await AgentRunner.run({
-        scenario,
-        scale: cliArgs.scale,
-        strategy,
-        model: cliArgs.model,
-        mock: cliArgs.mock,
-        cleanupWorkspace: true,
-        onTurnStart: (turn, total) => {
-          const probeTag = turn.isProbe ? " \x1b[35m[Probe Needle]\x1b[0m" : "";
-          process.stdout.write(
-            `\r  Turn \x1b[1m${turn.turnIndex}/${total}\x1b[0m${probeTag} ... `
-          );
-        },
-        onToolCall: (turnIdx, call) => {
-          broadcaster.broadcast("tool_call", {
-            strategy,
-            turn: turnIdx,
-            tool: call.name,
-            outputSnippet: call.output.slice(0, 160)
-          });
-        },
-        onTurnEnd: (metric: TurnMetricRecord) => {
-          const cacheHit = Math.round(metric.cacheHitRate * 100);
-          const probeStatus = metric.isProbe
-            ? metric.probeOutcome?.passed
-              ? " \x1b[32m[Probe: Pass ✓]\x1b[0m"
-              : " \x1b[31m[Probe: Fail ✗]\x1b[0m"
-            : "";
-          const maint = metric.maintenanceNote ? ` \x1b[36m(${metric.maintenanceNote})\x1b[0m` : "";
+            console.log(
+              `\r  Turn \x1b[1m${metric.turnIndex}\x1b[0m: ` +
+                `ctx: \x1b[33m${metric.contextTokens.toLocaleString()}t\x1b[0m · ` +
+                `prompt: ${metric.promptTokens.toLocaleString()}t · ` +
+                `cache: \x1b[32m${cacheHit}%\x1b[0m · ` +
+                `tools: ${metric.toolCallsCount}` +
+                probeStatus +
+                maint
+            );
 
-          console.log(
-            `\r  Turn \x1b[1m${metric.turnIndex}\x1b[0m: ` +
-              `ctx: \x1b[33m${metric.contextTokens.toLocaleString()}t\x1b[0m · ` +
-              `prompt: ${metric.promptTokens.toLocaleString()}t · ` +
-              `cache: \x1b[32m${cacheHit}%\x1b[0m · ` +
-              `tools: ${metric.toolCallsCount}` +
-              probeStatus +
-              maint
-          );
+            broadcaster.broadcast("turn_done", {
+              scale,
+              strategy,
+              totalTurns: SCALE_TURNS[scale],
+              metric
+            });
+          },
+          onMaintenance: (note: string) => {
+            broadcaster.broadcast("maintenance", { scale, strategy, note });
+          }
+        });
 
-          broadcaster.broadcast("turn_done", {
-            strategy,
-            metric
-          });
-        },
-        onMaintenance: (note: string) => {
-          broadcaster.broadcast("maintenance", { strategy, note });
-        }
-      });
+        results.push(runResult);
 
-      results.push(runResult);
+        const rubricPct = Math.round(runResult.rubricScore * 100);
+        const probePct = Math.round(runResult.probeScore * 100);
+        const cacheHitPct = Math.round(runResult.tokens.cacheHitPct);
 
-      const rubricPct = Math.round(runResult.rubricScore * 100);
-      const probePct = Math.round(runResult.probeScore * 100);
-      const cacheHitPct = Math.round(runResult.tokens.cacheHitPct);
+        console.log(`\n  \x1b[1mResult:\x1b[0m Task Rubric: \x1b[1m${rubricPct}%\x1b[0m (${runResult.rubricPassedCount}/${runResult.rubricTotalCount}) · ` +
+          `Probe Recall: \x1b[1m${probePct}%\x1b[0m (${runResult.probePassedCount}/${runResult.probeTotalCount}) · ` +
+          `Billed: \x1b[33m${runResult.tokens.billedTokens.toLocaleString()}t\x1b[0m · ` +
+          `Cache Hit: \x1b[32m${cacheHitPct}%\x1b[0m\n`);
 
-      console.log(`\n  \x1b[1mResult:\x1b[0m Task Rubric: \x1b[1m${rubricPct}%\x1b[0m (${runResult.rubricPassedCount}/${runResult.rubricTotalCount}) · ` +
-        `Probe Recall: \x1b[1m${probePct}%\x1b[0m (${runResult.probePassedCount}/${runResult.probeTotalCount}) · ` +
-        `Billed: \x1b[33m${runResult.tokens.billedTokens.toLocaleString()}t\x1b[0m · ` +
-        `Cache Hit: \x1b[32m${cacheHitPct}%\x1b[0m\n`);
-
-      broadcaster.broadcast("run_complete", {
-        runResult
-      });
+        broadcaster.broadcast("run_complete", {
+          runResult
+        });
+      }
     }
   }
 
@@ -368,15 +377,15 @@ function printComparisonTable(results: AgenticRunResult[]): void {
   console.log(`\x1b[1m\x1b[36m========================================================================================\x1b[0m\n`);
 
   console.log(
-    `| Strategy       | Mode        | Task (Rubric) | Probe Recall | Billed Tokens | Peak Ctx  | Cache Hit % | Cost    |`
+    `| Strategy       | Mode        | Scale   | Task (Rubric) | Probe Recall | Billed Tokens | Peak Ctx  | Cache Hit % | Cost    |`
   );
   console.log(
-    `|----------------|-------------|---------------|--------------|---------------|-----------|-------------|---------|`
+    `|----------------|-------------|---------|---------------|--------------|---------------|-----------|-------------|---------|`
   );
-
   for (const r of results) {
     const strat = r.strategy.padEnd(14);
     const mode = r.mode.padEnd(11);
+    const scale = r.scale.padEnd(7);
     const rubric = `${Math.round(r.rubricScore * 100)}% (${r.rubricPassedCount}/${r.rubricTotalCount})`.padEnd(13);
     const probe = `${Math.round(r.probeScore * 100)}% (${r.probePassedCount}/${r.probeTotalCount})`.padEnd(12);
     const billed = r.tokens.billedTokens.toLocaleString().padEnd(13);
@@ -384,7 +393,7 @@ function printComparisonTable(results: AgenticRunResult[]): void {
     const hit = `${Math.round(r.tokens.cacheHitPct)}%`.padEnd(11);
     const cost = `$${r.cost.toFixed(4)}`.padEnd(7);
 
-    console.log(`| ${strat} | ${mode} | ${rubric} | ${probe} | ${billed} | ${peak} | ${hit} | ${cost} |`);
+    console.log(`| ${strat} | ${mode} | ${scale} | ${rubric} | ${probe} | ${billed} | ${peak} | ${hit} | ${cost} |`);
   }
   console.log();
 }
@@ -392,8 +401,9 @@ function printComparisonTable(results: AgenticRunResult[]): void {
 function saveBenchmarkArtifacts(results: AgenticRunResult[], cliArgs: RunnerCliArgs): void {
   mkdirSync(cliArgs.outDir, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const jsonPath = join(cliArgs.outDir, `agentic-${cliArgs.scale}-${timestamp}.json`);
-  const mdPath = join(cliArgs.outDir, `agentic-${cliArgs.scale}-${timestamp}.md`);
+  const scaleTag = cliArgs.scales.join("-");
+  const jsonPath = join(cliArgs.outDir, `agentic-${scaleTag}-${timestamp}.json`);
+  const mdPath = join(cliArgs.outDir, `agentic-${scaleTag}-${timestamp}.md`);
 
   // Write JSON
   writeFileSync(jsonPath, JSON.stringify(results, null, 2), "utf8");
@@ -403,14 +413,14 @@ function saveBenchmarkArtifacts(results: AgenticRunResult[], cliArgs: RunnerCliA
     `# Agentic Compaction Benchmark Report`,
     ``,
     `- **Model:** \`${cliArgs.model}\``,
-    `- **Scale:** \`${cliArgs.scale}\` (${SCALE_TURNS[cliArgs.scale]} turns per scenario)`,
+    `- **Scales:** ${cliArgs.scales.map((s) => `\`${s}\` (${SCALE_TURNS[s]}t)`).join(", ")}`,
     `- **Timestamp:** \`${new Date().toISOString()}\``,
     `- **Execution Mode:** ${cliArgs.mock ? "Mock Simulation" : "Live LLM Execution"}`,
     ``,
     `## Summary Comparison Matrix`,
     ``,
-    `| Strategy | Mode | Task Rubric | Probe Recall | Billed Tokens | Peak Context | Cache Hit Rate | Time (s) |`,
-    `| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |`
+    `| Strategy | Mode | Scale | Task Rubric | Probe Recall | Billed Tokens | Peak Context | Cache Hit Rate | Time (s) |`,
+    `| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |`
   ];
 
   for (const r of results) {
@@ -422,7 +432,7 @@ function saveBenchmarkArtifacts(results: AgenticRunResult[], cliArgs: RunnerCliA
     const sec = (r.wallClockMs / 1000).toFixed(1);
 
     mdLines.push(
-      `| **${r.strategy}** | \`${r.mode}\` | ${rubricPct} | ${probePct} | ${billed} | ${peak} | ${hitRate} | ${sec}s |`
+      `| **${r.strategy}** | \`${r.mode}\` | \`${r.scale}\` | ${rubricPct} | ${probePct} | ${billed} | ${peak} | ${hitRate} | ${sec}s |`
     );
   }
 
@@ -746,8 +756,9 @@ function getDashboardHtml(port: number): string {
     evtSource.addEventListener('state_update', (e) => {
       const data = JSON.parse(e.data);
       if (data.status) badge.textContent = data.status.toUpperCase();
-      if (data.model && data.scale) {
-        headerMeta.textContent = 'Scale: ' + data.scale + ' (' + data.totalTurns + 't) · Model: ' + data.model;
+      if (data.model && (data.scale || data.scales)) {
+        const sc = data.scales ? data.scales.join(', ') : data.scale;
+        headerMeta.textContent = 'Scales: ' + sc + ' · Model: ' + data.model;
       }
       if (data.currentRun) {
         kpiStrat.textContent = 'Strategy: ' + data.currentRun.strategy + ' (' + data.currentRun.mode + ')';
@@ -757,7 +768,8 @@ function getDashboardHtml(port: number): string {
     evtSource.addEventListener('turn_done', (e) => {
       const data = JSON.parse(e.data);
       const m = data.metric;
-      kpiTurn.textContent = m.turnIndex + ' / ' + (headerMeta.textContent.match(/\\((\\d+)t\\)/)?.[1] || '-');
+      const totalTurns = (data.totalTurns) || (headerMeta.textContent.match(/\((\d+)t\)/)?.[1]) || '-';
+      kpiTurn.textContent = m.turnIndex + ' / ' + totalTurns;
       kpiCtx.textContent = m.contextTokens.toLocaleString() + ' t';
       kpiTokensSub.textContent = 'Prompt: ' + m.promptTokens.toLocaleString() + ' · Cached: ' + m.cachedTokens.toLocaleString();
       const hit = Math.round(m.cacheHitRate * 100);
