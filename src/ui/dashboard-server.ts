@@ -2,7 +2,7 @@ type BunServer = ReturnType<typeof Bun.serve>;
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import { openDb, type DbBlockRow, type OrigamiDb } from "../persist/db.ts";
 import type { SessionRecord, SessionRegistry } from "../sessions.ts";
-import { buildCacheReport } from "../kernel/cache-report.ts";
+import { buildCacheReport, DEFAULT_PRICE, foldEventsFromBlocks } from "../kernel/cache-report.ts";
 const TOKEN_HEADER = "X-Origami-Token";
 
 function randomToken(): string {
@@ -276,15 +276,28 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
                   cached: r.cache_read,
                   write: r.cache_write,
                   foldEventId: r.fold_event_id,
+                  hostRewrite: r.host_rewrite === 1,
                 }));
-                const folds = blocks.map((b) => ({
-                  id: b.block_id,
-                  at: b.created_at,
-                  tokensCompressed: Math.max(0, b.tokens_before - b.tokens_after),
-                  summaryTokens: b.tokens_after,
-                  topic: b.topic,
-                }));
-                return buildCacheReport(samples, folds);
+                const infos = blocks.map((b) => {
+                  let children: string[] = [];
+                  try {
+                    const v: unknown = JSON.parse(b.children);
+                    if (Array.isArray(v)) children = v.filter((x): x is string => typeof x === "string");
+                  } catch {}
+                  return {
+                    id: b.block_id,
+                    createdAt: b.created_at,
+                    tier: (b.tier === 2 || b.tier === 3 ? b.tier : 1) as 1 | 2 | 3,
+                    tokensBefore: b.tokens_before,
+                    tokensAfter: b.tokens_after,
+                    children,
+                    topic: b.topic,
+                  };
+                });
+                const price = record?.config
+                  ? { cacheRead: record.config.cacheReadPrice, output: record.config.outputPrice }
+                  : DEFAULT_PRICE;
+                return buildCacheReport(samples, foldEventsFromBlocks(infos), price);
               });
               if (rep) return Response.json(rep);
             }
@@ -1382,10 +1395,16 @@ function renderDashboardHtml(): string {
           <div class="meter-track"><div class="meter-seg" id="meter-cache-repay" style="width:0%;background:var(--accent-amber)"></div></div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-head"><span>TTL & PROVIDER EVICTION (E)</span></div>
+          <div class="kpi-head"><span>UNATTRIBUTED (E)</span></div>
           <div class="kpi-value" id="cache-ttl-pct" style="color:#a78bfa">—</div>
           <div class="kpi-sub" id="cache-ttl-sub">Idle gaps & cluster drops</div>
           <div class="meter-track"><div class="meter-seg" id="meter-cache-ttl" style="width:0%;background:#a78bfa"></div></div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-head"><span>HOST REWRITE (H)</span></div>
+          <div class="kpi-value" id="cache-host-pct" style="color:var(--accent-red,#ef4444)">—</div>
+          <div class="kpi-sub" id="cache-host-sub">omp compaction/shake outside Origami</div>
+          <div class="meter-track"><div class="meter-seg" id="meter-cache-host" style="width:0%;background:var(--accent-red,#ef4444)"></div></div>
         </div>
         <div class="kpi-card">
           <div class="kpi-head"><span>NET PROMPT SAVED</span></div>
@@ -2244,10 +2263,15 @@ function renderDashboardHtml(): string {
           if ($('meter-cache-repay')) $('meter-cache-repay').style.width = Math.min(100, repayPct) + '%';
 
           if ($('cache-ttl-pct')) $('cache-ttl-pct').textContent = ttlPct + '%';
-          if ($('cache-ttl-sub')) $('cache-ttl-sub').textContent = formatK(s.ttlRepay) + ' idle/provider drops';
+          if ($('cache-ttl-sub')) $('cache-ttl-sub').textContent = formatK(s.ttlRepay) + ' TTL expiry or provider eviction';
           if ($('meter-cache-ttl')) $('meter-cache-ttl').style.width = Math.min(100, ttlPct) + '%';
 
-          if ($('cache-saved-val')) $('cache-saved-val').textContent = '+' + formatK(s.netTokens);
+          const hostPct = totalMiss > 0 ? Math.round(((s.hostRepay || 0) / totalMiss) * 100) : 0;
+          if ($('cache-host-pct')) $('cache-host-pct').textContent = hostPct + '%';
+          if ($('cache-host-sub')) $('cache-host-sub').textContent = formatK(s.hostRepay || 0) + ' omp compaction/shake outside Origami';
+          if ($('meter-cache-host')) $('meter-cache-host').style.width = Math.min(100, hostPct) + '%';
+
+          if ($('cache-saved-val')) $('cache-saved-val').textContent = '+' + formatK(Math.round(s.netUnits));
           if ($('cache-saved-sub')) $('cache-saved-sub').textContent = s.paidBackCount + ' of ' + s.foldsCount + ' folds paid back';
           if ($('meter-cache-saved')) $('meter-cache-saved').style.width = (s.foldsCount > 0 ? Math.round((s.paidBackCount / s.foldsCount) * 100) : 100) + '%';
 
@@ -2260,7 +2284,7 @@ function renderDashboardHtml(): string {
             } else {
               foldsTbody.innerHTML = cacheReport.folds.map((f) => {
                 const statusCls = f.paidBack ? 'status-pill status-live' : 'status-pill status-unfolded';
-                const statusLbl = f.paidBack ? 'Paid back ✓' : 'Break-even in ~' + Math.max(1, f.breakevenTurns - f.requestsAfter) + 'T';
+                const statusLbl = f.paidBack ? 'Paid back ✓' : f.breakevenTurns === null ? 'Does not pay back' : 'Break-even in ~' + Math.max(1, Math.ceil(f.breakevenTurns - f.requestsAfter)) + 'T';
                 const cadPill = f.cadenceOk === null
                   ? '<span class="status-pill status-consumed">Active</span>'
                   : f.cadenceOk
@@ -2271,7 +2295,7 @@ function renderDashboardHtml(): string {
                   '<td class="num">' + formatK(f.S) + '</td>' +
                   '<td class="num">' + formatK(f.sigma) + '</td>' +
                   '<td class="num" style="color:var(--accent-amber)">' + formatK(f.T) + '</td>' +
-                  '<td class="num">' + f.breakevenTurns + ' turn' + (f.breakevenTurns === 1 ? '' : 's') + '</td>' +
+                  '<td class="num">' + (f.breakevenTurns === null ? 'never' : f.breakevenTurns.toFixed(1) + ' turns') + '</td>' +
                   '<td class="num">' + f.requestsAfter + '</td>' +
                   '<td><span class="' + statusCls + '">' + escapeHtml(statusLbl) + '</span></td>' +
                   '<td>' + cadPill + '</td>' +

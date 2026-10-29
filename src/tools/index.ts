@@ -74,6 +74,17 @@ export function registerTools(
                 description: "Optional per-fold tier: 1=message compression, 2=distillation, 3=ultra-dense",
               }),
             ),
+            keep: t.Optional(
+              t.Array(
+                t.Object({
+                  kind: t.Union([t.Literal("constraint"), t.Literal("decision"), t.Literal("objective")]),
+                  text: t.String({ description: "Verbatim record (≤500 chars)" }),
+                  ref: t.Optional(t.String({ description: "Source message ref inside this fold, e.g. m00042" })),
+                }),
+                { description: "Pinned ledger records carried verbatim through every later merge" },
+              ),
+            ),
+            retire: t.Optional(t.Array(t.String(), { description: "Ledger ids (objectives/intents) to drop when merging blocks" })),
           }),
           { description: "One or more disjoint fold ranges" },
         ),
@@ -201,6 +212,7 @@ export function registerTools(
       return renderInlineToolResult("Fold", "context.compaction", result, options, uiTheme, `tier ${a.tier ?? 1}`);
     },
   });
+
 
   registerInlineTool(api, {
     name: "unfold",

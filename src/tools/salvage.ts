@@ -1,4 +1,4 @@
-import type { FoldSpec } from "../engine.ts";
+import type { FoldKeep, FoldSpec } from "../engine.ts";
 
 export interface SalvagedFoldParams {
   folds: FoldSpec[];
@@ -17,6 +17,47 @@ function cleanStr(val: unknown): string {
     s = s.slice(1, -1).trim();
   }
   return s;
+}
+
+const KEEP_KINDS = new Set(["constraint", "decision", "objective"]);
+
+/** Parse a value that may arrive as a JSON string. */
+function maybeJson(val: unknown): unknown {
+  if (typeof val !== "string") return val;
+  try {
+    return JSON.parse(val.trim());
+  } catch {
+    return val;
+  }
+}
+
+function salvageLedgerFields(
+  obj: Record<string, unknown>,
+): { ok: true; fields: Pick<FoldSpec, "keep" | "retire"> } | { ok: false; error: string } {
+  const fields: Pick<FoldSpec, "keep" | "retire"> = {};
+  if (obj.keep !== undefined && obj.keep !== null) {
+    const keep = maybeJson(obj.keep);
+    const valid =
+      Array.isArray(keep) &&
+      keep.every(
+        (k) =>
+          k !== null &&
+          typeof k === "object" &&
+          KEEP_KINDS.has((k as { kind?: unknown }).kind as string) &&
+          typeof (k as { text?: unknown }).text === "string" &&
+          ((k as { ref?: unknown }).ref === undefined || typeof (k as { ref?: unknown }).ref === "string"),
+      );
+    if (!valid) return { ok: false, error: "keep must be an array of {kind,text,ref?}" };
+    fields.keep = (keep as FoldKeep[]).map((k) => ({ kind: k.kind, text: k.text, ...(k.ref !== undefined ? { ref: cleanStr(k.ref) } : {}) }));
+  }
+  if (obj.retire !== undefined && obj.retire !== null) {
+    const retire = maybeJson(obj.retire);
+    if (!Array.isArray(retire) || !retire.every((r) => typeof r === "string")) {
+      return { ok: false, error: "retire must be an array of ledger ids" };
+    }
+    fields.retire = retire.map((r) => cleanStr(r));
+  }
+  return { ok: true, fields };
 }
 
 /**
@@ -81,7 +122,9 @@ export function salvageFoldParams(raw: unknown): SalvageResult {
         if (/^\s*b\d+/i.test(range)) itemTier = 2;
         else if (/^\s*m\d+/i.test(range)) itemTier = 1;
       }
-      folds.push({ range, topic: topic || "Summary", summary, ...(itemTier !== undefined ? { tier: itemTier } : {}) });
+      const ledger = salvageLedgerFields(itemObj);
+      if (!ledger.ok) return ledger;
+      folds.push({ range, topic: topic || "Summary", summary, ...(itemTier !== undefined ? { tier: itemTier } : {}), ...ledger.fields });
     }
   } else if (typeof obj.range === "string" || typeof obj.summary === "string") {
     // Case 2: Shorthand top-level { range, topic, summary }
@@ -90,7 +133,9 @@ export function salvageFoldParams(raw: unknown): SalvageResult {
     const summary = cleanStr(obj.summary);
     if (!range) return { ok: false, error: "fold parameters missing 'range'" };
     if (!summary) return { ok: false, error: "fold parameters missing 'summary'" };
-    folds.push({ range, topic: topic || "Summary", summary });
+    const ledger = salvageLedgerFields(obj);
+    if (!ledger.ok) return ledger;
+    folds.push({ range, topic: topic || "Summary", summary, ...ledger.fields });
   }
 
   if (folds.length === 0) {

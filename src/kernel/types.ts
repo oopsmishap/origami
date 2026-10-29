@@ -1,3 +1,5 @@
+import type { BlockManifest } from "./manifest.ts";
+
 export type KernelRole =
   | "user"
   | "assistant"
@@ -54,6 +56,21 @@ export interface Block {
   createdAt: number;
   /** Newest message ref present when the fold happened; baseline for growth accounting. */
   anchorRef: string | null;
+  /** Deterministic facts (paths, symbols, errors, commits, tools) extracted from the covered source. */
+  manifest?: BlockManifest;
+  /** Manifest items the summary did not mention; rendered as "Also covered". */
+  missing?: string[];
+  /** Pinned records carried verbatim through every merge. */
+  ledger?: LedgerRecord[];
+}
+
+export type LedgerKind = "intent" | "constraint" | "decision" | "objective";
+
+export interface LedgerRecord {
+  id: string;
+  kind: LedgerKind;
+  text: string;
+  ref: string | null;
 }
 
 export function parseRef(ref: string): number {

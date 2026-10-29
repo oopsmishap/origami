@@ -63,6 +63,7 @@ describe("Standalone Web Dashboard Server", () => {
       cache_read: 8_000,
       cache_write: 2_000,
       fold_event_id: "b1",
+      host_rewrite: 0,
     });
 
     db.archiveMessages([{

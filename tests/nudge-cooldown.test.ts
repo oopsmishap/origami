@@ -138,6 +138,8 @@ describe("Nudge Self-Amplification Prevention (#5058)", () => {
       lastFoldTurn: 5,
       lastEfficiencyAtGrowth: null,
       lastPromotionAtMass: { 1: null, 2: null },
+      advisoryAllowed: true,
+      promotionAllowed: true,
     };
 
     const promo: PromotionCandidate[] = [
@@ -160,6 +162,8 @@ describe("Nudge Self-Amplification Prevention (#5058)", () => {
       lastFoldTurn: 5,
       lastEfficiencyAtGrowth: null,
       lastPromotionAtMass: { 1: null, 2: null },
+      advisoryAllowed: true,
+      promotionAllowed: true,
     };
 
     const decision = decideNudge(stateCooldownElapsed, sampleRanges, [], baseConfig);
@@ -178,6 +182,8 @@ describe("Nudge Self-Amplification Prevention (#5058)", () => {
       lastFoldTurn: 5,
       lastEfficiencyAtGrowth: null,
       lastPromotionAtMass: { 1: null, 2: null },
+      advisoryAllowed: true,
+      promotionAllowed: true,
     };
 
     const decision = decideNudge(stateEmergencyInCooldown, sampleRanges, [], baseConfig);

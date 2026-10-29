@@ -228,7 +228,7 @@ describe("persistence degradation", () => {
     expect(h.engine.state.tree.get("b1")?.status).toBe("active");
     expect(failures).toBe(1);
     expect(h.engine.search("anything")).toEqual([]);
-    h.engine.recordRound({ ts: 1, totalIn: 1, cacheRead: 0, cacheWrite: 0, foldEventId: null });
+    h.engine.recordRound({ ts: 1, totalIn: 1, cacheRead: 0, cacheWrite: 0, foldEventId: null, hostRewrite: false });
     expect(failures).toBe(1);
     db.close();
   });
@@ -244,6 +244,8 @@ describe("nudge policy", () => {
     nudgedThisTurn: false,
     lastEfficiencyAtGrowth: null,
     lastPromotionAtMass: { 1: null, 2: null },
+    advisoryAllowed: true,
+    promotionAllowed: true,
   };
 
   it("efficiency nudges are advisory, show composition, and back off after a deferral", () => {
@@ -278,10 +280,11 @@ describe("nudge policy", () => {
 
 describe("fold benefit floor", () => {
   it("rejects a tier-1 batch that reclaims less than the floor, accepts a larger one", () => {
-    const { engine, journal } = harness({ config: { minFoldBenefitTokens: 2000 } });
+    // User messages stay pinned verbatim in the block, so only assistant text is reclaimed.
+    const { engine, journal } = harness({ config: { minFoldBenefitTokens: 500 } });
     const small = engine.executeFold({ folds: [fold("m00003..m00004")] });
     expect(small.ok).toBe(false);
-    if (!small.ok) expect(small.error).toContain("below the minimum fold benefit of 2.0Kt");
+    if (!small.ok) expect(small.error).toContain("below the minimum fold benefit of 500t");
     expect(journal).toHaveLength(0);
     expect(engine.executeFold({ folds: [fold("m00003..m00010")] }).ok).toBe(true);
   });

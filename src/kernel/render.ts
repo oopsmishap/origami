@@ -18,7 +18,23 @@ export const TIER_HEADERS = {
 /** Header names the block and its coverage so the model can recall, unfold, or merge it. */
 export function renderBlockText(block: Block): string {
   const coverage = block.ranges.map((r) => (r.start === r.end ? r.start : `${r.start}..${r.end}`)).join(",");
-  return `${TIER_HEADERS[block.tier]} ${block.id}${coverage ? ` (${coverage})` : ""} — ${block.topic}\n${block.summary}`;
+  let text = `${TIER_HEADERS[block.tier]} ${block.id}${coverage ? ` (${coverage})` : ""} — ${block.topic}\n${block.summary}`;
+  if (block.ledger && block.ledger.length > 0) {
+    text += `\nPinned:\n${block.ledger.map((r) => `- [${r.kind}] ${r.text}${r.ref ? ` (${r.ref})` : ""}`).join("\n")}`;
+  }
+  if (block.missing && block.missing.length > 0) {
+    text += `\nAlso covered (fold_recall for detail): ${block.missing.join("; ")}`;
+  }
+  return text;
+}
+
+/** Prefix a raw user/tool-result message with its `[#mNNNNN]` ref so the model can cite it. */
+export function withRefTag<T>(message: T, ref: string): T {
+  const raw = message as { content?: unknown };
+  const tag = `[#${ref}]`;
+  if (typeof raw.content === "string") return { ...(message as object), content: `${tag} ${raw.content}` } as T;
+  if (Array.isArray(raw.content)) return { ...(message as object), content: [{ type: "text", text: tag }, ...raw.content] } as T;
+  return message;
 }
 
 function refInRanges(ref: string, ranges: readonly RefRange[]): boolean {

@@ -584,6 +584,16 @@ export function formatStatusReport(report: StatusReport): string {
   lines.push(
     `growth ${formatTokens(report.growthSinceFold)} / ${formatTokens(report.growthStep)} · compressible ${formatTokens(report.compressibleTokens)} / ${formatTokens(report.compressibleFloor)} · protected tail from turn ${report.protectedFromTurn}`,
   );
+  const gate = report.foldGate;
+  lines.push(
+    gate.blockedBy === null
+      ? `Fold gate: open (boundary: ${gate.boundary})`
+      : gate.blockedBy === "fill-floor"
+        ? `Fold gate: blocked by fill floor (context ${formatTokens(report.projectedTokens)} < ${formatTokens(gate.fillFloorTokens)})`
+        : gate.blockedBy === "mid-task"
+          ? "Fold gate: blocked mid-task (waiting for a user turn, idle cache, or 2× growth step)"
+          : `Fold gate: blocked by cost (break-even ${gate.breakevenTurns === null ? "never" : gate.breakevenTurns.toFixed(1)} turns > ${gate.paybackHorizonTurns})`,
+  );
   if (report.invariantViolations.length > 0) {
     lines.push("");
     lines.push("invariant violations:");
@@ -649,8 +659,9 @@ export function formatCacheRounds(
       "--- Cache Miss Decomposition (Ground Truth) ---",
       `Fresh Content:       ${formatTokens(s.newContent)} (${freshPct}% of misses · normal turn growth)`,
       `Compression Re-pay:  ${formatTokens(s.compRepay)} (${repayPct}% of misses · prefix invalidation)`,
-      `TTL / Eviction:      ${formatTokens(s.ttlRepay)} (${ttlPct}% of misses · provider KV cache drops)`,
-      `Net Prompt Saved:    ${formatTokens(s.netTokens)}t (${s.paidBackCount}/${s.foldsCount} folds paid back)`,
+      `Host rewrite:        ${formatTokens(s.hostRepay)} (${totalMiss > 0 ? Math.round((s.hostRepay / totalMiss) * 100) : 0}% of misses · omp compaction/shake outside Origami)`,
+      `Unattributed:        ${formatTokens(s.ttlRepay)} (${ttlPct}% of misses · TTL expiry or provider eviction)`,
+      `Net saving:          ${formatTokens(Math.round(s.netUnits))} units (${s.paidBackCount}/${s.foldsCount} folds paid back · 1 unit = 1 uncached input token)`,
     );
 
     if (cacheReport.folds.length > 0) {
@@ -660,11 +671,12 @@ export function formatCacheRounds(
         "fold | compressed | summary | repay_T | breakeven | requests | payback | cadence",
       );
       for (const f of cacheReport.folds) {
-        const status = f.paidBack ? "PAID_BACK ✓" : `BREAKEVEN_IN_${Math.max(1, f.breakevenTurns - f.requestsAfter)}T`;
+        const b = f.breakevenTurns;
+        const status = f.paidBack ? "PAID_BACK ✓" : b === null ? "NEVER_PAYS" : `BREAKEVEN_IN_${Math.max(1, Math.ceil(b - f.requestsAfter))}T`;
         const cadence = f.cadenceOk === null ? "ACTIVE" : f.cadenceOk ? "OK ✓" : "THRASHED ✗";
         lines.push(
           `${f.id.padEnd(4)} | ${formatTokens(f.S).padEnd(10)} | ${formatTokens(f.sigma).padEnd(7)} | ${formatTokens(f.T).padEnd(7)} | ` +
-          `${(f.breakevenTurns + " turns").padEnd(9)} | ${(f.requestsAfter + " post").padEnd(8)} | ` +
+          `${(b === null ? "never" : `${b.toFixed(1)} turns`).padEnd(9)} | ${(f.requestsAfter + " post").padEnd(8)} | ` +
           `${status.padEnd(11)} | ${cadence}`,
         );
       }
@@ -712,5 +724,11 @@ export function formatFoldOutcome(outcome: FoldOutcome): string {
     (b: FoldCreatedBlock) =>
       `${b.id} (tier ${b.tier}) ${b.refs[0]}..${b.refs[b.refs.length - 1]} · ${formatTokens(b.tokensBefore)}t → ${formatTokens(b.tokensAfter)}t · ${b.topic}`,
   );
+  for (const b of outcome.blocks) {
+    if (b.missing.length === 0) continue;
+    lines.push(
+      `${b.id}: summary omitted ${b.missing.length} source item(s) (${b.missing.slice(0, 3).join(", ")}); attached as "Also covered".`,
+    );
+  }
   return `${outcome.foldCount} block(s) folded · reclaimed ${formatTokens(outcome.tokensReclaimed)}t\n${lines.join("\n")}`;
 }

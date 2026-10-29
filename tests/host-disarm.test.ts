@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import origamiExtension from "../src/index.ts";
+import { sessionRegistry } from "../src/sessions.ts";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { Settings, settings } from "@oh-my-pi/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
@@ -93,5 +94,52 @@ describe("Host disarm proof", () => {
     expect(lookup("compaction.idleEnabled")!.get(settings)).toBe(false);
     expect(lookup("compaction.supersedeReads")!.get(settings)).toBe(false);
     expect(lookup("compaction.dropUseless")!.get(settings)).toBe(false);
+  });
+
+  it("does not fold when omp host compaction starts; it only records the host rewrite", async () => {
+    await Settings.init({ inMemory: true });
+    const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+    const appended: string[] = [];
+    const fakeApi = {
+      typebox: {
+        Type: new Proxy({}, { get: () => (x: unknown) => x }),
+      },
+      registerTool: () => {},
+      registerMessageRenderer: () => {},
+      registerCommand: () => {},
+      registerShortcut: () => {},
+      appendEntry: (type: string) => {
+        appended.push(type);
+      },
+      on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => {
+        handlers.set(event, handler);
+      },
+    } as unknown as ExtensionAPI;
+    origamiExtension(fakeApi);
+
+    const entries = Array.from({ length: 12 }, (_, i) => ({
+      type: "message",
+      id: `e${i}`,
+      message: { role: i % 2 === 0 ? "user" : "assistant", content: `turn ${i} ${"payload ".repeat(400)}` },
+    }));
+    const mainCtx = {
+      agent: { kind: "main" },
+      sessionManager: {
+        getSessionId: () => "main-session-compaction",
+        getEntries: () => entries,
+        saveArtifact: async () => "/tmp/art",
+      },
+      cwd: "/tmp",
+      getContextUsage: () => ({ tokens: 95_000, contextWindow: 100_000 }),
+      hasUI: false,
+    } as unknown as ExtensionContext;
+
+    handlers.get("before_agent_start")!({ systemPrompt: ["test prompt"] }, mainCtx);
+    await handlers.get("auto_compaction_start")!({ reason: "threshold", action: "shake" }, mainCtx);
+
+    expect(appended).not.toContain("origami:event");
+    const rt = sessionRegistry().live("main-session-compaction")?.runtime;
+    expect(rt).toBeDefined();
+    expect(rt!.engine.state.tree.all()).toHaveLength(0);
   });
 });

@@ -1,8 +1,9 @@
 import { existsSync, renameSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import type { Block } from "../kernel/types.ts";
+import { EMPTY_MANIFEST, manifestTerms } from "../kernel/manifest.ts";
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 6;
 export const MAX_SEARCH_HITS = 50;
 
 export interface DbBlockRow {
@@ -19,6 +20,12 @@ export interface DbBlockRow {
   consumed_by: string | null;
   ranges: string;
   children: string;
+  /** JSON BlockManifest (v6+); written as '{}' when absent. */
+  manifest?: string;
+  /** JSON LedgerRecord[] (v6+); written as '[]' when absent. */
+  ledger?: string;
+  /** Searchable deterministic facts: manifest terms, missing items, ledger texts (v6+). */
+  facts?: string;
 }
 
 export interface DbRoundRow {
@@ -28,6 +35,8 @@ export interface DbRoundRow {
   cache_read: number;
   cache_write: number;
   fold_event_id: string | null;
+  /** 1 when the omp host rewrote the prompt prefix before this round. */
+  host_rewrite: number;
 }
 
 export interface DbMessageRow {
@@ -252,7 +261,47 @@ CREATE TABLE IF NOT EXISTS tool_telemetry (
 CREATE INDEX IF NOT EXISTS tool_telemetry_session_ts ON tool_telemetry(session_id, ts);
 CREATE INDEX IF NOT EXISTS tool_telemetry_tool ON tool_telemetry(tool, ts);
 `;
+// v5: rounds whose prefix was rewritten by the omp host (compaction/shake) rather than Origami.
+function MIGRATION_5(sqlite: Database): void {
+  addColumnsIfMissing(sqlite, "rounds", { host_rewrite: "INTEGER NOT NULL DEFAULT 0" });
+}
 
+/** ALTER TABLE ADD COLUMN for columns not yet present, so a migration can re-run after a user_version downgrade. */
+function addColumnsIfMissing(sqlite: Database, table: string, columns: Record<string, string>): void {
+  const existing = new Set(sqlite.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map((c) => c.name));
+  for (const [name, def] of Object.entries(columns)) {
+    if (!existing.has(name)) sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def};`);
+  }
+}
+
+// v6: deterministic block facts (manifest, pinned ledger) stored and searchable.
+function MIGRATION_6(sqlite: Database): void {
+  addColumnsIfMissing(sqlite, "blocks", {
+    manifest: "TEXT NOT NULL DEFAULT '{}'",
+    ledger: "TEXT NOT NULL DEFAULT '[]'",
+    facts: "TEXT NOT NULL DEFAULT ''",
+  });
+  sqlite.exec(`
+DROP TRIGGER IF EXISTS blocks_fts_ai;
+DROP TRIGGER IF EXISTS blocks_fts_ad;
+DROP TRIGGER IF EXISTS blocks_fts_au;
+DROP TABLE IF EXISTS blocks_fts;
+CREATE VIRTUAL TABLE blocks_fts USING fts5(
+  topic, summary, facts, content='blocks', content_rowid='rowid', tokenize='porter unicode61'
+);
+CREATE TRIGGER blocks_fts_ai AFTER INSERT ON blocks BEGIN
+  INSERT INTO blocks_fts(rowid, topic, summary, facts) VALUES (new.rowid, new.topic, new.summary, new.facts);
+END;
+CREATE TRIGGER blocks_fts_ad AFTER DELETE ON blocks BEGIN
+  INSERT INTO blocks_fts(blocks_fts, rowid, topic, summary, facts) VALUES ('delete', old.rowid, old.topic, old.summary, old.facts);
+END;
+CREATE TRIGGER blocks_fts_au AFTER UPDATE OF topic, summary, facts ON blocks BEGIN
+  INSERT INTO blocks_fts(blocks_fts, rowid, topic, summary, facts) VALUES ('delete', old.rowid, old.topic, old.summary, old.facts);
+  INSERT INTO blocks_fts(rowid, topic, summary, facts) VALUES (new.rowid, new.topic, new.summary, new.facts);
+END;
+INSERT INTO blocks_fts(blocks_fts) VALUES ('rebuild');
+`);
+}
 
 interface ParsedQuery {
   terms: string[];
@@ -306,15 +355,19 @@ function transaction(sqlite: Database, fn: () => void): void {
 function blockWriter(sqlite: Database): (row: DbBlockRow) => void {
   const statement = sqlite.query(
     `INSERT INTO blocks
-       (session_id, block_id, tier, topic, summary, body, tokens_before, tokens_after, created_at, status, consumed_by, ranges, children)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (session_id, block_id, tier, topic, summary, body, tokens_before, tokens_after, created_at, status, consumed_by, ranges, children, manifest, ledger, facts)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(session_id, block_id) DO UPDATE SET
        tier=excluded.tier, topic=excluded.topic, summary=excluded.summary, body=excluded.body,
        tokens_before=excluded.tokens_before, tokens_after=excluded.tokens_after, created_at=excluded.created_at,
-       status=excluded.status, consumed_by=excluded.consumed_by, ranges=excluded.ranges, children=excluded.children`,
+       status=excluded.status, consumed_by=excluded.consumed_by, ranges=excluded.ranges, children=excluded.children,
+       manifest=excluded.manifest, ledger=excluded.ledger, facts=excluded.facts`,
   );
   return (row) => {
-    statement.run(row.session_id, row.block_id, row.tier, row.topic, row.summary, row.body, row.tokens_before, row.tokens_after, row.created_at, row.status, row.consumed_by, row.ranges, row.children);
+    statement.run(
+      row.session_id, row.block_id, row.tier, row.topic, row.summary, row.body, row.tokens_before, row.tokens_after, row.created_at,
+      row.status, row.consumed_by, row.ranges, row.children, row.manifest ?? "{}", row.ledger ?? "[]", row.facts ?? "",
+    );
   };
 }
 
@@ -385,11 +438,13 @@ export function openDb(path: string): OrigamiDb {
     throw new Error(`origami.db schema v${version} is newer than supported v${SCHEMA_VERSION}`);
   }
 
-  const migrations = [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4];
+  const migrations: readonly (string | ((db: Database) => void))[] = [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6];
   while (version < SCHEMA_VERSION) {
     const next = version + 1;
     transaction(sqlite, () => {
-      sqlite.exec(migrations[next - 1]!);
+      const step = migrations[next - 1]!;
+      if (typeof step === "string") sqlite.exec(step);
+      else step(sqlite);
       sqlite.exec(`PRAGMA user_version = ${next}`);
     });
     version = next;
@@ -502,8 +557,8 @@ export function openDb(path: string): OrigamiDb {
       });
     },
     insertRound(row) {
-      sqlite.query("INSERT INTO rounds (session_id, ts, total_in, cache_read, cache_write, fold_event_id) VALUES (?, ?, ?, ?, ?, ?)")
-        .run(row.session_id, row.ts, row.total_in, row.cache_read, row.cache_write, row.fold_event_id);
+      sqlite.query("INSERT INTO rounds (session_id, ts, total_in, cache_read, cache_write, fold_event_id, host_rewrite) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(row.session_id, row.ts, row.total_in, row.cache_read, row.cache_write, row.fold_event_id, row.host_rewrite);
     },
     archiveMessages(rows) {
       if (rows.length === 0) return;
@@ -541,7 +596,7 @@ export function openDb(path: string): OrigamiDb {
       const where = clauses.length > 0 ? ` AND ${clauses.join(" AND ")}` : "";
       return allThenAny(parsed.terms, (match) => sqlite.query<DbBlockHit, (string | number)[]>(
         `SELECT b.block_id, b.session_id, b.tier, b.topic, b.status,
-           snippet(blocks_fts, -1, '[', ']', '…', 12) AS snippet, bm25(blocks_fts, 2.0, 1.0) AS rank
+           snippet(blocks_fts, -1, '[', ']', '…', 12) AS snippet, bm25(blocks_fts, 2.0, 1.0, 1.5) AS rank
          FROM blocks_fts JOIN blocks b ON b.rowid = blocks_fts.rowid
          WHERE blocks_fts MATCH ?${where}
          ORDER BY (b.status = 'active') DESC, rank, b.created_at DESC LIMIT ?`,
@@ -604,4 +659,9 @@ export function openDb(path: string): OrigamiDb {
 
 export function blockBodyForIndex(block: Block): string {
   return `${block.topic}\n${block.summary}`;
+}
+
+/** Deterministic, searchable facts of a block: manifest terms, unmentioned items, pinned ledger texts. */
+export function blockFactsForIndex(block: Block): string {
+  return [...manifestTerms(block.manifest ?? EMPTY_MANIFEST), ...(block.missing ?? []), ...(block.ledger ?? []).map((r) => r.text)].join("\n");
 }

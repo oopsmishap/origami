@@ -128,7 +128,7 @@ describe("billion-context Trajectory & Cache Hit Rate", () => {
     { ts: baseTs + 50_000, totalIn: 55_000, cacheRead: 49_500, cacheWrite: 5_500, foldEventId: null },
     // 15 minute idle TTL gap
     { ts: baseTs + 980_000, totalIn: 60_000, cacheRead: 12_000, cacheWrite: 48_000, foldEventId: null },
-  ];
+  ].map((r) => ({ ...r, hostRewrite: false }));
 
   const sampleBlocks = [
     {
@@ -389,12 +389,13 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
         cumulativeSavedTokens: 16_800,
         paybackStatus: "Paid back (2 turns past break-even)",
       },
+      foldGate: { allowed: true, blockedBy: null, boundary: "user" as const, fillFloorTokens: 90_000, breakevenTurns: null, paybackHorizonTurns: 10 },
     };
 
     const rounds = [
       { ts: Date.now() - 10_000, totalIn: 42_000, cacheRead: 36_000, cacheWrite: 6_000, foldEventId: null },
       { ts: Date.now() - 4_000, totalIn: 28_000, cacheRead: 16_000, cacheWrite: 12_000, foldEventId: "b1" },
-    ];
+    ].map((r) => ({ ...r, hostRewrite: false }));
 
     const model = buildWorkbenchModel(report, rounds, 200_000);
     let renderRequests = 0;

@@ -28,6 +28,10 @@ export interface NudgeState {
   /** Growth at which the last efficiency nudge fired since the last fold; null if none. */
   lastEfficiencyAtGrowth: number | null;
   lastPromotionAtMass: { 1: number | null; 2: number | null };
+  /** Fold timing gate (fill floor, boundary, cost) allows advisory tier-1 nudges. */
+  advisoryAllowed: boolean;
+  /** Fill floor and boundary allow promotion nudges (they rewrite only summaries; cost gate does not apply). */
+  promotionAllowed: boolean;
 }
 export type NudgeKind = "efficiency" | "emergency" | "promotion";
 
@@ -105,10 +109,11 @@ export function decideNudge(
     ranges.length > 0 &&
     total >= cfg.minFoldBenefit &&
     state.compressibleTokens >= cfg.compressibleFloor &&
-    state.growthSinceFoldTokens >= growthFloor;
+    state.growthSinceFoldTokens >= growthFloor &&
+    state.advisoryAllowed;
   // Check if any tier promotion candidate is eligible
   let activePromotion: { p: PromotionCandidate; toTier: 2 | 3 } | undefined;
-  for (const p of promotions) {
+  for (const p of state.promotionAllowed ? promotions : []) {
     const mass = p.fromTier === 1 ? cfg.tier2MassTokens : cfg.tier3MassTokens;
     const last = state.lastPromotionAtMass[p.fromTier];
     const floor = last === null ? mass : last + Math.ceil(mass / 2);

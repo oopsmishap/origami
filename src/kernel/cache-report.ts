@@ -1,16 +1,17 @@
 /**
  * Prompt-cache reconciliation and economics engine.
  *
- * Ground-truth decomposition: every request's cache miss is split into three
+ * Ground-truth decomposition: every request's cache miss is split into four
  * additive buckets so the totals reconcile exactly:
  *
  *   missed_i = input_i − cached_i
  *            = newContent_i   (legitimate fresh growth from user prompts & tool outputs)
  *            + compRepay_i    (re-payment forced by fold prefix divergence)
- *            + ttlRepay_i     (residual: provider-side KV cache eviction, TTL expiry)
+ *            + hostRepay_i    (re-payment after omp host compaction/shake rewrote the prefix)
+ *            + ttlRepay_i     (unattributed: TTL expiry or provider eviction)
  *
  * Exact closure:
- *   Σ input = Σ cached + Σ newContent + Σ compRepay + Σ ttlRepay
+ *   Σ input = Σ cached + Σ newContent + Σ compRepay + Σ hostRepay + Σ ttlRepay
  */
 
 export interface CacheSample {
@@ -19,20 +20,77 @@ export interface CacheSample {
   cached: number;
   write?: number;
   foldEventId?: string | null;
+  /** The omp host rewrote the prompt prefix before this request. */
+  hostRewrite?: boolean;
 }
 
 export interface FoldEvent {
   id: string;
   at: number;
-  tokensCompressed: number;
+  tier: 1 | 2 | 3;
+  /** Tokens removed from the live context: raw source for tier 1, child summaries for tier 2/3. */
+  replacedTokens: number;
   summaryTokens: number;
   topic?: string;
+}
+
+/** Price profile in units where 1 unit = 1 uncached input token. */
+export interface PriceProfile {
+  cacheRead: number;
+  output: number;
+}
+
+export const DEFAULT_PRICE: PriceProfile = { cacheRead: 0.1, output: 4 };
+
+export interface FoldBlockInfo {
+  id: string;
+  createdAt: number;
+  tier: 1 | 2 | 3;
+  tokensBefore: number;
+  tokensAfter: number;
+  children: readonly string[];
+  topic?: string;
+}
+
+/** Derive fold events from blocks; tier-2/3 replace their children's summaries, not raw source. */
+export function foldEventsFromBlocks(blocks: readonly FoldBlockInfo[]): FoldEvent[] {
+  const byId = new Map(blocks.map((b) => [b.id, b]));
+  return blocks.map((b) => ({
+    id: b.id,
+    at: b.createdAt,
+    tier: b.tier,
+    replacedTokens:
+      b.tier === 1 ? b.tokensBefore : b.children.reduce((sum, c) => sum + (byId.get(c)?.tokensAfter ?? 0), 0),
+    summaryTokens: b.tokensAfter,
+    topic: b.topic,
+  }));
+}
+
+/**
+ * Fold break-even in price units. A fold re-pays the uncached suffix T once
+ * (instead of reading it from cache), pays σ output tokens to write the summary,
+ * and avoids reading S from cache once; afterwards every turn reads σ instead of S.
+ */
+export function foldBreakeven(
+  S: number,
+  sigma: number,
+  T: number,
+  price: PriceProfile,
+): { oneTimeCostUnits: number; perTurnSavingUnits: number; breakevenTurns: number | null } {
+  const r = price.cacheRead;
+  const q = price.output;
+  const oneTimeCostUnits = (1 - r) * T + q * sigma - r * S;
+  const perTurnSavingUnits = r * (S - sigma);
+  const breakevenTurns = perTurnSavingUnits > 0 ? Math.max(0, oneTimeCostUnits) / perTurnSavingUnits : null;
+  return { oneTimeCostUnits, perTurnSavingUnits, breakevenTurns };
 }
 
 export interface SampleDecomposition {
   missed: number;
   newContent: number;
   compRepay: number;
+  /** Re-payment after the omp host rewrote the prefix (compaction/shake outside Origami). */
+  hostRepay: number;
   ttlRepay: number;
   foldId: string | null;
 }
@@ -40,17 +98,17 @@ export interface SampleDecomposition {
 export interface FoldEconomics {
   id: string;
   at: number;
+  tier: 1 | 2 | 3;
   S: number;
   sigma: number;
   T: number;
   requestsAfter: number;
-  savingPerTurn: number;
-  savedSoFar: number;
-  oneTimeCost: number;
-  breakevenTurns: number;
+  oneTimeCostUnits: number;
+  perTurnSavingUnits: number;
+  breakevenTurns: number | null;
   paidBack: boolean;
   cadenceOk: boolean | null;
-  netTokens: number;
+  netUnits: number;
   topic?: string;
 }
 
@@ -62,11 +120,11 @@ export interface EconomicsSummary {
   overallHitPct: number;
   newContent: number;
   compRepay: number;
+  hostRepay: number;
   ttlRepay: number;
-  grossSaved: number;
-  repayCost: number;
-  summaryCost: number;
-  netTokens: number;
+  grossSavedUnits: number;
+  costUnits: number;
+  netUnits: number;
   foldsCount: number;
   paidBackCount: number;
   cadenceOkCount: number;
@@ -95,18 +153,22 @@ export function decomposeSample(
   const remainder = missed - newContent;
 
   let compRepay = 0;
+  let hostRepay = 0;
   let foldId: string | null = null;
 
   if (remainder > 0 && activeFold !== null) {
     compRepay = remainder;
     foldId = activeFold.id;
+  } else if (remainder > 0 && cur.hostRewrite) {
+    hostRepay = remainder;
   }
 
   return {
     missed,
     newContent,
     compRepay,
-    ttlRepay: remainder - compRepay,
+    hostRepay,
+    ttlRepay: remainder - compRepay - hostRepay,
     foldId,
   };
 }
@@ -114,6 +176,7 @@ export function decomposeSample(
 export function buildCacheReport(
   samplesIn: readonly CacheSample[],
   foldsIn: readonly FoldEvent[],
+  price: PriceProfile = DEFAULT_PRICE,
 ): CacheReport {
   const samples = [...samplesIn].sort((a, b) => a.at - b.at);
   const folds = [...foldsIn].sort((a, b) => a.at - b.at);
@@ -208,31 +271,28 @@ export function buildCacheReport(
       }
     }
 
-    const S = f.tokensCompressed;
+    const S = f.replacedTokens;
     const sigma = f.summaryTokens;
     const T = foldRepayMap.get(f.id) ?? 0;
-    const savingPerTurn = Math.max(0, S - sigma);
-    const oneTimeCost = T + sigma;
-    const breakevenTurns = savingPerTurn > 0 ? Math.max(1, Math.ceil(oneTimeCost / savingPerTurn)) : 1;
-    const paidBack = requestsAfter >= breakevenTurns;
-    const cadenceOk = turnsToNextFold !== null ? turnsToNextFold >= breakevenTurns : null;
-    const savedSoFar = savingPerTurn * requestsAfter;
-    const netTokens = savedSoFar - oneTimeCost;
+    const { oneTimeCostUnits, perTurnSavingUnits, breakevenTurns } = foldBreakeven(S, sigma, T, price);
+    const paidBack = breakevenTurns !== null && requestsAfter >= breakevenTurns;
+    const cadenceOk = turnsToNextFold !== null && breakevenTurns !== null ? turnsToNextFold >= breakevenTurns : null;
+    const netUnits = perTurnSavingUnits * requestsAfter - Math.max(0, oneTimeCostUnits);
 
     foldEconomics.push({
       id: f.id,
       at: f.at,
+      tier: f.tier,
       S,
       sigma,
       T,
       requestsAfter,
-      savingPerTurn,
-      savedSoFar,
-      oneTimeCost,
+      oneTimeCostUnits,
+      perTurnSavingUnits,
       breakevenTurns,
       paidBack,
       cadenceOk,
-      netTokens,
+      netUnits,
       topic: f.topic,
     });
   }
@@ -243,6 +303,7 @@ export function buildCacheReport(
   let totalWrite = 0;
   let totalNewContent = 0;
   let totalCompRepay = 0;
+  let totalHostRepay = 0;
   let totalTtlRepay = 0;
 
   for (let i = 0; i < samples.length; i++) {
@@ -253,13 +314,13 @@ export function buildCacheReport(
     totalWrite += s.write ?? 0;
     totalNewContent += d.newContent;
     totalCompRepay += d.compRepay;
+    totalHostRepay += d.hostRepay;
     totalTtlRepay += d.ttlRepay;
   }
 
-  const grossSaved = foldEconomics.reduce((sum, f) => sum + f.savedSoFar, 0);
-  const repayCost = foldEconomics.reduce((sum, f) => sum + f.T, 0);
-  const summaryCost = foldEconomics.reduce((sum, f) => sum + f.sigma, 0);
-  const netTokens = grossSaved - repayCost - summaryCost;
+  const grossSavedUnits = foldEconomics.reduce((sum, f) => sum + f.perTurnSavingUnits * f.requestsAfter, 0);
+  const costUnits = foldEconomics.reduce((sum, f) => sum + Math.max(0, f.oneTimeCostUnits), 0);
+  const netUnits = grossSavedUnits - costUnits;
 
   let paidBackCount = 0;
   let cadenceOkCount = 0;
@@ -280,11 +341,11 @@ export function buildCacheReport(
       overallHitPct,
       newContent: totalNewContent,
       compRepay: totalCompRepay,
+      hostRepay: totalHostRepay,
       ttlRepay: totalTtlRepay,
-      grossSaved,
-      repayCost,
-      summaryCost,
-      netTokens,
+      grossSavedUnits,
+      costUnits,
+      netUnits,
       foldsCount: foldEconomics.length,
       paidBackCount,
       cadenceOkCount,

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import { buildCacheReport, decomposeSample, type CacheSample, type FoldEvent } from "../src/kernel/cache-report.ts";
+import {
+  buildCacheReport,
+  DEFAULT_PRICE,
+  decomposeSample,
+  foldBreakeven,
+  foldEventsFromBlocks,
+  type CacheSample,
+  type FoldEvent,
+} from "../src/kernel/cache-report.ts";
 import { OrigamiEngine } from "../src/engine.ts";
 import { configFromPreset } from "../src/config.ts";
 import { messageFacts } from "../src/kernel/message-facts.ts";
@@ -10,7 +18,7 @@ describe("Prompt Cache Reconciliation & Economics Engine (#800)", () => {
     const prev: CacheSample = { at: 1000, input: 50_000, cached: 45_000 };
     // Current request: input grew to 55,000, but only 40,000 cached (15,000 missed)
     const cur: CacheSample = { at: 2000, input: 55_000, cached: 40_000 };
-    const fold: FoldEvent = { id: "b1", at: 1500, tokensCompressed: 20_000, summaryTokens: 500 };
+    const fold: FoldEvent = { id: "b1", at: 1500, tier: 1, replacedTokens: 20_000, summaryTokens: 500 };
 
     const dec = decomposeSample(prev, cur, fold);
     expect(dec.missed).toBe(15_000);
@@ -38,6 +46,23 @@ describe("Prompt Cache Reconciliation & Economics Engine (#800)", () => {
     expect(dec.foldId).toBe(null);
   });
 
+  it("attributes a host-rewritten round's residual to hostRepay and keeps conservation", () => {
+    const report = buildCacheReport(
+      [
+        { at: 1000, input: 50_000, cached: 0 },
+        { at: 2000, input: 52_000, cached: 50_000 },
+        { at: 3000, input: 40_000, cached: 10_000, hostRewrite: true },
+        { at: 4000, input: 42_000, cached: 0 },
+      ],
+      [],
+    );
+    const s = report.summary;
+    expect(report.decompositions[2]!.hostRepay).toBe(30_000);
+    expect(report.decompositions[3]!.hostRepay).toBe(0);
+    expect(s.hostRepay).toBe(30_000);
+    expect(s.newContent + s.compRepay + s.hostRepay + s.ttlRepay).toBe(s.totalInput - s.totalCached);
+  });
+
   it("calculates multi-sample cache report with exact balance closure and per-fold payback", () => {
     const samples: CacheSample[] = [
       { at: 1000, input: 40_000, cached: 0 },
@@ -50,7 +75,7 @@ describe("Prompt Cache Reconciliation & Economics Engine (#800)", () => {
     ];
 
     const folds: FoldEvent[] = [
-      { id: "b1", at: 2500, tokensCompressed: 20_000, summaryTokens: 500, topic: "Auth overhaul" },
+      { id: "b1", at: 2500, tier: 1, replacedTokens: 20_000, summaryTokens: 500, topic: "Auth overhaul" },
     ];
 
     const report = buildCacheReport(samples, folds);
@@ -66,12 +91,51 @@ describe("Prompt Cache Reconciliation & Economics Engine (#800)", () => {
     expect(f1.id).toBe("b1");
     expect(f1.S).toBe(20_000);
     expect(f1.sigma).toBe(500);
-    expect(f1.savingPerTurn).toBe(19_500);
-    expect(f1.T).toBeGreaterThan(0);
-    expect(f1.breakevenTurns).toBeGreaterThanOrEqual(1);
+    // r = 0.1, q = 4: per-turn saving r·(S − σ) = 1950 units
+    expect(f1.perTurnSavingUnits).toBeCloseTo(1_950, 6);
+    expect(f1.T).toBe(20_000);
+    // one-time (1 − r)·T + q·σ − r·S = 18000 + 2000 − 2000 = 18000 → 9.23 turns
+    expect(f1.breakevenTurns).toBeCloseTo(9.23, 1);
     expect(f1.requestsAfter).toBe(3);
-    expect(f1.paidBack).toBe(true);
-    expect(f1.netTokens).toBeGreaterThan(0);
+    expect(f1.paidBack).toBe(false);
+    expect(f1.netUnits).toBeLessThan(0);
+  });
+
+  it("prices break-even with cache-read and output rates", () => {
+    const b = foldBreakeven(20_000, 500, 60_000, DEFAULT_PRICE);
+    expect(b.breakevenTurns).toBeCloseTo(27.69, 1);
+    const report = buildCacheReport(
+      [
+        { at: 1000, input: 80_000, cached: 0 },
+        { at: 2000, input: 80_000, cached: 80_000 },
+      ],
+      [{ id: "b1", at: 1500, tier: 1, replacedTokens: 20_000, summaryTokens: 500 }],
+    );
+    expect(report.folds[0]!.breakevenTurns).toBeCloseTo(foldBreakeven(20_000, 500, 0, DEFAULT_PRICE).breakevenTurns!, 6);
+  });
+
+  it("measures tier-2 savings against child summaries, not raw source", () => {
+    const events = foldEventsFromBlocks([
+      { id: "b1", createdAt: 1, tier: 1, tokensBefore: 30_000, tokensAfter: 800, children: [] },
+      { id: "b2", createdAt: 2, tier: 1, tokensBefore: 25_000, tokensAfter: 700, children: [] },
+      { id: "b3", createdAt: 3, tier: 2, tokensBefore: 55_000, tokensAfter: 400, children: ["b1", "b2", "gone"] },
+    ]);
+    const report = buildCacheReport([], events);
+    expect(report.folds.find((f) => f.id === "b3")!.S).toBe(1_500);
+    expect(report.folds.find((f) => f.id === "b1")!.S).toBe(30_000);
+  });
+
+  it("reports a fold whose summary is not smaller than its source as never paying back", () => {
+    const report = buildCacheReport(
+      [
+        { at: 1000, input: 10_000, cached: 0 },
+        { at: 2000, input: 10_000, cached: 10_000 },
+        { at: 3000, input: 10_000, cached: 10_000 },
+      ],
+      [{ id: "b1", at: 1500, tier: 1, replacedTokens: 500, summaryTokens: 600 }],
+    );
+    expect(report.folds[0]!.breakevenTurns).toBeNull();
+    expect(report.folds[0]!.paidBack).toBe(false);
   });
 
   it("engine.status() integrates cache report and calculates payback accurately", () => {

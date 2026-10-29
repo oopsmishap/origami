@@ -26,6 +26,24 @@ export interface OrigamiConfig {
   language: "preserve" | "english";
   /** Turns after a fold before efficiency or promotion nudges can fire again. */
   cooldownTurns?: number;
+  /** Context fill below which no non-emergency fold is advised: min(pct × window, cap). */
+  minFoldFillPct: number;
+  /** Cap on the fill floor in tokens; 0 = uncapped. */
+  minFoldFillCapTokens: number;
+  /** Price of a cache-read token relative to an uncached input token. */
+  cacheReadPrice: number;
+  /** Price of an output token relative to an uncached input token. */
+  outputPrice: number;
+  /** Idle time after which the provider prompt cache is assumed cold; 0 = never cold. */
+  cacheTtlMs: number;
+  /** Advisory folds must break even within this many turns; 0 disables the cost gate. */
+  paybackHorizonTurns: number;
+  /** Prefix user and tool-result messages with their `[#mNNNNN]` ref. */
+  refTags: boolean;
+  /** Maximum folded blocks named in a tail recall hint; 0 disables hints. */
+  recallHintMax: number;
+  /** Generate fold candidates in a background side turn (opt-in). */
+  speculativeFolds: boolean;
 }
 
 type PresetKeys =
@@ -39,7 +57,9 @@ type PresetKeys =
   | "tier3MassTokens"
   | "minFoldBenefitTokens"
   | "minFoldBenefitWindowPct"
-  | "blockMatureFolds";
+  | "blockMatureFolds"
+  | "minFoldFillPct"
+  | "minFoldFillCapTokens";
 
 export const PRESETS: Record<Preset, Pick<OrigamiConfig, PresetKeys>> = {
   balanced: {
@@ -54,6 +74,8 @@ export const PRESETS: Record<Preset, Pick<OrigamiConfig, PresetKeys>> = {
     minFoldBenefitTokens: 5000,
     minFoldBenefitWindowPct: 0.01,
     blockMatureFolds: 2,
+    minFoldFillPct: 0.45,
+    minFoldFillCapTokens: 160000,
   },
   lean: {
     growthStep: 20000,
@@ -67,6 +89,8 @@ export const PRESETS: Record<Preset, Pick<OrigamiConfig, PresetKeys>> = {
     minFoldBenefitTokens: 2000,
     minFoldBenefitWindowPct: 0.005,
     blockMatureFolds: 1,
+    minFoldFillPct: 0.3,
+    minFoldFillCapTokens: 100000,
   },
   relaxed: {
     growthStep: 100000,
@@ -80,13 +104,28 @@ export const PRESETS: Record<Preset, Pick<OrigamiConfig, PresetKeys>> = {
     minFoldBenefitTokens: 10000,
     minFoldBenefitWindowPct: 0.01,
     blockMatureFolds: 3,
+    minFoldFillPct: 0.55,
+    minFoldFillCapTokens: 200000,
   },
 };
 
 export const DEFAULT_SUBACTIVATE_TOKENS = 40000;
 
 export function configFromPreset(preset: Preset): OrigamiConfig {
-  return { preset, subagentActivateTokens: DEFAULT_SUBACTIVATE_TOKENS, retentionDays: 0, language: "preserve", ...PRESETS[preset] };
+  return {
+    preset,
+    subagentActivateTokens: DEFAULT_SUBACTIVATE_TOKENS,
+    retentionDays: 0,
+    language: "preserve",
+    cacheReadPrice: 0.1,
+    outputPrice: 4,
+    cacheTtlMs: 300000,
+    paybackHorizonTurns: 10,
+    refTags: true,
+    recallHintMax: 3,
+    speculativeFolds: false,
+    ...PRESETS[preset],
+  };
 }
 
 export class ConfigError extends Error {
@@ -106,6 +145,7 @@ const NUMERIC_KEYS: Record<string, true> = {
   subagentActivateTokens: true,
   tier2MassTokens: true,
   tier3MassTokens: true,
+  outputPrice: true,
 };
 
 const NON_NEGATIVE_INT_KEYS: Record<string, true> = {
@@ -114,16 +154,27 @@ const NON_NEGATIVE_INT_KEYS: Record<string, true> = {
   retentionDays: true,
   minFoldBenefitTokens: true,
   blockMatureFolds: true,
+  minFoldFillCapTokens: true,
+  cacheTtlMs: true,
+  paybackHorizonTurns: true,
+  recallHintMax: true,
 };
 
 /** Fractions in [0, 1): 0 disables the feature. */
 const FRACTION_OR_ZERO_KEYS: Record<string, true> = {
   minFoldBenefitWindowPct: true,
+  minFoldFillPct: true,
+};
+
+const BOOLEAN_KEYS: Record<string, true> = {
+  refTags: true,
+  speculativeFolds: true,
 };
 
 const PCT_KEYS: Record<string, true> = {
   emergencyFillPct: true,
   elideFillPct: true,
+  cacheReadPrice: true,
 };
 
 export function applyOverrides(base: OrigamiConfig, raw: unknown, file: string): OrigamiConfig {
@@ -170,6 +221,13 @@ export function applyOverrides(base: OrigamiConfig, raw: unknown, file: string):
       Object.assign(out, { [key]: value });
       continue;
     }
+    if (key in BOOLEAN_KEYS) {
+      if (typeof value !== "boolean") {
+        throw new ConfigError(file, `${key} must be true or false`);
+      }
+      Object.assign(out, { [key]: value });
+      continue;
+    }
     if (key === "language") {
       if (value !== "preserve" && value !== "english") {
         throw new ConfigError(file, `invalid language: ${String(value)}`);
@@ -194,6 +252,9 @@ export function validateResolved(cfg: OrigamiConfig, file = "<resolved>"): Origa
   }
   if (cfg.elideFillPct <= cfg.emergencyFillPct) {
     throw new ConfigError(file, `elideFillPct (${cfg.elideFillPct}) must exceed emergencyFillPct (${cfg.emergencyFillPct})`);
+  }
+  if (cfg.minFoldFillPct >= cfg.emergencyFillPct) {
+    throw new ConfigError(file, `minFoldFillPct (${cfg.minFoldFillPct}) must be below emergencyFillPct (${cfg.emergencyFillPct})`);
   }
   return cfg;
 }

@@ -188,7 +188,7 @@ describe("P0 Safety: Tool Pairing Atomicity Guard", () => {
         message: {
           role: "toolResult",
           toolCallId: "call_split",
-          content: "file1.txt\nfile2.txt",
+          content: `file1.txt\nfile2.txt\n${"listing entry ".repeat(20)}`,
         },
       },
       { type: "message", id: "u3", message: { role: "user", content: "run second query" } },
@@ -209,7 +209,7 @@ describe("P0 Safety: Tool Pairing Atomicity Guard", () => {
         message: {
           role: "toolResult",
           toolCallId: "call_2",
-          content: "file content here",
+          content: `file content here ${"more file content ".repeat(20)}`,
         },
       },
       { type: "message", id: "u4", message: { role: "user", content: "tail turn" } },

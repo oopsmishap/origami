@@ -103,6 +103,9 @@ describe("OrigamiDb", () => {
       consumed_by: null,
       ranges: "[]",
       children: "[]",
+      manifest: "{}",
+      ledger: "[]",
+      facts: "",
     }]);
     const hits = db.searchBlocks("dragonfruit", 10);
     expect(hits).toHaveLength(1);
@@ -133,6 +136,45 @@ describe("OrigamiDb", () => {
     expect(upgraded.searchMessages("archive", 10).map((hit) => hit.ref)).toEqual(["m1"]);
     expect(upgraded.integrity()).toEqual({ ok: true, detail: "ok" });
     upgraded.close();
+  });
+
+  test("migrates a v4 database to v5 and round-trips host_rewrite", () => {
+    const { path } = tempDb();
+    const current = openDb(path);
+    current.insertRound({ session_id: "s", ts: 1, total_in: 10, cache_read: 5, cache_write: 0, fold_event_id: null, host_rewrite: 0 });
+    current.close();
+
+    const v4 = new Database(path);
+    v4.exec("ALTER TABLE rounds DROP COLUMN host_rewrite; PRAGMA user_version = 4;");
+    v4.close();
+
+    const upgraded = openDb(path);
+    expect(upgraded.schemaVersion).toBe(SCHEMA_VERSION);
+    upgraded.insertRound({ session_id: "s", ts: 2, total_in: 20, cache_read: 0, cache_write: 0, fold_event_id: null, host_rewrite: 1 });
+    expect(upgraded.roundsForSession("s").map((r) => r.host_rewrite)).toEqual([0, 1]);
+    upgraded.close();
+  });
+
+  test("migrates v5 to v6 and finds a block by a manifest-only path", () => {
+    const { path } = tempDb();
+    const current = openDb(path);
+    current.close();
+    const v5 = new Database(path);
+    v5.exec(`
+      DROP TRIGGER blocks_fts_ai; DROP TRIGGER blocks_fts_ad; DROP TRIGGER blocks_fts_au; DROP TABLE blocks_fts;
+      ALTER TABLE blocks DROP COLUMN manifest; ALTER TABLE blocks DROP COLUMN ledger; ALTER TABLE blocks DROP COLUMN facts;
+      CREATE VIRTUAL TABLE blocks_fts USING fts5(topic, summary, content='blocks', content_rowid='rowid', tokenize='porter unicode61');
+      PRAGMA user_version = 5;
+    `);
+    v5.close();
+
+    const db = openDb(path);
+    expect(db.schemaVersion).toBe(6);
+    db.insertBlock(block({ facts: "src/kernel/nudge.ts\ndecideNudge" }));
+    expect(db.searchBlocks("nudge.ts", 10).map((h) => h.block_id)).toEqual(["b1"]);
+    expect(db.blocksForSession("session-1")[0]!.facts).toBe("src/kernel/nudge.ts\ndecideNudge");
+    expect(db.integrity()).toEqual({ ok: true, detail: "ok" });
+    db.close();
   });
 
   test("upserts a block without duplicate or stale full-text rows", () => {
@@ -197,8 +239,8 @@ describe("OrigamiDb", () => {
     db.insertBlock(block({ block_id: "old", summary: "oldneedle", created_at: 10 }));
     db.insertBlock(block({ block_id: "new", summary: "newneedle", created_at: 100 }));
     db.updateBlockStatus("session-1", "new", "consumed", "b-parent");
-    db.insertRound({ session_id: "session-1", ts: 10, total_in: 1, cache_read: 2, cache_write: 3, fold_event_id: null });
-    db.insertRound({ session_id: "session-1", ts: 100, total_in: 4, cache_read: 5, cache_write: 6, fold_event_id: "f1" });
+    db.insertRound({ session_id: "session-1", ts: 10, total_in: 1, cache_read: 2, cache_write: 3, fold_event_id: null, host_rewrite: 0 });
+    db.insertRound({ session_id: "session-1", ts: 100, total_in: 4, cache_read: 5, cache_write: 6, fold_event_id: "f1", host_rewrite: 1 });
     db.archiveMessages([
       { session_id: "session-1", ref: "m1", role: "user", text: "old", turn: 1, tokens: 1, captured_at: 10 },
       { session_id: "session-1", ref: "m2", role: "assistant", text: "new", turn: 2, tokens: 2, captured_at: 100 },

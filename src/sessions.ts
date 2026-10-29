@@ -29,6 +29,8 @@ export interface SessionRecord {
   ctx: ExtensionContext | null;
   /** False when before_agent_start skipped the doctrine (dormant subagent); context carries it instead. */
   doctrineInSystemPrompt: boolean;
+  /** Set once the user was warned that omp host compaction ran despite Origami. */
+  hostCompactionWarned?: boolean;
   dormant: boolean;
   lastActivityAt: number;
   endedAt: number | null;

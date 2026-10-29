@@ -19,7 +19,12 @@ describe("Fold/unfold round-trip", () => {
         message: {
           role: "assistant",
           content: [
-            { type: "thinking", text: "Verifying JWT library signatures...", thinkingSignature: "sig_jwt_abc123" },
+            {
+              type: "thinking",
+              text: "Verifying JWT library signatures...",
+              thinking: "Verifying JWT library signatures, checking key rotation, clock skew tolerance and algorithm allow-lists before rewriting.",
+              thinkingSignature: "sig_jwt_abc123",
+            },
             { type: "text", text: "Here is the rewritten middleware using jsonwebtoken verify." },
           ],
         },
@@ -44,7 +49,8 @@ describe("Fold/unfold round-trip", () => {
     };
 
     // Recent-tail protection off: this fixture folds turn 2 of a 4-turn session.
-    const config = { ...configFromPreset("balanced"), protectedTailMessages: 0, protectedTailTokens: 0, minFoldBenefitTokens: 0, minFoldBenefitWindowPct: 0 };
+    // Ref tags off: the subject is byte-exact restoration of host content.
+    const config = { ...configFromPreset("balanced"), protectedTailMessages: 0, protectedTailTokens: 0, minFoldBenefitTokens: 0, minFoldBenefitWindowPct: 0, refTags: false };
     const engine = new OrigamiEngine({
       host,
       entries,
@@ -83,7 +89,7 @@ describe("Fold/unfold round-trip", () => {
         {
           range: "m00004..m00005",
           topic: "JWT Auth Middleware",
-          summary: "Refactored authentication middleware to verify JWT tokens with signature preservation.",
+          summary: "JWT verify.",
         },
       ],
       tier: 1,

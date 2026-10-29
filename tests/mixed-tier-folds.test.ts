@@ -154,6 +154,8 @@ describe("Compound & Backlog-Aware Nudges", () => {
       lastFoldTurn: null,
       lastEfficiencyAtGrowth: null,
       lastPromotionAtMass: { 1: null, 2: null },
+      advisoryAllowed: true,
+      promotionAllowed: true,
     };
 
     const promo: PromotionCandidate[] = [
@@ -177,6 +179,8 @@ describe("Compound & Backlog-Aware Nudges", () => {
       lastFoldTurn: null,
       lastEfficiencyAtGrowth: null,
       lastPromotionAtMass: { 1: null, 2: null },
+      advisoryAllowed: true,
+      promotionAllowed: true,
     };
 
     const promo: PromotionCandidate[] = [

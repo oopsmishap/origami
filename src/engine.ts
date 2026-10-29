@@ -1,4 +1,4 @@
-import type { Block, BlockStatus, KernelMessage, RefRange } from "./kernel/types.ts";
+import type { Block, BlockStatus, KernelMessage, LedgerKind, LedgerRecord, RefRange } from "./kernel/types.ts";
 import { formatRef, parseRangeSpec, parseRef } from "./kernel/types.ts";
 import { messageFacts } from "./kernel/message-facts.ts";
 import { SessionState } from "./kernel/state.ts";
@@ -9,21 +9,32 @@ import { historicalFoldCallRefs } from "./kernel/fold-calls.ts";
 import { buildToolPairPartnerMap } from "./kernel/tool-pairs.ts";
 import type { InvariantViolation } from "./kernel/invariants.ts";
 import type { ProjectUnitResult } from "./kernel/project-unit.ts";
-import { planRender, applyRender, expandRefRange, foldCoverageStats, renderBlockText } from "./kernel/render.ts";
+import { planRender, applyRender, expandRefRange, foldCoverageStats, renderBlockText, withRefTag } from "./kernel/render.ts";
 import type { RenderOp } from "./kernel/render.ts";
 import { decideNudge, formatTokens, promotionCandidates, recommendRanges } from "./kernel/nudge.ts";
-import type { NudgeDecision, NudgeRange } from "./kernel/nudge.ts";
+import type { NudgeDecision, NudgeKind, NudgeRange } from "./kernel/nudge.ts";
+import { assessFoldTiming, type FoldTiming } from "./kernel/fold-timing.ts";
+import { EMPTY_MANIFEST, extractManifest, mergeManifests } from "./kernel/manifest.ts";
+import { formatRecallHints, matchRecallHints } from "./kernel/recall-hints.ts";
+import { lintSummary } from "./kernel/summary-lint.ts";
 import { planElision, selectElideCandidates, elideLabel } from "./kernel/guard.ts";
 import type { ElideCandidate } from "./kernel/guard.ts";
 import type { JournalOp } from "./persist/journal.ts";
 import { makeFoldOp, makeUnfoldOp, makeTierOp } from "./persist/journal.ts";
 import type { OrigamiDb } from "./persist/db.ts";
-import { blockBodyForIndex } from "./persist/db.ts";
+import { blockBodyForIndex, blockFactsForIndex } from "./persist/db.ts";
 import type { OrigamiConfig } from "./config.ts";
 import { configFromPreset } from "./config.ts";
 import { evaluateCacheRound, getCacheCollapseStatus } from "./telemetry.ts";
 import { extractPlanTerms, rerankHitsWithPlan } from "./kernel/plan-search.ts";
-import { buildCacheReport, type CacheReport, type CacheSample, type FoldEvent } from "./kernel/cache-report.ts";
+import {
+  buildCacheReport,
+  foldEventsFromBlocks,
+  type CacheReport,
+  type CacheSample,
+  type FoldBlockInfo,
+  type PriceProfile,
+} from "./kernel/cache-report.ts";
 export interface HostPort {
   sessionId(): string;
   appendEvent(op: JournalOp): void;
@@ -37,6 +48,16 @@ export interface FoldSpec {
   topic: string;
   summary: string;
   tier?: 1 | 2 | 3;
+  /** Records pinned verbatim on the block and carried through every merge. */
+  keep?: FoldKeep[];
+  /** Ledger ids (objectives/intents) to drop when merging blocks. */
+  retire?: string[];
+}
+
+export interface FoldKeep {
+  kind: "constraint" | "decision" | "objective";
+  text: string;
+  ref?: string;
 }
 export interface FoldParams {
   folds: FoldSpec[];
@@ -50,6 +71,8 @@ export interface FoldCreatedBlock {
   tokensBefore: number;
   tokensAfter: number;
   topic: string;
+  /** Manifest items the summary omitted, attached as "Also covered". */
+  missing: string[];
 }
 
 export interface FoldOutcome {
@@ -60,6 +83,11 @@ export interface FoldOutcome {
 
 export type FoldError = { ok: false; error: string; foldIndex: number };
 export type FoldResult = { ok: true; outcome: FoldOutcome } | FoldError;
+/** A validated, not yet committed fold: the block and the source refs it covers. */
+export interface PlannedFold {
+  block: Block;
+  refs: string[];
+}
 
 export interface StatusBlockRow {
   id: string;
@@ -104,8 +132,8 @@ export interface StatusVaultReport {
   activeBlocks: number;
   /** Total blocks created across the session. */
   totalBlocks: number;
-  /** Number of subsequent turns needed to amortize fold creation cost. */
-  breakEvenTurns: number;
+  /** Turns needed to amortize the latest fold's creation cost; null when it never pays back. */
+  breakEvenTurns: number | null;
   /** Whether the session's folds have already paid back their creation cost. */
   paidBack: boolean;
   /** Net cumulative tokens saved across subsequent turns. */
@@ -147,6 +175,8 @@ export interface StatusReport {
     reason: string | null;
   };
   uncoveredRuns?: UncoveredRun[];
+  /** Advisory fold timing gate (emergency folds ignore it). */
+  foldGate: FoldTiming & { paybackHorizonTurns: number };
 }
 
 export interface CacheRound {
@@ -155,6 +185,8 @@ export interface CacheRound {
   cacheRead: number;
   cacheWrite: number;
   foldEventId: string | null;
+  /** The omp host (not Origami) rewrote the prompt prefix before this round. */
+  hostRewrite: boolean;
 }
 
 export interface FoldSearchHit {
@@ -178,6 +210,33 @@ export interface FoldMessageHit {
   /** False when the hit came from another session's archive (not recallable here). */
   ownSession: boolean;
 }
+
+/** Child block ids from a DB `children` JSON column; malformed values yield []. */
+function parseChildIds(raw: string): string[] {
+  try {
+    const v: unknown = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Upper bound on the payback-extended cooldown so an unprofitable fold never silences nudges for long. */
+const MAX_PAYBACK_COOLDOWN_TURNS = 8;
+/** Assumed summary/source ratio until the session has three tier-1 folds to take a median from. */
+const DEFAULT_SUMMARY_RATIO = 0.05;
+/** Turns after a recall hint during which the same block is not hinted again. */
+const RECALL_HINT_QUIET_TURNS = 5;
+/** Unmentioned manifest items attached to one block as "Also covered". */
+const MAX_MISSING_ITEMS = 12;
+/** Pinned ledger limits: explicit keep records per fold and their length. */
+const MAX_KEEP_RECORDS = 20;
+const MAX_KEEP_CHARS = 500;
+/** Auto-pinned user intents: kept verbatim up to this length, otherwise clipped. */
+const INTENT_VERBATIM_CHARS = 600;
+const INTENT_CLIP_CHARS = 300;
+/** At most this many intents per tier-1 fold: the first 2 and the most recent rest. */
+const MAX_INTENTS = 8;
 
 export function parseRangeList(spec: string): RefRange[] {
   return spec
@@ -231,11 +290,25 @@ export class OrigamiEngine {
   private pinnedHeadRef: string | null = null;
   private lastNudge: NudgeDecision = { kind: null, text: null };
   private activeNudge: string | null = null;
+  private activeNudgeKind: NudgeKind | null = null;
   private pendingFoldAttribution: string | null = null;
   private onPersistenceError: ((error: unknown) => void) | null = null;
   private lastEfficiencyAtGrowth: number | null = null;
   private lastPromotionAtMass: { 1: number | null; 2: number | null } = { 1: null, 2: null };
   private lastFoldTurn: number | null = null;
+  private readonly now: () => number;
+  /** The newest bound message is a user message: a fresh task boundary. */
+  private atUserBoundary = false;
+  /** Timestamp of the newest recorded provider round (cache telemetry); null without telemetry. */
+  private lastRoundAt: number | null = null;
+  private roundsLoaded = false;
+  private lastFoldTiming: FoldTiming | null = null;
+  /** Turn at which each block was last named in a recall hint. */
+  private hintedAt = new Map<string, number>();
+  /** The omp host rewrote the prompt (compaction/shake) since the last recorded round. */
+  private pendingHostRewrite = false;
+  /** Content hash per ref as last sent, to detect host-side rewrites of history. */
+  private seenHashes = new Map<string, string>();
   get sessionId(): string {
     return this.host.sessionId();
   }
@@ -244,8 +317,16 @@ export class OrigamiEngine {
     return this.host.windowTokens();
   }
 
-  constructor(opts: { host: HostPort; entries: readonly SessionEntryLike[]; modelId: string; config?: OrigamiConfig; countFn?: (input: string, encoding?: string) => number }) {
+  constructor(opts: {
+    host: HostPort;
+    entries: readonly SessionEntryLike[];
+    modelId: string;
+    config?: OrigamiConfig;
+    countFn?: (input: string, encoding?: string) => number;
+    now?: () => number;
+  }) {
     this.host = opts.host;
+    this.now = opts.now ?? Date.now;
     this.config = opts.config ?? configFromPreset("balanced");
     this.state = new SessionState({
       sessionId: opts.host.sessionId(),
@@ -288,6 +369,9 @@ export class OrigamiEngine {
     }
     this.protectedFromTurn = Math.min(tailTurn, lastUserTurn);
     this.bookkeepingRefs = historicalFoldCallRefs(bound, this.protectedFromTurn);
+    let last: (typeof bound)[number] | undefined;
+    for (let i = bound.length - 1; i >= 0 && !last; i--) if (!bound[i]!.ephemeral) last = bound[i];
+    this.atUserBoundary = last?.role === "user";
   }
 
   get bound() {
@@ -328,9 +412,68 @@ export class OrigamiEngine {
     return Math.max(this.config.minFoldBenefitTokens, Math.round(this.config.minFoldBenefitWindowPct * Math.max(0, window)));
   }
 
+  /** Whether an advisory fold of `ranges` is timely: fill floor, task boundary, cache payback. */
+  foldTiming(ranges: readonly NudgeRange[]): FoldTiming {
+    if (!this.roundsLoaded) {
+      this.roundsLoaded = true;
+      const rounds = this.cacheRounds();
+      if (this.lastRoundAt === null && rounds.length > 0) this.lastRoundAt = rounds[rounds.length - 1]!.ts;
+    }
+    const refNo = (ref: string): number | null => (/^m\d{5,}$/.test(ref) ? parseRef(ref) : null);
+    const candidateTokens = ranges.reduce((s, r) => s + r.tokens, 0);
+    const starts = ranges.map((r) => refNo(r.start)).filter((n): n is number => n !== null);
+    let rewriteTokens = 0;
+    if (starts.length > 0) {
+      const from = Math.min(...starts);
+      const folded = this.state.foldedRefs();
+      const spans = ranges.map((r) => [refNo(r.start) ?? 0, refNo(r.end) ?? -1] as const);
+      for (const m of this.state.bound) {
+        if (m.ephemeral || folded.has(m.ref)) continue;
+        const n = refNo(m.ref);
+        if (n === null || n < from || spans.some(([s, e]) => n >= s && n <= e)) continue;
+        rewriteTokens += this.state.ledger.countMessage(m);
+      }
+      for (const b of this.state.tree.live()) {
+        const first = b.ranges[0] ? refNo(b.ranges[0].start) : null;
+        if (first !== null && first >= from) rewriteTokens += b.tokensAfter;
+      }
+    }
+    const ratios = this.state.tree
+      .all()
+      .filter((b) => b.tier === 1 && b.tokensBefore > 0)
+      .map((b) => b.tokensAfter / b.tokensBefore)
+      .sort((a, b) => a - b);
+    const summaryRatio =
+      ratios.length < 3
+        ? DEFAULT_SUMMARY_RATIO
+        : ratios.length % 2 === 1
+          ? ratios[(ratios.length - 1) / 2]!
+          : (ratios[ratios.length / 2 - 1]! + ratios[ratios.length / 2]!) / 2;
+    const cfg = this.config;
+    return assessFoldTiming({
+      projectedTokens: this.host.projectedTokens(),
+      windowTokens: this.host.windowTokens(),
+      minFoldFillPct: cfg.minFoldFillPct,
+      minFoldFillCapTokens: cfg.minFoldFillCapTokens,
+      atUserBoundary: this.atUserBoundary,
+      cacheCold: this.lastRoundAt !== null && cfg.cacheTtlMs > 0 && this.now() - this.lastRoundAt >= cfg.cacheTtlMs,
+      growthSinceFoldTokens: this.state.growthSinceFold(this.activeTurn, this.bookkeepingRefs),
+      growthStep: cfg.growthStep,
+      candidateTokens,
+      rewriteTokens,
+      summaryRatio,
+      telemetry: this.lastRoundAt !== null,
+      price: this.price(),
+      paybackHorizonTurns: cfg.paybackHorizonTurns,
+    });
+  }
+
   decideNudge(): NudgeDecision {
     const window = this.host.windowTokens();
     const projected = this.host.projectedTokens();
+    const ranges = this.recommendedRanges();
+    const timing = this.foldTiming(ranges);
+    this.lastFoldTiming = timing;
     const decision = decideNudge(
       {
         growthSinceFoldTokens: this.state.growthSinceFold(this.activeTurn, this.bookkeepingRefs),
@@ -341,35 +484,46 @@ export class OrigamiEngine {
         lastFoldTurn: this.lastFoldTurn,
         lastEfficiencyAtGrowth: this.lastEfficiencyAtGrowth,
         lastPromotionAtMass: this.lastPromotionAtMass,
+        advisoryAllowed: timing.allowed,
+        promotionAllowed: timing.blockedBy === null || timing.blockedBy === "cost",
       },
-      this.recommendedRanges(),
+      ranges,
       promotionCandidates(this.state.tree.live(), this.state.tree.foldAges(), this.config.blockMatureFolds),
       {
         ...this.config,
         minFoldBenefit: this.minFoldBenefit(),
-        cooldownTurns: (() => {
-          let cd = this.config.cooldownTurns ?? 2;
-          try {
-            const rep = this.cacheReport();
-            if (rep.folds.length > 0) {
-              const latest = rep.folds[rep.folds.length - 1]!;
-              if (!latest.paidBack && latest.breakevenTurns > cd) cd = latest.breakevenTurns;
-            }
-          } catch {}
-          return cd;
-        })(),
+        cooldownTurns: this.paybackCooldown(),
       },
     );
     if (decision.text) {
       this.activeNudge = decision.text;
+      this.activeNudgeKind = decision.kind;
       this.nudgedThisTurn = true;
       if (decision.kind === "efficiency") this.lastEfficiencyAtGrowth = this.state.growthSinceFold(this.activeTurn, this.bookkeepingRefs);
       if (decision.promotion) this.lastPromotionAtMass[decision.promotion.fromTier] = decision.promotion.tokens;
     } else if (!this.nudgedThisTurn) {
       this.activeNudge = null;
+      this.activeNudgeKind = null;
     }
     this.lastNudge = decision;
     return decision;
+  }
+
+  /** Cooldown after a fold, extended (bounded) while the latest tier-1 fold has not yet paid back. */
+  private paybackCooldown(): number {
+    const base = this.config.cooldownTurns ?? 2;
+    try {
+      const tier1 = this.cacheReport().folds.filter((f) => f.tier === 1);
+      const latest = tier1[tier1.length - 1];
+      if (latest && !latest.paidBack && latest.breakevenTurns !== null) {
+        return Math.max(base, Math.min(Math.ceil(latest.breakevenTurns), MAX_PAYBACK_COOLDOWN_TURNS));
+      }
+    } catch {}
+    return base;
+  }
+
+  noteHostRewrite(): void {
+    this.pendingHostRewrite = true;
   }
 
   /** The nudge text still owed to the model, carried across a turn's continuations until folded. */
@@ -377,8 +531,45 @@ export class OrigamiEngine {
     return this.activeNudge;
   }
 
+  /** Kind of the owed nudge in `nudgeText` (null when none is owed). */
+  get nudgeTextKind(): NudgeKind | null {
+    return this.activeNudge === null ? null : this.activeNudgeKind;
+  }
+
   get nudge(): NudgeDecision {
     return this.lastNudge;
+  }
+
+  /** Turn number of the newest bound message. */
+  get turn(): number {
+    return this.activeTurn;
+  }
+
+  /** Unfolded tokens accumulated since the last fold (the efficiency-nudge growth measure). */
+  growthSinceFold(): number {
+    return this.state.growthSinceFold(this.activeTurn, this.bookkeepingRefs);
+  }
+
+  /**
+   * Tail note naming folded blocks whose manifest matches the current turn's files,
+   * symbols, errors or commits. A block hinted in the last 5 turns is not repeated.
+   */
+  recallHintText(): string | null {
+    const max = this.config.recallHintMax;
+    if (max <= 0) return null;
+    const probe = this.state.bound
+      .filter((m) => !m.ephemeral && m.turn === this.activeTurn)
+      .map((m) => m.text)
+      .join("\n");
+    const exclude = new Set<string>();
+    for (const [id, turn] of this.hintedAt) {
+      const age = this.activeTurn - turn;
+      if (age >= 1 && age <= RECALL_HINT_QUIET_TURNS) exclude.add(id);
+    }
+    const hints = matchRecallHints({ blocks: this.state.tree.live(), probe, exclude, max });
+    if (hints.length === 0) return null;
+    for (const h of hints) this.hintedAt.set(h.blockId, this.activeTurn);
+    return formatRecallHints(hints);
   }
 
   project(spec: string, tier: 1 | 2 | 3): ProjectUnitResult {
@@ -417,13 +608,22 @@ export class OrigamiEngine {
   }
 
   executeFold(params: FoldParams): FoldResult {
+    const plan = this.planFoldBatch(params);
+    return plan.ok ? this.commitFoldBatch(plan.planned) : plan;
+  }
+
+  /**
+   * Validate a fold batch against the current state and build its blocks (manifest, lint,
+   * ledger) without writing anything: a batch either applies completely or not at all.
+   */
+  planFoldBatch(params: FoldParams): { ok: true; planned: PlannedFold[] } | FoldError {
     if (params.folds.length === 0) return { ok: false, error: "no folds given", foldIndex: 0 };
     const tree = this.state.tree;
     const folded = this.state.foldedRefs();
     const claimedRefs = new Map<string, number>();
     const claimedChildren = new Map<string, number>();
     let ordinal = this.nextBlockOrdinal();
-    const planned: { block: Block; refs: string[] }[] = [];
+    const planned: PlannedFold[] = [];
 
     // Validate the whole batch against the pre-mutation state before writing anything:
     // a batch either applies completely or not at all.
@@ -504,32 +704,44 @@ export class OrigamiEngine {
         if (prior !== undefined) return fail(`overlaps fold ${prior} in this batch at ${ref}; fold ranges in one call must be disjoint`);
       }
 
-      const tokensAfter = this.state.ledger.countText(`${topic}\n${summary}`);
-      if (tokensAfter >= replacedTokens) {
-        return fail(`summary (${tokensAfter}t) is not smaller than what it replaces (${replacedTokens}t)`);
+      const refSet = new Set(refs);
+      const manifest =
+        specTier === 1
+          ? extractManifest(this.state.bound.filter((m) => !m.ephemeral && refSet.has(m.ref)))
+          : mergeManifests(children.map((c) => tree.get(c)!.manifest ?? EMPTY_MANIFEST));
+      let id = `b${ordinal++}`;
+      while (tree.get(id)) id = `b${ordinal++}`;
+      const block: Block = {
+        id,
+        tier: specTier,
+        ranges,
+        topic,
+        summary,
+        children,
+        status: "active",
+        consumedBy: null,
+        anchorRef,
+        tokensBefore,
+        tokensAfter: 0,
+        createdAt: Date.now(),
+        manifest,
+      };
+      const ledger = this.buildLedger(spec, specTier, id, refs, children);
+      if (typeof ledger === "string") return fail(ledger);
+      if (ledger.length > 0) block.ledger = ledger;
+      if (specTier < 3) {
+        const missing = lintSummary(`${topic}\n${summary}`, manifest).missing.slice(0, MAX_MISSING_ITEMS);
+        if (missing.length > 0) block.missing = missing;
+      }
+      // Measure what is actually sent: header, summary, and attached items.
+      block.tokensAfter = this.state.ledger.countText(renderBlockText(block));
+      if (block.tokensAfter >= replacedTokens) {
+        return fail(`summary (${block.tokensAfter}t) is not smaller than what it replaces (${replacedTokens}t)`);
       }
 
       for (const ref of refs) claimedRefs.set(ref, i);
       for (const c of children) claimedChildren.set(c, i);
-      let id = `b${ordinal++}`;
-      while (tree.get(id)) id = `b${ordinal++}`;
-      planned.push({
-        refs,
-        block: {
-          id,
-          tier: specTier,
-          ranges,
-          topic,
-          summary,
-          children,
-          status: "active",
-          consumedBy: null,
-          anchorRef,
-          tokensBefore,
-          tokensAfter,
-          createdAt: Date.now(),
-        },
-      });
+      planned.push({ refs, block });
     }
 
     const tier1Planned = planned.filter((p) => p.block.tier === 1);
@@ -610,6 +822,12 @@ export class OrigamiEngine {
         foldIndex: 0,
       };
     }
+    return { ok: true, planned };
+  }
+
+  /** Apply a validated batch: journal, tree, persistence, and nudge bookkeeping. */
+  commitFoldBatch(planned: readonly PlannedFold[]): FoldResult {
+    const tree = this.state.tree;
     const created: FoldCreatedBlock[] = [];
     let reclaimed = 0;
     for (const p of planned) {
@@ -623,6 +841,7 @@ export class OrigamiEngine {
         tokensBefore: p.block.tokensBefore,
         tokensAfter: p.block.tokensAfter,
         topic: p.block.topic,
+        missing: p.block.missing ?? [],
       });
       reclaimed += Math.max(0, replaced - p.block.tokensAfter);
     }
@@ -640,6 +859,57 @@ export class OrigamiEngine {
       ok: true,
       outcome: { blocks: created, tokensReclaimed: reclaimed, foldCount: created.length },
     };
+  }
+
+  /**
+   * Pinned ledger for a planned block, or an error message. Tier 1 pins its user messages
+   * as intents; merges inherit their children's records verbatim minus `retire`. Explicit
+   * `keep` records are appended either way.
+   */
+  private buildLedger(spec: FoldSpec, tier: 1 | 2 | 3, blockId: string, refs: readonly string[], children: readonly string[]): LedgerRecord[] | string {
+    const keep = spec.keep ?? [];
+    if (keep.length > MAX_KEEP_RECORDS) return `at most ${MAX_KEEP_RECORDS} keep records per fold`;
+    const refSet = new Set(refs);
+    const kept: { kind: LedgerKind; text: string; ref: string | null }[] = [];
+    for (const k of keep) {
+      const text = k.text.trim();
+      if (text.length < 1 || text.length > MAX_KEEP_CHARS) return `keep text must be 1-${MAX_KEEP_CHARS} characters`;
+      const ref = k.ref?.trim() || null;
+      if (ref !== null && tier === 1 && !refSet.has(ref)) return `keep ref ${ref} is outside this fold`;
+      kept.push({ kind: k.kind, text, ref });
+    }
+
+    let inherited: LedgerRecord[] = [];
+    const seed: { kind: LedgerKind; text: string; ref: string | null }[] = [];
+    if (tier === 1) {
+      if (spec.retire && spec.retire.length > 0) return "retire is only valid when merging blocks";
+      const intents = this.state.bound
+        .filter((m) => !m.ephemeral && m.role === "user" && refSet.has(m.ref))
+        .map((m) => {
+          const text = m.text.replace(/^text:/gm, "").trim();
+          return { kind: "intent" as const, text: text.length <= INTENT_VERBATIM_CHARS ? text : `${text.slice(0, INTENT_CLIP_CHARS)} …`, ref: m.ref };
+        })
+        .filter((r) => r.text.length > 0);
+      seed.push(...(intents.length > MAX_INTENTS ? [...intents.slice(0, 2), ...intents.slice(-(MAX_INTENTS - 2))] : intents));
+    } else {
+      const seen = new Set<string>();
+      for (const c of children) {
+        for (const r of this.state.tree.get(c)?.ledger ?? []) {
+          if (seen.has(r.id)) continue;
+          seen.add(r.id);
+          inherited.push(r);
+        }
+      }
+      const retire = new Set(spec.retire ?? []);
+      for (const id of retire) {
+        const rec = inherited.find((r) => r.id === id);
+        if (!rec) return `unknown ledger record ${id}`;
+        if (rec.kind !== "objective" && rec.kind !== "intent") return `ledger ${id} is a ${rec.kind}; only objectives and intents can be retired`;
+      }
+      inherited = inherited.filter((r) => !retire.has(r.id));
+    }
+    const fresh = [...seed, ...kept].map((r, n) => ({ id: `${blockId}.L${n + 1}`, ...r }));
+    return [...inherited, ...fresh];
   }
 
   /** Newest non-ephemeral ref currently bound (the fold-time anchor for growth). */
@@ -676,6 +946,9 @@ export class OrigamiEngine {
       consumed_by: b.consumedBy,
       ranges: JSON.stringify(b.ranges),
       children: JSON.stringify(b.children),
+      manifest: JSON.stringify(b.manifest ?? EMPTY_MANIFEST),
+      ledger: JSON.stringify(b.ledger ?? []),
+      facts: blockFactsForIndex(b),
     };
   }
 
@@ -869,7 +1142,7 @@ export class OrigamiEngine {
         ? Math.round((foldedSavings / archivedTokens) * 1000) / 10
         : 0;
 
-    let breakEvenTurns = 1;
+    let breakEvenTurns: number | null = 1;
     let paidBack = false;
     let cumulativeSavedTokens = 0;
     let paybackStatus = foldedSavings === 0 ? "No folds yet" : "Break-even in ~1 turn(s)";
@@ -880,15 +1153,16 @@ export class OrigamiEngine {
         const report = this.cacheReport();
         if (report.folds.length > 0) {
           const latest = report.folds[report.folds.length - 1]!;
-          breakEvenTurns = latest.breakevenTurns;
+          const b = latest.breakevenTurns;
+          breakEvenTurns = b;
           paidBack = report.folds.every((f) => f.paidBack);
-          cumulativeSavedTokens = Math.max(0, report.summary.netTokens);
-          if (paidBack) {
-            const pastTurns = Math.max(0, latest.requestsAfter - latest.breakevenTurns);
-            paybackStatus = `Paid back (${pastTurns} turns past break-even)`;
+          cumulativeSavedTokens = Math.max(0, Math.round(report.summary.netUnits));
+          if (b === null) {
+            paybackStatus = "Does not pay back";
+          } else if (paidBack) {
+            paybackStatus = `Paid back (${Math.floor(latest.requestsAfter - b)} turns past break-even)`;
           } else {
-            const remTurns = Math.max(1, latest.breakevenTurns - latest.requestsAfter);
-            paybackStatus = `Break-even in ~${remTurns} turn(s)`;
+            paybackStatus = `Break-even in ~${Math.max(1, Math.ceil(b - latest.requestsAfter))} turn(s)`;
           }
         }
       } catch {
@@ -1058,6 +1332,7 @@ export class OrigamiEngine {
         (m) => this.state.ledger.countMessage(m),
         this.recommendedRanges().map((r) => ({ start: r.start, end: r.end })),
       ),
+      foldGate: { ...(this.lastFoldTiming ?? this.foldTiming(this.recommendedRanges())), paybackHorizonTurns: this.config.paybackHorizonTurns },
     };
   }
 
@@ -1069,12 +1344,19 @@ export class OrigamiEngine {
       cacheRead: r.cache_read,
       cacheWrite: r.cache_write,
       foldEventId: r.fold_event_id,
+      hostRewrite: r.host_rewrite === 1,
     }));
   }
 
   recordRound(round: CacheRound): void {
     evaluateCacheRound(this.host.sessionId(), round.totalIn, round.cacheRead);
-    if (!this.db) return;
+    this.lastRoundAt = round.ts;
+    this.roundsLoaded = true;
+    const hostRewrite = round.hostRewrite || this.pendingHostRewrite;
+    if (!this.db) {
+      this.pendingHostRewrite = false;
+      return;
+    }
     const foldEventId = round.foldEventId ?? this.pendingFoldAttribution;
     try {
       this.db.insertRound({
@@ -1084,7 +1366,9 @@ export class OrigamiEngine {
         cache_read: round.cacheRead,
         cache_write: round.cacheWrite,
         fold_event_id: foldEventId,
+        host_rewrite: hostRewrite ? 1 : 0,
       });
+      this.pendingHostRewrite = false;
       this.pendingFoldAttribution = null;
     } catch (error) {
       this.disablePersistence(error);
@@ -1092,68 +1376,40 @@ export class OrigamiEngine {
   }
 
   cacheReport(): CacheReport {
-    const rounds = this.cacheRounds();
-    const samples: CacheSample[] = rounds.map((r) => ({
+    const samples: CacheSample[] = this.cacheRounds().map((r) => ({
       at: r.ts,
       input: r.totalIn,
       cached: r.cacheRead,
       write: r.cacheWrite,
       foldEventId: r.foldEventId,
+      hostRewrite: r.hostRewrite,
     }));
     const dbBlocks = this.db ? this.db.blocksForSession(this.host.sessionId()) : [];
-    const dbBlockMap = new Map(dbBlocks.map((b) => [b.block_id, b]));
-    const allTreeBlocks = this.state.tree.all();
-    const treeBlockMap = new Map(allTreeBlocks.map((b) => [b.id, b]));
-    const folds: FoldEvent[] = [];
-    const seenFoldIds = new Set<string>();
-
-    for (const r of rounds) {
-      if (r.foldEventId && !seenFoldIds.has(r.foldEventId)) {
-        seenFoldIds.add(r.foldEventId);
-        const dbB = dbBlockMap.get(r.foldEventId);
-        const trB = treeBlockMap.get(r.foldEventId);
-        const tokensBefore = dbB ? dbB.tokens_before : (trB ? trB.tokensBefore : 0);
-        const tokensAfter = dbB ? dbB.tokens_after : (trB ? trB.tokensAfter : 0);
-        const topic = dbB ? dbB.topic : trB?.topic;
-        folds.push({
-          id: r.foldEventId,
-          at: r.ts,
-          tokensCompressed: Math.max(0, tokensBefore - tokensAfter),
-          summaryTokens: tokensAfter,
-          topic,
-        });
-      }
-    }
-
-    if (dbBlocks.length > 0) {
-      for (const b of dbBlocks) {
-        if (!seenFoldIds.has(b.block_id)) {
-          seenFoldIds.add(b.block_id);
-          folds.push({
+    const infos: FoldBlockInfo[] =
+      dbBlocks.length > 0
+        ? dbBlocks.map((b) => ({
             id: b.block_id,
-            at: b.created_at,
-            tokensCompressed: Math.max(0, b.tokens_before - b.tokens_after),
-            summaryTokens: b.tokens_after,
+            createdAt: b.created_at,
+            tier: (b.tier === 2 || b.tier === 3 ? b.tier : 1) as 1 | 2 | 3,
+            tokensBefore: b.tokens_before,
+            tokensAfter: b.tokens_after,
+            children: parseChildIds(b.children),
             topic: b.topic,
-          });
-        }
-      }
-    } else {
-      for (const b of allTreeBlocks) {
-        if (!seenFoldIds.has(b.id)) {
-          seenFoldIds.add(b.id);
-          folds.push({
+          }))
+        : this.state.tree.all().map((b) => ({
             id: b.id,
-            at: b.createdAt,
-            tokensCompressed: Math.max(0, b.tokensBefore - b.tokensAfter),
-            summaryTokens: b.tokensAfter,
+            createdAt: b.createdAt,
+            tier: b.tier,
+            tokensBefore: b.tokensBefore,
+            tokensAfter: b.tokensAfter,
+            children: b.children,
             topic: b.topic,
-          });
-        }
-      }
-    }
+          }));
+    return buildCacheReport(samples, foldEventsFromBlocks(infos), this.price());
+  }
 
-    return buildCacheReport(samples, folds);
+  private price(): PriceProfile {
+    return { cacheRead: this.config.cacheReadPrice, output: this.config.outputPrice };
   }
 
   search(query: string, limit = 10, options?: { planAware?: boolean }): FoldSearchHit[] {
@@ -1223,6 +1479,15 @@ export class OrigamiEngine {
     }
     const aligned = facts.length === messages.length;
     const bound = aligned ? this.state.bindOutbound(facts) : this.state.bound;
+    if (aligned) {
+      // Binding sees host content before Origami's own rewrites, so a changed hash is a host rewrite.
+      for (const m of bound) {
+        if (m.ephemeral) continue;
+        const seen = this.seenHashes.get(m.ref);
+        if (seen !== undefined && seen !== m.contentHash) this.pendingHostRewrite = true;
+        this.seenHashes.set(m.ref, m.contentHash);
+      }
+    }
     const headIndex = bound.findIndex((m) => !m.ephemeral);
     const pinnedHeadIndex = headIndex < 0 ? 0 : headIndex;
 
@@ -1231,6 +1496,7 @@ export class OrigamiEngine {
     const window = this.host.windowTokens();
     const projected = this.host.projectedTokens();
     let source: readonly unknown[] = messages;
+    const elided = new Set<number>();
     if (window > 0 && projected >= window * this.config.elideFillPct && aligned) {
       const candidates: ElideCandidate[] = selectElideCandidates(
         bound.map((m) => ({
@@ -1249,6 +1515,7 @@ export class OrigamiEngine {
       });
       if (plan.elided.length > 0) {
         const elideAt = new Map(plan.elided.map((e) => [e.index, e]));
+        for (const i of elideAt.keys()) elided.add(i);
         source = messages.map((m, i) => {
           const hit = elideAt.get(i);
           if (!hit) return m;
@@ -1265,6 +1532,15 @@ export class OrigamiEngine {
       blocks: renderableBlocks(this.state.tree.live()),
       pinnedHeadIndex,
     });
+    if (aligned && this.config.refTags) {
+      const removed = new Set(ops.filter((o) => o.kind === "remove").map((o) => o.index));
+      source = source.map((m, i) => {
+        const b = bound[i];
+        if (!b || b.ephemeral || removed.has(i) || elided.has(i)) return m;
+        if (b.role !== "user" && b.role !== "toolResult") return m;
+        return withRefTag(m, b.ref);
+      });
+    }
     return applyRender(source, ops, makeFoldMessage);
   }
 

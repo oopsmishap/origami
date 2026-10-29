@@ -232,11 +232,7 @@ export default function origamiExtension(api: ExtensionAPI): void {
     }
 
     rt.sync();
-    const status = rt.engine.status();
-    registry.touch(record.sessionId, { status });
-    refreshStatusChip(record.sessionId, { sessionId: record.sessionId, status });
-
-    const rendered = rt.engine.render(event.messages, (text: string, blockId: string, refTag?: string) => {
+    const makeFoldMessage = (text: string, blockId: string, refTag?: string) => {
       const block = rt.engine.state.tree.get(blockId);
       const details: OrigamiFoldMessageDetails = {
         blockId,
@@ -258,7 +254,14 @@ export default function origamiExtension(api: ExtensionAPI): void {
         details,
         timestamp: Date.now(),
       };
-    });
+    };
+
+
+    const status = rt.engine.status();
+    registry.touch(record.sessionId, { status });
+    refreshStatusChip(record.sessionId, { sessionId: record.sessionId, status });
+
+    const rendered = rt.engine.render(event.messages, makeFoldMessage);
 
     if (!record.doctrineInSystemPrompt) {
       rendered.push({
@@ -277,32 +280,23 @@ export default function origamiExtension(api: ExtensionAPI): void {
         timestamp: Date.now(),
       } as never);
     }
+    const hint = rt.engine.recallHintText();
+    if (hint) {
+      rendered.push({ role: "developer", content: [{ type: "text", text: hint }], timestamp: Date.now() } as never);
+    }
 
     return { messages: rendered as never };
   });
 
-  api.on("auto_compaction_start", (_event, ctx) => {
+  // Origami is the single compaction authority. The host cannot be cancelled from this event,
+  // so record the rewrite for cache attribution and warn once instead of racing it with a fold.
+  api.on("auto_compaction_start", (event, ctx) => {
     const { record, rt } = getOrInitRuntime(ctx);
     if (isSubagentDormant(ctx, record.config)) return;
-
-    rt.sync();
-
-    const ranges = rt.engine.recommendedRanges(64);
-    if (ranges.length === 0) return;
-
-    const refRanges = ranges.map((r) => ({ start: r.start, end: r.end }));
-    const summary = rt.engine.archiveDigest(refRanges);
-    const specs = [
-      {
-        range: ranges.map((r) => `${r.start}..${r.end}`).join(","),
-        topic: "context archive (host compaction)",
-        summary: summary || "emergency archive before host compaction",
-      },
-    ];
-    const res = rt.engine.executeFold({ folds: specs, tier: 1 });
-    if (res.ok) {
-      refreshStatusChip(record.sessionId);
-      registry.emit("fold", record.sessionId, res.outcome);
+    rt.engine.noteHostRewrite();
+    if (ctx.hasUI && !record.hostCompactionWarned) {
+      record.hostCompactionWarned = true;
+      ctx.ui.notify(`origami: omp host compaction ran (${event.action}); Origami cannot stop it. Check compaction.* settings.`, "warning");
     }
   });
 
@@ -326,6 +320,7 @@ export default function origamiExtension(api: ExtensionAPI): void {
       cacheRead,
       cacheWrite,
       foldEventId: null,
+      hostRewrite: false,
     };
     record.runtime.engine.recordRound(round);
     refreshStatusChip(sessionId);
@@ -337,6 +332,7 @@ export default function origamiExtension(api: ExtensionAPI): void {
     if (!record?.runtime || isSubagentDormant(ctx, record.config)) return;
     return handleRecallToolResult(event, sessionId, record.runtime);
   });
+
 
   api.on("session_shutdown", (_event, ctx) => {
     const sessionId = ctx.sessionManager.getSessionId();

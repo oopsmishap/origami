@@ -6,7 +6,7 @@
 bun install
 bun run typecheck
 bun test
-bun run bench -- --turns 200 --assert --json benchmark.json
+bun run bench -- --turns 400 --assert --json benchmark.json
 ```
 
 ## Host compatibility

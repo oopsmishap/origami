@@ -17,8 +17,8 @@ describe("Real-session smoke (tools + SQLite)", () => {
       { type: "message", id: "m0", message: { role: "system", content: "system prompt" } },
       { type: "message", id: "m1", message: { role: "user", content: "Let us design the database schema for user auth" } },
       { type: "message", id: "m2", message: { role: "assistant", content: "We need users table with id, email, password_hash, created_at" } },
-      { type: "message", id: "m3", message: { role: "user", content: "Also add sessions table with token, user_id, expires_at" } },
-      { type: "message", id: "m4", message: { role: "assistant", content: "Sessions table added with foreign key to users" } },
+      { type: "message", id: "m3", message: { role: "user", content: "Also add sessions table with token, user_id, expires_at; index the token column, cascade deletes from users, and keep expired rows for a week of audit." } },
+      { type: "message", id: "m4", message: { role: "assistant", content: "Sessions table added with foreign key to users, a unique index on token, ON DELETE CASCADE, and a nightly purge of rows expired for more than seven days. Migration 0042 creates the table, backfills existing tokens from the legacy cookie store, and the repository layer now exposes createSession, findSessionByToken and revokeSession with tests for expiry and cascade behaviour." } },
       { type: "message", id: "m5", message: { role: "user", content: "Now let us implement login endpoint" } },
     ];
 
@@ -145,6 +145,7 @@ describe("Real-session smoke (tools + SQLite)", () => {
       cacheRead: 4000,
       cacheWrite: 1000,
       foldEventId: "b1",
+      hostRewrite: false,
     });
 
     const cacheTool = tools.get("fold_cache")!;

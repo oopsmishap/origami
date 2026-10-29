@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { applyRender, planRender, renderBlockText, TIER_HEADERS, parseRefTag, expandRefRange } from "../src/kernel/render.ts";
-import type { Block, BoundMessage } from "../src/kernel/types.ts";
+import type { Block, BoundMessage, KernelMessage } from "../src/kernel/types.ts";
+import { OrigamiEngine } from "../src/engine.ts";
+import { configFromPreset } from "../src/config.ts";
+import { messageFacts } from "../src/kernel/message-facts.ts";
 
 function msg(ref: string, turn: number, role: BoundMessage["role"] = "user", extra: Partial<BoundMessage> = {}): BoundMessage {
   return {
@@ -169,5 +172,61 @@ describe("ref tags", () => {
 
   it("expands ref ranges", () => {
     expect(expandRefRange("m00001", "m00003")).toEqual(["m00001", "m00002", "m00003"]);
+  });
+});
+describe("engine ref tags", () => {
+  const raw = [
+    { role: "user", content: "first instruction" },
+    { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "src/a.ts" } }] },
+    { role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: `big output ${"x".repeat(4000)}` }] },
+    { role: "assistant", content: "done reading" },
+    { role: "user", content: "second instruction" },
+  ];
+  const entries = raw.map((message, i) => ({ type: "message" as const, id: `e${i}`, message }));
+  function engineAt(projected: number): OrigamiEngine {
+    const engine = new OrigamiEngine({
+      host: {
+        sessionId: () => "ref-tags",
+        appendEvent: () => {},
+        saveArtifact: async () => "/tmp/unused.md",
+        windowTokens: () => 10_000,
+        projectedTokens: () => projected,
+      },
+      entries,
+      modelId: "test",
+      config: configFromPreset("balanced"),
+    });
+    engine.refresh(entries);
+    engine.ingest(raw.map((m) => messageFacts(m)).filter((f): f is KernelMessage => f !== null));
+    return engine;
+  }
+  const fold = (text: string) => ({ role: "custom", content: text });
+
+  it("tags user and tool-result messages, never assistants, and keeps binding stable", () => {
+    const engine = engineAt(1_000);
+    const out = engine.render(raw, fold) as { role: string; content: unknown }[];
+    const refs = engine.bound.map((m) => m.ref);
+    expect(out[0]!.content).toBe(`[#${refs[0]}] first instruction`);
+    expect(out[1]!.content).toEqual(raw[1]!.content);
+    expect((out[2]!.content as { type: string; text: string }[])[0]).toEqual({ type: "text", text: `[#${refs[2]}]` });
+    expect(out[3]!.content).toBe("done reading");
+    expect(out[4]!.content).toBe(`[#${refs[4]}] second instruction`);
+    // Tags live only in the outbound copy: a second render binds the same refs and output.
+    expect(engine.render(raw, fold)).toEqual(out);
+    expect(engine.bound.map((m) => m.ref)).toEqual(refs);
+  });
+
+  it("leaves an elided tool result's label untagged", () => {
+    const engine = engineAt(9_800);
+    const out = engine.render(raw, fold) as { role: string; content: unknown }[];
+    const ref = engine.bound[2]!.ref;
+    expect((out[2]!.content as { text: string }[])).toHaveLength(1);
+    expect((out[2]!.content as { text: string }[])[0]!.text).toMatch(new RegExp(`^\\[#${ref} · .*elided\\]$`));
+  });
+
+  it("emits no tags when refTags is off", () => {
+    const engine = engineAt(1_000);
+    engine.config = { ...engine.config, refTags: false };
+    expect((engine.render(raw, fold) as { content: unknown }[])[0]!.content).toBe("first instruction");
   });
 });
