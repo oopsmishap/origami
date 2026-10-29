@@ -20,7 +20,8 @@
     "bench": "bun bench/marathon.ts",
     "replay": "bun bench/replay.ts",
     "replay:smoke": "bun bench/replay.ts --session tests/fixtures/replay-session.jsonl --mode simulated --policy both",
-    "replay:matrix": "bun bench/replay.ts --session tests/fixtures/replay-session.jsonl --preset all --policy both"
+    "replay:matrix": "bun bench/replay.ts --session tests/fixtures/replay-session.jsonl --preset all --policy both",
+    "bench:billion": "bun bench/billion.ts"
   },
   "peerDependencies": {
     "@oh-my-pi/pi-coding-agent": ">=18.6.0",
