@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { ConfigError, mergeConfigLayers, validateResolved } from "./config.ts";
 import type { OrigamiConfig } from "./config.ts";
 
@@ -42,4 +42,29 @@ export function loadOrigamiConfig(paths: { agentDir: string; projectDir: string 
   const layers = [agentLayer, projectLayer].filter((l): l is { file: string; raw: unknown } => l !== null);
   const resolved = mergeConfigLayers(layers);
   return validateResolved(resolved);
+}
+export function serializeYaml(obj: Record<string, unknown>): string {
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === undefined) continue;
+    if (typeof value === "string") {
+      lines.push(`${key}: ${value}`);
+    } else if (typeof value === "number" || typeof value === "boolean") {
+      lines.push(`${key}: ${value}`);
+    } else if (Array.isArray(value)) {
+      lines.push(`${key}: [${value.map((v) => JSON.stringify(v)).join(", ")}]`);
+    } else {
+      lines.push(`${key}: ${JSON.stringify(value)}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+export function saveConfigFile(file: string, config: Partial<OrigamiConfig>): void {
+  const dir = file.replace(/[/\\][^/\\]+$/, "");
+  if (dir && !existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  const text = serializeYaml(config as Record<string, unknown>);
+  writeFileSync(file, text, "utf-8");
 }

@@ -7,6 +7,8 @@ import type { BlockManifest } from "../kernel/manifest.ts";
 import type { LedgerRecord } from "../kernel/types.ts";
 import { ledgerSemanticKey } from "../kernel/ledger.ts";
 import { candidateStale } from "../candidates.ts";
+import { applyOverrides, validateResolved, type OrigamiConfig } from "../config.ts";
+import { saveConfigFile } from "../config-load.ts";
  const TOKEN_HEADER = "X-Origami-Token";
 
 function randomToken(): string {
@@ -176,7 +178,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
             if (!constantTimeEqual(suppliedToken, token)) return jsonError(401, "unauthorized");
           }
 
-          if ((path === "/api/unfold" || path === "/api/fold" || path === "/api/candidate") && req.method === "POST") {
+          if ((path === "/api/unfold" || path === "/api/fold" || path === "/api/candidate" || path === "/api/config") && req.method === "POST") {
             if (req.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
               return jsonError(415, "content type must be application/json");
             }
@@ -507,6 +509,59 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
             broadcast("blocks", rt.engine.state.tree.all());
             broadcast("status", rt.engine.status());
             return Response.json({ ok: true, action, id, blocks: result.outcome.blocks.map((b) => b.id) });
+          }
+          // 10. Config API (Inspect and Update session/project configuration)
+          if (path === "/api/config") {
+            const currentConfig = rt?.engine.config ?? record?.config ?? null;
+            if (req.method === "GET") {
+              return Response.json({
+                config: currentConfig,
+                presets: ["balanced", "lean", "relaxed"],
+                activePreset: currentConfig?.preset ?? "balanced",
+              });
+            }
+            if (req.method === "POST") {
+              if (!rt && !record) return jsonError(409, "session is not running");
+              const body = await jsonObject();
+              if (body instanceof Response) return body;
+
+              const cfg = rt?.engine.config ?? record!.config;
+              let updated: OrigamiConfig;
+              try {
+                const rawOverrides: Record<string, unknown> = { ...body };
+                const save = Boolean(rawOverrides.save);
+                delete rawOverrides.save;
+
+                updated = validateResolved(applyOverrides(cfg, rawOverrides, "<api>"));
+
+                if (rt) rt.engine.config = updated;
+                if (record) record.config = updated;
+
+                if (save) {
+                  const projectDir = record?.ctx?.cwd ?? ".";
+                  const projectFile = `${projectDir}/.omp/origami.yml`;
+                  saveConfigFile(projectFile, {
+                    preset: updated.preset,
+                    speculativeFolds: updated.speculativeFolds,
+                    emergencyFillPct: updated.emergencyFillPct,
+                    growthStep: updated.growthStep,
+                    compressibleFloor: updated.compressibleFloor,
+                    cooldownTurns: updated.cooldownTurns,
+                    paybackHorizonTurns: updated.paybackHorizonTurns,
+                    refTags: updated.refTags,
+                    language: updated.language,
+                  });
+                }
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                return jsonError(400, msg);
+              }
+
+              if (rt) {
+                broadcast("status", rt.engine.status());
+              }
+              return Response.json({ ok: true, config: updated, saved: Boolean(body.save) });
+            }
           }
 
           // 8. Serve Dashboard SPA
@@ -954,6 +1009,23 @@ function renderDashboardHtml(): string {
     .badge-stumble {
       background: rgba(245, 158, 11, 0.15);
       color: var(--accent-amber);
+    }
+    .preset-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      transition: border-color var(--transition-fast), background var(--transition-fast);
+      cursor: pointer;
+    }
+    .preset-card:hover {
+      border-color: var(--border-strong);
+      background: var(--bg-elevated);
+    }
+    .preset-card.active {
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 0 1px var(--accent-cyan);
+      background: var(--bg-elevated);
     }
 
     /* billion-context Trajectory & Hit-Rate Charts */
@@ -1455,6 +1527,7 @@ function renderDashboardHtml(): string {
       <button class="seg-tab" data-tab="zones" onclick="switchTab('zones')">Context Zones</button>
       <button class="seg-tab" data-tab="search" onclick="switchTab('search')">FTS5 Search</button>
       <button class="seg-tab" data-tab="audit" onclick="switchTab('audit')">Audit &amp; Telemetry <span class="tab-count" id="cnt-audit">0</span></button>
+      <button class="seg-tab" data-tab="settings" onclick="switchTab('settings')">Settings</button>
     </nav>
 
     <div class="header-meta">
@@ -1876,6 +1949,127 @@ function renderDashboardHtml(): string {
         </div>
       </div>
     </section>
+    <!-- TAB 7: Settings & Configuration -->
+    <section class="panel" id="tab-settings">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+          <h2 style="font-size:16px;font-weight:600;margin:0 0 4px 0;">Origami Configuration</h2>
+          <div style="font-size:12px;color:var(--text-secondary);">Manage operational presets, thresholds, and runtime safety for the active session or project defaults.</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-sm" onclick="loadConfigUI()">Reload</button>
+          <button class="btn btn-sm btn-primary" onclick="submitConfig(false)">Apply to Session</button>
+          <button class="btn btn-sm" onclick="submitConfig(true)">Save as Project Default</button>
+        </div>
+      </div>
+
+      <!-- Preset Selector Cards -->
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-head">
+          <span class="card-title">Operational Preset</span>
+          <span id="cfg-preset-badge" class="mono" style="color:var(--accent-cyan);font-size:11px;">balanced</span>
+        </div>
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">Presets balance token headroom against fold frequency and prompt cache amortization.</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:12px;">
+          <div class="preset-card clickable" id="preset-card-balanced" onclick="selectPreset('balanced')">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <span style="font-weight:600;font-size:13px;">Balanced</span>
+              <span class="tab-count" style="color:var(--accent-cyan)">Recommended</span>
+            </div>
+            <div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:8px;">Standard general coding workloads. Moderate compression cadence and optimal cache reuse.</div>
+            <div class="mono" style="font-size:11px;color:var(--text-muted);">50K growth · 22.5K floor · 85% emergency</div>
+          </div>
+          <div class="preset-card clickable" id="preset-card-lean" onclick="selectPreset('lean')">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <span style="font-weight:600;font-size:13px;">Lean</span>
+              <span class="tab-count" style="color:var(--accent-amber)">Aggressive</span>
+            </div>
+            <div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:8px;">Tight window ceilings or models with small context windows. Folds early and compacts aggressively.</div>
+            <div class="mono" style="font-size:11px;color:var(--text-muted);">25K growth · 15K floor · 75% emergency</div>
+          </div>
+          <div class="preset-card clickable" id="preset-card-relaxed" onclick="selectPreset('relaxed')">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <span style="font-weight:600;font-size:13px;">Relaxed</span>
+              <span class="tab-count" style="color:var(--text-muted)">High-Headroom</span>
+            </div>
+            <div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:8px;">Million-token windows. Prioritizes maximum prompt cache stability and delays mid-history folds.</div>
+            <div class="mono" style="font-size:11px;color:var(--text-muted);">80K growth · 40K floor · 90% emergency</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detailed Configuration Parameters Grid -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(400px, 1fr));gap:16px;">
+        <div class="card">
+          <div class="card-head"><span class="card-title">Fold Thresholds &amp; Timing</span></div>
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div>
+              <label style="display:flex;justify-content:space-between;font-size:12px;font-weight:500;margin-bottom:4px;">
+                <span>Growth Step (tokens)</span>
+                <span class="mono" id="cfg-val-growthStep" style="color:var(--accent-cyan)">50,000</span>
+              </label>
+              <input type="number" id="cfg-growthStep" class="search-input" style="width:100%" step="5000" min="10000" max="200000">
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Uncompressed tokens accumulated since last fold before efficiency reminders trigger.</div>
+            </div>
+            <div>
+              <label style="display:flex;justify-content:space-between;font-size:12px;font-weight:500;margin-bottom:4px;">
+                <span>Compressible Floor (tokens)</span>
+                <span class="mono" id="cfg-val-compressibleFloor" style="color:var(--accent-cyan)">22,500</span>
+              </label>
+              <input type="number" id="cfg-compressibleFloor" class="search-input" style="width:100%" step="2500" min="5000" max="100000">
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Minimum compressible message tokens outside protected regions required to fold.</div>
+            </div>
+            <div>
+              <label style="display:flex;justify-content:space-between;font-size:12px;font-weight:500;margin-bottom:4px;">
+                <span>Emergency Fill Threshold (%)</span>
+                <span class="mono" id="cfg-val-emergencyFillPct" style="color:var(--accent-cyan)">85%</span>
+              </label>
+              <input type="number" id="cfg-emergencyFillPct" class="search-input" style="width:100%" step="1" min="50" max="98">
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Context fill percentage that triggers emergency folding and strict preflight gates.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><span class="card-title">Runtime Safety &amp; Automation</span></div>
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+              <input type="checkbox" id="cfg-speculativeFolds" style="margin-top:2px;">
+              <div>
+                <div style="font-size:12.5px;font-weight:500;">Speculative Fold Candidates</div>
+                <div style="font-size:11px;color:var(--text-secondary);">Draft fold candidate summaries in the background during model idle cycles.</div>
+              </div>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+              <input type="checkbox" id="cfg-refTags" style="margin-top:2px;">
+              <div>
+                <div style="font-size:12.5px;font-weight:500;">Message Reference Tags</div>
+                <div style="font-size:11px;color:var(--text-secondary);">Prefix outbound user and tool results with [#mNNNNN] tags for deterministic citation.</div>
+              </div>
+            </label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div>
+                <label style="display:block;font-size:11.5px;font-weight:500;margin-bottom:4px;">Cooldown (turns)</label>
+                <input type="number" id="cfg-cooldownTurns" class="search-input" style="width:100%" min="0" max="10">
+                <div style="font-size:10.5px;color:var(--text-muted);margin-top:2px;">Turns after fold before reminders fire.</div>
+              </div>
+              <div>
+                <label style="display:block;font-size:11.5px;font-weight:500;margin-bottom:4px;">Payback Horizon (turns)</label>
+                <input type="number" id="cfg-paybackHorizonTurns" class="search-input" style="width:100%" min="0" max="20">
+                <div style="font-size:10.5px;color:var(--text-muted);margin-top:2px;">Max turns to amortize fold cost.</div>
+              </div>
+            </div>
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:500;margin-bottom:4px;">Language</label>
+              <select id="cfg-language" class="chip" style="width:100%;max-width:none;border-radius:6px;padding:6px 10px;">
+                <option value="preserve">preserve (keep original language)</option>
+                <option value="english">english (summaries in English)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <!-- Slide-Over Block Inspector Drawer -->
@@ -2035,10 +2229,13 @@ function renderDashboardHtml(): string {
       document.querySelectorAll('.panel').forEach((p) => {
         p.classList.toggle('active', p.id === 'tab-' + tab);
       });
+      if (tab === 'settings') {
+        loadConfigUI();
+      }
     }
 
     const initialHashTab = (location.hash || '').replace(/^#/, '');
-    if (['overview', 'blocks', 'cache', 'zones', 'search', 'audit'].includes(initialHashTab)) {
+    if (['overview', 'blocks', 'cache', 'zones', 'search', 'audit', 'settings'].includes(initialHashTab)) {
       switchTab(initialHashTab);
     }
 
@@ -3015,6 +3212,118 @@ function renderDashboardHtml(): string {
         refreshData();
       } catch (e) {
         toast('Network error answering candidate ' + id, 'err');
+      }
+    }
+    let currentConfigData = null;
+
+    async function loadConfigUI() {
+      try {
+        const res = await apiFetch(withSession('/api/config'));
+        if (!res.ok) return;
+        const data = await res.json();
+        currentConfigData = data.config || {};
+        renderConfigUI(currentConfigData, data.activePreset);
+      } catch (e) {
+        toast('Failed to load configuration', 'err');
+      }
+    }
+
+    function renderConfigUI(cfg, activePreset) {
+      if (!cfg) return;
+      const p = cfg.preset || activePreset || 'balanced';
+      if ($('cfg-preset-badge')) $('cfg-preset-badge').textContent = p;
+      ['balanced', 'lean', 'relaxed'].forEach((name) => {
+        const el = $('preset-card-' + name);
+        if (el) el.classList.toggle('active', name === p);
+      });
+      if ($('cfg-growthStep')) {
+        $('cfg-growthStep').value = cfg.growthStep || 50000;
+        $('cfg-val-growthStep').textContent = (cfg.growthStep || 50000).toLocaleString();
+      }
+      if ($('cfg-compressibleFloor')) {
+        $('cfg-compressibleFloor').value = cfg.compressibleFloor || 22500;
+        $('cfg-val-compressibleFloor').textContent = (cfg.compressibleFloor || 22500).toLocaleString();
+      }
+      if ($('cfg-emergencyFillPct')) {
+        const pct = Math.round((cfg.emergencyFillPct || 0.85) * 100);
+        $('cfg-emergencyFillPct').value = pct;
+        $('cfg-val-emergencyFillPct').textContent = pct + '%';
+      }
+      if ($('cfg-speculativeFolds')) $('cfg-speculativeFolds').checked = Boolean(cfg.speculativeFolds);
+      if ($('cfg-refTags')) $('cfg-refTags').checked = Boolean(cfg.refTags);
+      if ($('cfg-cooldownTurns')) $('cfg-cooldownTurns').value = cfg.cooldownTurns != null ? cfg.cooldownTurns : 2;
+      if ($('cfg-paybackHorizonTurns')) $('cfg-paybackHorizonTurns').value = cfg.paybackHorizonTurns != null ? cfg.paybackHorizonTurns : 6;
+      if ($('cfg-language')) $('cfg-language').value = cfg.language || 'preserve';
+    }
+
+    function selectPreset(preset) {
+      if (!preset) return;
+      ['balanced', 'lean', 'relaxed'].forEach((name) => {
+        const el = $('preset-card-' + name);
+        if (el) el.classList.toggle('active', name === preset);
+      });
+      if ($('cfg-preset-badge')) $('cfg-preset-badge').textContent = preset;
+      if (preset === 'balanced') {
+        if ($('cfg-growthStep')) { $('cfg-growthStep').value = 50000; $('cfg-val-growthStep').textContent = '50,000'; }
+        if ($('cfg-compressibleFloor')) { $('cfg-compressibleFloor').value = 22500; $('cfg-val-compressibleFloor').textContent = '22,500'; }
+        if ($('cfg-emergencyFillPct')) { $('cfg-emergencyFillPct').value = 85; $('cfg-val-emergencyFillPct').textContent = '85%'; }
+      } else if (preset === 'lean') {
+        if ($('cfg-growthStep')) { $('cfg-growthStep').value = 25000; $('cfg-val-growthStep').textContent = '25,000'; }
+        if ($('cfg-compressibleFloor')) { $('cfg-compressibleFloor').value = 15000; $('cfg-val-compressibleFloor').textContent = '15,000'; }
+        if ($('cfg-emergencyFillPct')) { $('cfg-emergencyFillPct').value = 75; $('cfg-val-emergencyFillPct').textContent = '75%'; }
+      } else if (preset === 'relaxed') {
+        if ($('cfg-growthStep')) { $('cfg-growthStep').value = 80000; $('cfg-val-growthStep').textContent = '80,000'; }
+        if ($('cfg-compressibleFloor')) { $('cfg-compressibleFloor').value = 40000; $('cfg-val-compressibleFloor').textContent = '40,000'; }
+        if ($('cfg-emergencyFillPct')) { $('cfg-emergencyFillPct').value = 90; $('cfg-val-emergencyFillPct').textContent = '90%'; }
+      }
+    }
+
+    async function submitConfig(saveToDisk) {
+      try {
+        const preset = $('cfg-preset-badge')?.textContent || 'balanced';
+        const growthStep = Number($('cfg-growthStep')?.value || 50000);
+        const compressibleFloor = Number($('cfg-compressibleFloor')?.value || 22500);
+        const emergencyFillPct = Number($('cfg-emergencyFillPct')?.value || 85) / 100;
+        const speculativeFolds = Boolean($('cfg-speculativeFolds')?.checked);
+        const refTags = Boolean($('cfg-refTags')?.checked);
+        const cooldownTurns = Number($('cfg-cooldownTurns')?.value || 2);
+        const paybackHorizonTurns = Number($('cfg-paybackHorizonTurns')?.value || 6);
+        const language = $('cfg-language')?.value || 'preserve';
+
+        const payload = {
+          preset,
+          growthStep,
+          compressibleFloor,
+          emergencyFillPct,
+          speculativeFolds,
+          refTags,
+          cooldownTurns,
+          paybackHorizonTurns,
+          language,
+          save: Boolean(saveToDisk),
+        };
+
+        const res = await apiFetch(withSession('/api/config'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          toast(
+            saveToDisk
+              ? 'Saved to .omp/origami.yml and updated session config'
+              : 'Updated active session configuration',
+            'ok',
+          );
+          currentConfigData = data.config;
+          renderConfigUI(currentConfigData, currentConfigData.preset);
+          refreshData();
+        } else {
+          toast('Config update failed: ' + (data.error || 'unknown error'), 'err');
+        }
+      } catch (e) {
+        toast('Network error updating configuration', 'err');
       }
     }
 

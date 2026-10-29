@@ -18,7 +18,7 @@ interface Options {
   summarySource: ReplaySummarySource;
   summaryCache: string | null;
   summaryMisses: string | null;
-  preset: Preset;
+  preset: Preset | "all";
   window: number;
   hints: boolean;
   json: string | null;
@@ -36,7 +36,7 @@ Input Options:
 Replay Configuration:
   --mode <mode>            'simulated' (engine folds on its nudges) or 'recorded' (replays journal folds) [default: simulated]
   --policy <policy>        'current', 'legacy-0.2', or 'both' [default: current]
-  --preset <preset>        'balanced', 'lean', or 'relaxed' [default: balanced]
+  --preset <preset>        'balanced', 'lean', 'relaxed', or 'all' [default: balanced]
   --window <tokens>        Context window ceiling in tokens [default: 200000]
   --no-hints               Disable in-context [origami recall] hints
 
@@ -84,8 +84,8 @@ function parseArgs(argv: readonly string[]): Options {
     else if (a === "--summary-misses") o.summaryMisses = value(i++, a);
     else if (a === "--preset") {
       const p = value(i++, a);
-      if (p !== "balanced" && p !== "lean" && p !== "relaxed") throw new Error(`--preset must be balanced, lean or relaxed, got ${p}`);
-      o.preset = p;
+      if (p !== "balanced" && p !== "lean" && p !== "relaxed" && p !== "all") throw new Error(`--preset must be balanced, lean, relaxed, or all, got ${p}`);
+      o.preset = p as Preset | "all";
     } else if (a === "--window") {
       const w = Number(value(i++, a));
       if (!Number.isInteger(w) || w <= 0) throw new Error(`--window must be a positive integer`);
@@ -109,8 +109,8 @@ function row(name: string, r: ReplayResult): string {
 
 function main(): void {
   const o = parseArgs(process.argv.slice(2));
-  const config = configFromPreset(o.preset);
-  const results: { session: string; policy: ReplayPolicy; result: ReplayResult }[] = [];
+  const presets: Preset[] = o.preset === "all" ? ["lean", "balanced", "relaxed"] : [o.preset];
+  const results: { session: string; preset: Preset; policy: ReplayPolicy; result: ReplayResult }[] = [];
   const policies: ReplayPolicy[] = o.policy === "both" ? ["legacy-0.2", "current"] : [o.policy];
   const summaryCache = o.summaryCache ? loadReplaySummaryCache(o.summaryCache) : undefined;
   const misses = new Map();
@@ -126,11 +126,15 @@ function main(): void {
       continue;
     }
     const { entries, malformedLines } = parseJournal(text);
-    for (const policy of policies) {
-      const result = replaySession(entries, { mode: o.mode, policy, summarySource: o.summarySource, summaryCache, summaryMisses: misses, config, windowTokens: o.window, hints: o.hints, probeDistanceRefs: 300, checkpointEvery: 200 });
-      result.malformedLines = malformedLines;
-      results.push({ session: path, policy, result });
-      console.log(row(`${path.split("/").pop()!.slice(0, 22)}:${policy}`, result));
+    for (const preset of presets) {
+      const config = configFromPreset(preset);
+      for (const policy of policies) {
+        const result = replaySession(entries, { mode: o.mode, policy, summarySource: o.summarySource, summaryCache, summaryMisses: misses, config, windowTokens: o.window, hints: o.hints, probeDistanceRefs: 300, checkpointEvery: 200 });
+        result.malformedLines = malformedLines;
+        results.push({ session: path, preset, policy, result });
+        const label = presets.length > 1 ? `${path.split("/").pop()!.slice(0, 16)}:${preset}:${policy}` : `${path.split("/").pop()!.slice(0, 22)}:${policy}`;
+        console.log(row(label, result));
+      }
     }
   }
   if (results.length > 0) {

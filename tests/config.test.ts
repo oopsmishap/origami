@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { ConfigError, PRESETS, applyOverrides, configFromPreset, mergeConfigLayers, validateResolved } from "../src/config.ts";
+import { saveConfigFile, serializeYaml } from "../src/config-load.ts";
 
 const balanced = () => configFromPreset("balanced");
 
@@ -78,6 +80,41 @@ describe("validateResolved", () => {
   it("accepts every preset as-is", () => {
     for (const name of ["balanced", "lean", "relaxed"] as const) {
       expect(() => validateResolved(configFromPreset(name))).not.toThrow();
+    }
+  });
+});
+describe("serializeYaml and saveConfigFile", () => {
+  it("serializes numbers, booleans, and strings into clean YAML", () => {
+    const yaml = serializeYaml({
+      preset: "lean",
+      growthStep: 25000,
+      emergencyFillPct: 0.8,
+      speculativeFolds: true,
+      cooldownTurns: 3,
+    });
+    expect(yaml).toContain("preset: lean");
+    expect(yaml).toContain("growthStep: 25000");
+    expect(yaml).toContain("emergencyFillPct: 0.8");
+    expect(yaml).toContain("speculativeFolds: true");
+    expect(yaml).toContain("cooldownTurns: 3");
+  });
+
+  it("writes and reads back configuration file to disk", () => {
+    const tmpFile = "tests/fixtures/tmp-save-test.yml";
+    try {
+      saveConfigFile(tmpFile, {
+        preset: "relaxed",
+        growthStep: 80000,
+        speculativeFolds: false,
+      });
+      expect(existsSync(tmpFile)).toBe(true);
+      const text = readFileSync(tmpFile, "utf-8");
+      expect(text).toContain("preset: relaxed");
+      expect(text).toContain("growthStep: 80000");
+    } finally {
+      try {
+        unlinkSync(tmpFile);
+      } catch {}
     }
   });
 });

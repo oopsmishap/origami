@@ -17,6 +17,8 @@ export function recommendedRanges(context: Readonly<EngineContext>, maxRanges = 
       tool: message.role === "toolResult",
       toolCalls: message.toolCalls,
       toolCallId: message.toolCallId,
+      text: message.text,
+      isError: message.isError,
     })),
     foldedRefs: context.state.foldedRefs(),
     protectedFromTurn: context.protectedFromTurn,

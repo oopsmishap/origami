@@ -300,8 +300,8 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
 
     origamiExtension(fakeApi);
     const complete = commands.get("fold")?.getArgumentCompletions;
-    expect(complete?.("")?.map((item) => item.value)).toEqual(["trajectory", "blocks", "zones", "web", "export"]);
-    expect(complete?.("bl")?.map((item) => item.value)).toEqual(["blocks"]);
+    expect(complete?.("")?.map((item) => item.value)).toEqual(["trajectory", "blocks", "zones", "web", "config", "export"]);
+    expect(complete?.("co")?.map((item) => item.value)).toEqual(["config"]);
     expect(complete?.("blocks ")).toBeNull();
   });
 

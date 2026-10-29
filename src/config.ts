@@ -157,6 +157,7 @@ const NON_NEGATIVE_INT_KEYS: Record<string, true> = {
   cacheTtlMs: true,
   paybackHorizonTurns: true,
   recallHintMax: true,
+  cooldownTurns: true,
 };
 
 /** Fractions in [0, 1): 0 disables the feature. */

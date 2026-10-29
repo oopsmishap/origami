@@ -130,6 +130,9 @@ describe("Standalone Web Dashboard Server", () => {
       expect(html).toContain("gate-indicator");
       expect(html).toContain("session-count-pill");
       expect(html).toContain("session-select");
+      expect(html).toContain("tab-settings");
+      expect(html).toContain("cfg-preset-badge");
+      expect(html).toContain("preset-card-balanced");
       const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
       expect(scripts.length).toBeGreaterThan(0);
       const AsyncFunction = (async () => {}).constructor as new (body: string) => unknown;
@@ -171,6 +174,8 @@ describe("Standalone Web Dashboard Server", () => {
         ["unfold", JSON.stringify({}), "id must be a non-empty string"],
         ["candidate", JSON.stringify({ id: "c1", action: "maybe" }), "action must be accept, reject, or edit"],
         ["candidate", JSON.stringify({ action: "accept" }), "id must be a non-empty string"],
+        ["config", JSON.stringify({ preset: "hyperdrive" }), "<api>: invalid preset: hyperdrive"],
+        ["config", JSON.stringify({ emergencyFillPct: 1.5 }), "<api>: emergencyFillPct must be a fraction in (0, 1), got 1.5"],
       ] as const) {
         const response = await fetch(`${baseUrl}/api/${path}`, {
           method: "POST",
@@ -341,6 +346,27 @@ describe("Standalone Web Dashboard Server", () => {
       expect(candRejectData.ok).toBe(true);
       expect(candRejectData.action).toBe("reject");
       expect(runtime.candidates.pending).toBeNull();
+      // 6c. GET & POST /api/config
+      const getConfigRes = await fetch(`${baseUrl}/api/config`, { headers: authHeaders });
+      expect(getConfigRes.status).toBe(200);
+      const configData = (await getConfigRes.json()) as { config: { preset: string }; activePreset: string };
+      expect(configData.activePreset).toBe("balanced");
+      expect(configData.config.preset).toBe("balanced");
+
+      const updateConfigRes = await fetch(`${baseUrl}/api/config`, {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ preset: "lean", speculativeFolds: true, cooldownTurns: 4 }),
+      });
+      expect(updateConfigRes.status).toBe(200);
+      const updateData = (await updateConfigRes.json()) as { ok: boolean; config: { preset: string; speculativeFolds: boolean; cooldownTurns: number } };
+      expect(updateData.ok).toBe(true);
+      expect(updateData.config.preset).toBe("lean");
+      expect(updateData.config.speculativeFolds).toBe(true);
+      expect(updateData.config.cooldownTurns).toBe(4);
+      expect(runtime.engine.config.preset).toBe("lean");
+      expect(runtime.engine.config.speculativeFolds).toBe(true);
+      expect(runtime.engine.config.cooldownTurns).toBe(4);
 
       // 7. GET /api/events -> SSE connection test
       const eventsRes = await fetch(`${baseUrl}/api/events?token=${dashboard.token}`);

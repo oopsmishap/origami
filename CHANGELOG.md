@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1 — 2026-10-30
+
+### Features & Improvements
+- **Live configuration controls across all surfaces**: Added an interactive Settings tab to the Web UI dashboard (`#settings`) with preset cards (`balanced`, `lean`, `relaxed`), threshold inputs (`growthStep`, `compressibleFloor`, `emergencyFillPct`, `cooldownTurns`, `paybackHorizonTurns`), runtime toggles, and instant session apply or save to `.omp/origami.yml`. Added `/fold config [preset <name> | set <key> <val>]` terminal command for headless or CLI environments. Added `GET /api/config` and `POST /api/config` endpoints with validation and SSE status broadcasting.
+- **Semantic task boundary slicing**: Candidate range generation in `src/kernel/nudge.ts` now identifies natural developer milestones via `src/kernel/semantic-boundary.ts`: git commit deliverables, verified test suite passes (`0 fail` / `pass`), completed tasks (`todo op: "done"`), and clean user turn endpoints. In addition to full contiguous spans, `recommendRanges` surfaces cohesive milestone sub-ranges, preventing arbitrary cuts across active workflows and giving candidate generators clean task-aligned ranges.
+- **Cross-preset replay matrix benchmarking**: Added `--preset all` to `bench/replay.ts` and `bun run replay:matrix` to `package.json`, evaluating session journals across `lean`, `balanced`, and `relaxed` presets and comparing `legacy-0.2` against `current` policies in a unified table.
+
+### Safety & Correctness
+- Added `cooldownTurns` to `NON_NEGATIVE_INT_KEYS` in `src/config.ts`, ensuring live updates and YAML overrides validate cleanly.
+- Preserved tool-pairing atomicity, ephemeral message trimming, and duplicate range suppression across all semantic sub-ranges.
 ## 0.4.0 — 2026-10-29
 
 ### Features & Improvements
@@ -109,8 +119,7 @@
 - Discrete 1:1 bar trajectory chart with bounded visible window (`slice(-maxBars)`) and recent-peak Y-axis ceiling in Tern TSP, eliminating chart overflow while preserving turn-by-turn granularity.
 - Ported billion-context context trajectory graph and linked prompt cache hit-rate chart with brush zoom into the Web UI.
 - Context Pleat brand kit: high-DPI vector lockups, adaptive dark/light headers, OpenGraph social previews, and web dashboard favicon.
-- Comprehensive user-facing `README.md` documentation covering installation, configuration presets, slash commands, workbench controls, and web dashboard usage.
-
+- Complete user-facing `README.md` documentation covering installation, configuration presets, slash commands, workbench controls, and web dashboard usage.
 ### Fixes
 - Fixed web dashboard window occupancy percentage calculation (preventing 100x over-scaling).
 - Corrected live token telemetry to account for prompt baseline overhead and active turn projection.

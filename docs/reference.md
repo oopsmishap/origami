@@ -36,6 +36,7 @@ Origami enforces structural safety checks before committing any context changes:
 - Single compaction authority: Origami disables omp's own compaction settings for the main session. If host compaction or shake still runs, Origami does not fold in response; it warns once and attributes the resulting cache misses to `Host rewrite`.
 - Recall federation: Queries directed to cross-session memory (`recall`) are automatically cross-checked against the active session's SQLite index, appending matching fold blocks and message references without altering external memory.
 - Plan-aware retrieval: Full-text search extracts active tasks and planning state from the recent message window, boosting relevant candidate blocks above unrelated matches.
+- Semantic task boundary slicing: Candidate range detection slices uncompressed history along natural developer milestones (git commit deliverables, test suite passes, completed tasks, and clean user-turn endpoints), ensuring candidate ranges encapsulate cohesive units of work rather than arbitrary message windows.
 
 Origami tracks the long-term economics of context management:
 
@@ -54,6 +55,7 @@ Open with `/fold` or `Alt+F`.
 - Trajectory: 1:1 discrete round bars, cache read rates, and fold markers.
 - Blocks: fold list, lifecycle, summaries, and unfold actions.
 - Zones: pinned, folded, compressible, and protected regions with uncovered run auditing.
+- Configuration: `/fold config` inspects runtime settings, switches operational presets (`balanced`, `lean`, `relaxed`), or updates individual thresholds and options saved directly to `.omp/origami.yml`.
 | Key | Action |
 |---|---|
 | `1`–`4` | Select a tab |
@@ -69,7 +71,7 @@ Open with `/fold` or `Alt+F`.
 
 ## Web dashboard
 
-`/fold web` starts a token-protected loopback server on port 3780, falling back through 3789. It shows context and cache trajectories with synchronized brush zoom, protected zones, uncovered mid-history runs, fold candidates with timing-gate indicators and interactive review actions, multi-session navigation for concurrent subagents, active pinned ledger records and character budgets, slide-over block detail drawers with provenance manifests and pinned records, agent-session hierarchy, FTS5 search over fold summaries and archived original messages, and a real-time tool execution audit log with frustration-loop diagnosis.
+`/fold web` starts a token-protected loopback server on port 3780, falling back through 3789. It shows context and cache trajectories with synchronized brush zoom, protected zones, uncovered mid-history runs, fold candidates with timing-gate indicators and interactive review actions, multi-session navigation for concurrent subagents, active pinned ledger records and character budgets, slide-over block detail drawers with provenance manifests and pinned records, agent-session hierarchy, FTS5 search over fold summaries and archived original messages, a real-time tool execution audit log with frustration-loop diagnosis, and an interactive Settings panel with operational preset switching, threshold controls, and instant or persistent configuration updates.
 The API rejects missing tokens, foreign origins, non-loopback hosts, and invalid mutation bodies.
 ## Agent tools
 

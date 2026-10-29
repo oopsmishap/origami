@@ -10,8 +10,8 @@ import { join } from "node:path";
 import { candidateRanges, formatCandidate, generateCandidate, isCandidateRequest, liveCandidate } from "./candidates.ts";
 import { recordToolTelemetry } from "./telemetry.ts";
 import { handleRecallToolResult } from "./federation/recall-hook.ts";
-import { loadOrigamiConfig } from "./config-load.ts";
-import { configFromPreset, type OrigamiConfig } from "./config.ts";
+import { loadOrigamiConfig, saveConfigFile } from "./config-load.ts";
+import { applyOverrides, configFromPreset, validateResolved, type OrigamiConfig } from "./config.ts";
 import { doctrinePrompt } from "./kernel/doctrine.ts";
 import type { StatusReport } from "./engine.ts";
 import type { OrigamiDb } from "./persist/db.ts";
@@ -528,6 +528,7 @@ export default function origamiExtension(api: ExtensionAPI): void {
     { label: "blocks", value: "blocks", description: "Open the fold block browser" },
     { label: "zones", value: "zones", description: "Open the context zones view" },
     { label: "web", value: "web", description: "Open the browser dashboard" },
+    { label: "config", value: "config", description: "Inspect or update Origami configuration" },
     { label: "export", value: "export", description: "Write this session's blocks, rounds, and archived messages to a JSON artifact" },
   ];
 
@@ -543,6 +544,65 @@ export default function origamiExtension(api: ExtensionAPI): void {
       const sub = args.trim().toLowerCase();
       if (sub === "web" || sub === "dashboard") {
         await openWebDashboard(ctx);
+        return;
+      }
+      if (sub === "config" || sub.startsWith("config ")) {
+        const parts = sub.slice(6).trim().split(/\s+/).filter(Boolean);
+        const { record, rt } = getOrInitRuntime(ctx);
+        const cfg = rt.engine.config;
+        if (parts.length === 0) {
+          const lines = [
+            `Origami Configuration (${cfg.preset} preset):`,
+            `  • Growth step: ${cfg.growthStep.toLocaleString()} tokens`,
+            `  • Compressible floor: ${cfg.compressibleFloor.toLocaleString()} tokens`,
+            `  • Emergency threshold: ${Math.round(cfg.emergencyFillPct * 100)}%`,
+            `  • Speculative folds: ${cfg.speculativeFolds ? "enabled" : "disabled"}`,
+            `  • Reference tags: ${cfg.refTags ? "enabled" : "disabled"}`,
+            `  • Cooldown: ${cfg.cooldownTurns ?? 2} turns`,
+            `  • Payback horizon: ${cfg.paybackHorizonTurns} turns`,
+            `  • Language: ${cfg.language}`,
+            `Run '/fold config preset <balanced|lean|relaxed>' or '/fold config set <key> <val>'`,
+          ];
+          if (ctx.hasUI) ctx.ui.notify(lines.join("\n"), "info");
+          return;
+        }
+        if (parts[0] === "preset" && parts[1]) {
+          const preset = parts[1].toLowerCase();
+          if (preset !== "balanced" && preset !== "lean" && preset !== "relaxed") {
+            if (ctx.hasUI) ctx.ui.notify(`Invalid preset '${preset}'. Valid choices: balanced, lean, relaxed.`, "error");
+            return;
+          }
+          try {
+            const updated = validateResolved(applyOverrides(cfg, { preset }, "<cli>"));
+            rt.engine.config = updated;
+            record.config = updated;
+            saveConfigFile(`${ctx.cwd}/.omp/origami.yml`, { preset: updated.preset });
+            if (ctx.hasUI) ctx.ui.notify(`Switched Origami preset to '${preset}' and saved to .omp/origami.yml`, "info");
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (ctx.hasUI) ctx.ui.notify(`Failed to switch preset: ${msg}`, "error");
+          }
+          return;
+        }
+        if (parts[0] === "set" && parts[1] && parts[2]) {
+          const key = parts[1];
+          let val: unknown = parts[2];
+          if (val === "true") val = true;
+          else if (val === "false") val = false;
+          else if (!Number.isNaN(Number(val))) val = Number(val);
+          try {
+            const updated = validateResolved(applyOverrides(cfg, { [key]: val }, "<cli>"));
+            rt.engine.config = updated;
+            record.config = updated;
+            saveConfigFile(`${ctx.cwd}/.omp/origami.yml`, { [key]: val });
+            if (ctx.hasUI) ctx.ui.notify(`Updated Origami config: ${key} = ${val} (saved to .omp/origami.yml)`, "info");
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (ctx.hasUI) ctx.ui.notify(`Config update failed: ${msg}`, "error");
+          }
+          return;
+        }
+        if (ctx.hasUI) ctx.ui.notify("Usage: /fold config [preset <balanced|lean|relaxed> | set <key> <val>]", "info");
         return;
       }
       if (sub === "export") {

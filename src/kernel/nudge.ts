@@ -1,5 +1,5 @@
 import { buildToolPairPartnerMap } from "./tool-pairs.ts";
-
+import { sliceRunBySemanticSeams } from "./semantic-boundary.ts";
 export interface NudgeRange {
   start: string;
   end: string;
@@ -180,8 +180,9 @@ export interface RecommendBoundMessage {
   role?: string;
   toolCalls?: { id: string; name: string }[];
   toolCallId?: string;
+  text?: string;
+  isError?: boolean;
 }
-
 export function recommendRanges(input: {
   bound: readonly RecommendBoundMessage[];
   foldedRefs: ReadonlySet<string>;
@@ -189,6 +190,7 @@ export function recommendRanges(input: {
   protectedFromTurn: number;
   pinnedHeadRef?: string | null;
   maxRanges?: number;
+  minSliceTokens?: number;
 }): NudgeRange[] {
   const { bound, foldedRefs, protectedFromTurn, pinnedHeadRef } = input;
   const pinnedTurn = pinnedHeadRef ? bound.find((m) => m.ref === pinnedHeadRef)?.turn ?? -1 : -1;
@@ -232,9 +234,16 @@ export function recommendRanges(input: {
     pushRun(currentStart, bound.length - 1);
   }
 
-  const cleanRuns: NudgeRange[] = [];
+  const candidateRuns: { startIdx: number; endIdx: number }[] = [];
+  for (const rawRun of rawRuns) {
+    const slices = sliceRunBySemanticSeams(rawRun, bound, input.minSliceTokens ?? 8000);
+    candidateRuns.push(...slices);
+  }
 
-  for (const { startIdx: origStart, endIdx: origEnd } of rawRuns) {
+  const cleanRuns: NudgeRange[] = [];
+  const seenRanges = new Set<string>();
+
+  for (const { startIdx: origStart, endIdx: origEnd } of candidateRuns) {
     let start = origStart;
     let end = origEnd;
     let changed = true;
@@ -284,13 +293,17 @@ export function recommendRanges(input: {
         messages++;
         if (m.tool) toolTokens += m.tokens;
       }
-      cleanRuns.push({
-        start: bound[start]!.ref,
-        end: bound[end]!.ref,
-        tokens,
-        messages,
-        toolTokens,
-      });
+      const key = `${bound[start]!.ref}..${bound[end]!.ref}`;
+      if (!seenRanges.has(key)) {
+        seenRanges.add(key);
+        cleanRuns.push({
+          start: bound[start]!.ref,
+          end: bound[end]!.ref,
+          tokens,
+          messages,
+          toolTokens,
+        });
+      }
     }
   }
 
