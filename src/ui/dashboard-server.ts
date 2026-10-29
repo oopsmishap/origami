@@ -2,6 +2,7 @@ type BunServer = ReturnType<typeof Bun.serve>;
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import { openDb, type DbBlockRow, type OrigamiDb } from "../persist/db.ts";
 import type { SessionRecord, SessionRegistry } from "../sessions.ts";
+import { buildCacheReport } from "../kernel/cache-report.ts";
 const TOKEN_HEADER = "X-Origami-Token";
 
 function randomToken(): string {
@@ -262,8 +263,30 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
           }
           // 5b. Cache Report API (exact decomposition and per-fold payback economics)
           if (path === "/api/cache-report") {
-            if (rt) {
+            if (rt && (!sessionId || rt.sessionId === sessionId)) {
               return Response.json(rt.engine.cacheReport());
+            }
+            if (sessionId) {
+              const rep = withDb(record, (db) => {
+                const rounds = db.roundsForSession(sessionId);
+                const blocks = db.blocksForSession(sessionId);
+                const samples = rounds.map((r) => ({
+                  at: r.ts,
+                  input: r.total_in,
+                  cached: r.cache_read,
+                  write: r.cache_write,
+                  foldEventId: r.fold_event_id,
+                }));
+                const folds = blocks.map((b) => ({
+                  id: b.block_id,
+                  at: b.created_at,
+                  tokensCompressed: Math.max(0, b.tokens_before - b.tokens_after),
+                  summaryTokens: b.tokens_after,
+                  topic: b.topic,
+                }));
+                return buildCacheReport(samples, folds);
+              });
+              if (rep) return Response.json(rep);
             }
             return Response.json(null);
           }
@@ -551,8 +574,11 @@ function renderDashboardHtml(): string {
       background: var(--bg-hover);
       color: var(--text-muted);
     }
-    .seg-tab.active .tab-count {
+    .seg-tab.active .tab-count,
+    .btn.active .tab-count,
+    .btn.btn-primary .tab-count {
       color: var(--accent-cyan);
+      background: rgba(6, 182, 212, 0.18);
     }
 
     .header-meta {
@@ -1341,64 +1367,49 @@ function renderDashboardHtml(): string {
 
     <!-- TAB 3: Cache Economics -->
     <section class="panel" id="tab-cache">
-      <!-- Decomposition & Summary Tiles -->
-      <div class="stat-grid" style="margin-bottom:14px;">
-        <div class="stat-tile">
-          <div class="stat-val" id="cache-hit-pct" style="color:var(--accent-green)">—</div>
-          <div class="stat-lbl">Overall Hit Rate</div>
-          <div class="stat-sub" id="cache-hit-sub">0 / 0 tokens cached</div>
+      <!-- 4 Integrated KPI Cards for Cache Decomposition & Economics -->
+      <div class="kpi-grid" style="margin-bottom:14px;">
+        <div class="kpi-card">
+          <div class="kpi-head"><span>FRESH GROWTH (&Delta;I)</span></div>
+          <div class="kpi-value" id="cache-fresh-pct" style="color:var(--accent-cyan)">—</div>
+          <div class="kpi-sub" id="cache-fresh-sub">Normal turn inputs</div>
+          <div class="meter-track"><div class="meter-seg" id="meter-cache-fresh" style="width:0%;background:var(--accent-cyan)"></div></div>
         </div>
-        <div class="stat-tile">
-          <div class="stat-val" id="cache-fresh-pct">—</div>
-          <div class="stat-lbl">Fresh Growth</div>
-          <div class="stat-sub" id="cache-fresh-sub">Normal turn inputs</div>
+        <div class="kpi-card">
+          <div class="kpi-head"><span>FOLD RE-PAY (T)</span></div>
+          <div class="kpi-value" id="cache-repay-pct" style="color:var(--accent-amber)">—</div>
+          <div class="kpi-sub" id="cache-repay-sub">Prefix invalidation cost</div>
+          <div class="meter-track"><div class="meter-seg" id="meter-cache-repay" style="width:0%;background:var(--accent-amber)"></div></div>
         </div>
-        <div class="stat-tile">
-          <div class="stat-val" id="cache-repay-pct" style="color:var(--accent-amber)">—</div>
-          <div class="stat-lbl">Fold Compression Re-pay</div>
-          <div class="stat-sub" id="cache-repay-sub">Prefix invalidation cost</div>
+        <div class="kpi-card">
+          <div class="kpi-head"><span>TTL & PROVIDER EVICTION (E)</span></div>
+          <div class="kpi-value" id="cache-ttl-pct" style="color:#a78bfa">—</div>
+          <div class="kpi-sub" id="cache-ttl-sub">Idle gaps & cluster drops</div>
+          <div class="meter-track"><div class="meter-seg" id="meter-cache-ttl" style="width:0%;background:#a78bfa"></div></div>
         </div>
-        <div class="stat-tile">
-          <div class="stat-val" id="cache-ttl-pct" style="color:#a78bfa">—</div>
-          <div class="stat-lbl">TTL / Provider Eviction</div>
-          <div class="stat-sub" id="cache-ttl-sub">Idle & cluster drops</div>
-        </div>
-      </div>
-
-      <!-- Per-Fold Payback & Cadence Ledger Card -->
-      <div class="card" style="margin-bottom:14px;">
-        <div class="card-h">
-          <span class="card-title">Per-Fold Payback & Cadence Health</span>
-          <span class="card-hint">Measured prefix re-pay T, break-even rounds n*, and interleave cadence</span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Fold</th>
-                <th class="num">Compressed</th>
-                <th class="num">Summary</th>
-                <th class="num">Measured Re-pay (T)</th>
-                <th class="num">Break-even (n*)</th>
-                <th class="num">Observed After</th>
-                <th>Payback Status</th>
-                <th>Cadence</th>
-              </tr>
-            </thead>
-            <tbody id="cache-folds-tbody">
-              <tr><td colspan="8" class="chart-empty">No folds recorded yet.</td></tr>
-            </tbody>
-          </table>
+        <div class="kpi-card">
+          <div class="kpi-head"><span>NET PROMPT SAVED</span></div>
+          <div class="kpi-value" id="cache-saved-val" style="color:var(--accent-green)">—</div>
+          <div class="kpi-sub" id="cache-saved-sub">All folds paid back</div>
+          <div class="meter-track"><div class="meter-seg" id="meter-cache-saved" style="width:0%;background:var(--accent-green)"></div></div>
         </div>
       </div>
 
-      <!-- Per-Request Cache Ledger Card -->
+      <!-- Unified Cache Ledger Card with View Switcher -->
       <div class="card">
         <div class="card-h">
-          <span class="card-title">Per-Request Cache Ledger</span>
-          <span class="card-hint">Prompt cache reads, writes, hit rates, and fold rebuild attribution</span>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <span class="card-title" id="cache-table-title">Per-Request Cache Ledger</span>
+            <div style="display:flex;gap:4px;">
+              <button class="btn btn-sm btn-primary active" id="btn-cache-ledger" onclick="switchCacheView('ledger')">Request Ledger <span class="tab-count" id="cache-ledger-count">0</span></button>
+              <button class="btn btn-sm" id="btn-cache-folds" onclick="switchCacheView('folds')">Fold Payback <span class="tab-count" id="cache-folds-count">0</span></button>
+            </div>
+          </div>
+          <span class="card-hint" id="cache-table-hint">Prompt cache reads, writes, hit rates, and fold rebuild attribution</span>
         </div>
-        <div class="table-wrap">
+
+        <!-- VIEW 1: Per-Request Cache Ledger (Visible by default) -->
+        <div class="table-wrap" id="cache-ledger-view">
           <table>
             <thead>
               <tr>
@@ -1414,6 +1425,27 @@ function renderDashboardHtml(): string {
             </thead>
             <tbody id="cache-tbody">
               <tr><td colspan="8" class="chart-empty">No cache rounds recorded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- VIEW 2: Per-Fold Payback & Cadence Health (Visible when toggled) -->
+        <div class="table-wrap" id="cache-folds-view" style="display:none;">
+          <table>
+            <thead>
+              <tr>
+                <th>Fold</th>
+                <th class="num">Compressed (S)</th>
+                <th class="num">Summary (&sigma;)</th>
+                <th class="num">Measured Re-pay (T)</th>
+                <th class="num">Break-even (n*)</th>
+                <th class="num">Observed After</th>
+                <th>Payback Status</th>
+                <th>Cadence Health</th>
+              </tr>
+            </thead>
+            <tbody id="cache-folds-tbody">
+              <tr><td colspan="8" class="chart-empty">No folds recorded yet.</td></tr>
             </tbody>
           </table>
         </div>
@@ -2146,6 +2178,31 @@ function renderDashboardHtml(): string {
       const blockId = row?.getAttribute('data-search-block-id');
       if (blockId) openBlockDrawer(blockId);
     });
+    let activeCacheView = 'ledger';
+    function switchCacheView(view) {
+      activeCacheView = view;
+      const isLedger = view === 'ledger';
+      const bLedger = $('btn-cache-ledger');
+      const bFolds = $('btn-cache-folds');
+      if (bLedger) {
+        bLedger.classList.toggle('btn-primary', isLedger);
+        bLedger.classList.toggle('active', isLedger);
+      }
+      if (bFolds) {
+        bFolds.classList.toggle('btn-primary', !isLedger);
+        bFolds.classList.toggle('active', !isLedger);
+      }
+      if ($('cache-table-title')) {
+        $('cache-table-title').textContent = isLedger ? 'Per-Request Cache Ledger' : 'Per-Fold Payback & Cadence Health';
+      }
+      if ($('cache-table-hint')) {
+        $('cache-table-hint').textContent = isLedger
+          ? 'Prompt cache reads, writes, hit rates, and fold rebuild attribution'
+          : 'Measured prefix re-pay T, break-even rounds n*, and interleave cadence';
+      }
+      if ($('cache-ledger-view')) $('cache-ledger-view').style.display = isLedger ? 'block' : 'none';
+      if ($('cache-folds-view')) $('cache-folds-view').style.display = isLedger ? 'none' : 'block';
+    }
 
     async function refreshData() {
       const seq = ++refreshSeq;
@@ -2178,14 +2235,23 @@ function renderDashboardHtml(): string {
           const repayPct = totalMiss > 0 ? Math.round((s.compRepay / totalMiss) * 100) : 0;
           const ttlPct = totalMiss > 0 ? Math.round((s.ttlRepay / totalMiss) * 100) : 0;
 
-          if ($('cache-hit-pct')) $('cache-hit-pct').textContent = s.overallHitPct + '%';
-          if ($('cache-hit-sub')) $('cache-hit-sub').textContent = formatK(s.totalCached) + ' / ' + formatK(s.totalInput);
           if ($('cache-fresh-pct')) $('cache-fresh-pct').textContent = freshPct + '%';
-          if ($('cache-fresh-sub')) $('cache-fresh-sub').textContent = formatK(s.newContent) + ' fresh tokens';
+          if ($('cache-fresh-sub')) $('cache-fresh-sub').textContent = formatK(s.newContent) + ' (' + freshPct + '% of misses)';
+          if ($('meter-cache-fresh')) $('meter-cache-fresh').style.width = Math.min(100, freshPct) + '%';
+
           if ($('cache-repay-pct')) $('cache-repay-pct').textContent = repayPct + '%';
-          if ($('cache-repay-sub')) $('cache-repay-sub').textContent = formatK(s.compRepay) + ' re-pay tokens';
+          if ($('cache-repay-sub')) $('cache-repay-sub').textContent = formatK(s.compRepay) + ' re-pay cost';
+          if ($('meter-cache-repay')) $('meter-cache-repay').style.width = Math.min(100, repayPct) + '%';
+
           if ($('cache-ttl-pct')) $('cache-ttl-pct').textContent = ttlPct + '%';
-          if ($('cache-ttl-sub')) $('cache-ttl-sub').textContent = formatK(s.ttlRepay) + ' eviction tokens';
+          if ($('cache-ttl-sub')) $('cache-ttl-sub').textContent = formatK(s.ttlRepay) + ' idle/provider drops';
+          if ($('meter-cache-ttl')) $('meter-cache-ttl').style.width = Math.min(100, ttlPct) + '%';
+
+          if ($('cache-saved-val')) $('cache-saved-val').textContent = '+' + formatK(s.netTokens);
+          if ($('cache-saved-sub')) $('cache-saved-sub').textContent = s.paidBackCount + ' of ' + s.foldsCount + ' folds paid back';
+          if ($('meter-cache-saved')) $('meter-cache-saved').style.width = (s.foldsCount > 0 ? Math.round((s.paidBackCount / s.foldsCount) * 100) : 100) + '%';
+
+          if ($('cache-folds-count')) $('cache-folds-count').textContent = String(cacheReport.folds ? cacheReport.folds.length : 0);
 
           const foldsTbody = $('cache-folds-tbody');
           if (foldsTbody) {
@@ -2193,10 +2259,13 @@ function renderDashboardHtml(): string {
               foldsTbody.innerHTML = '<tr><td colspan="8" class="chart-empty">No folds recorded yet.</td></tr>';
             } else {
               foldsTbody.innerHTML = cacheReport.folds.map((f) => {
-                const statusCls = f.paidBack ? 'status-pill status-pill-active' : 'status-pill status-pill-young';
+                const statusCls = f.paidBack ? 'status-pill status-live' : 'status-pill status-unfolded';
                 const statusLbl = f.paidBack ? 'Paid back ✓' : 'Break-even in ~' + Math.max(1, f.breakevenTurns - f.requestsAfter) + 'T';
-                const cadCls = f.cadenceOk === null ? '' : f.cadenceOk ? 'style="color:var(--accent-green)"' : 'style="color:var(--accent-red)"';
-                const cadLbl = f.cadenceOk === null ? 'Active' : f.cadenceOk ? 'Healthy ✓' : 'Thrashed ✗';
+                const cadPill = f.cadenceOk === null
+                  ? '<span class="status-pill status-consumed">Active</span>'
+                  : f.cadenceOk
+                  ? '<span class="status-pill status-live">Healthy ✓</span>'
+                  : '<span class="status-pill" style="background:rgba(239,68,68,0.15);color:var(--accent-red,#ef4444)">Thrashed ✗</span>';
                 return '<tr>' +
                   '<td class="mono"><strong>' + escapeHtml(f.id) + '</strong></td>' +
                   '<td class="num">' + formatK(f.S) + '</td>' +
@@ -2205,7 +2274,7 @@ function renderDashboardHtml(): string {
                   '<td class="num">' + f.breakevenTurns + ' turn' + (f.breakevenTurns === 1 ? '' : 's') + '</td>' +
                   '<td class="num">' + f.requestsAfter + '</td>' +
                   '<td><span class="' + statusCls + '">' + escapeHtml(statusLbl) + '</span></td>' +
-                  '<td ' + cadCls + '>' + escapeHtml(cadLbl) + '</td>' +
+                  '<td>' + cadPill + '</td>' +
                   '</tr>';
               }).join('');
             }
@@ -2334,6 +2403,7 @@ function renderDashboardHtml(): string {
             foldEventId: r.fold_event_id || null,
           };
         });
+        if ($('cache-ledger-count')) $('cache-ledger-count').textContent = String(lines.length);
 
         const foldMarks = blocks.map((b) => {
           let seq = null;

@@ -190,15 +190,21 @@ export function buildCacheReport(
 
     let turnsToNextFold: number | null = null;
     if (nextF) {
-      let nextSampleIdx = -1;
-      for (let i = 0; i < samples.length; i++) {
-        if (samples[i]!.foldEventId === nextF.id || samples[i]!.at >= nextF.at) {
-          nextSampleIdx = i;
+      // Search for the next fold that occurred in a subsequent sample round
+      // (folds executed in the same turn/batch share the same prefix invalidation)
+      for (let k = j + 1; k < folds.length; k++) {
+        const candidateNext = folds[k]!;
+        let candIdx = -1;
+        for (let i = 0; i < samples.length; i++) {
+          if (samples[i]!.foldEventId === candidateNext.id || samples[i]!.at >= candidateNext.at) {
+            candIdx = i;
+            break;
+          }
+        }
+        if (candIdx > sampleIdx) {
+          turnsToNextFold = candIdx - sampleIdx;
           break;
         }
-      }
-      if (nextSampleIdx !== -1 && sampleIdx !== -1) {
-        turnsToNextFold = Math.max(0, nextSampleIdx - sampleIdx);
       }
     }
 

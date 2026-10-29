@@ -1100,35 +1100,56 @@ export class OrigamiEngine {
       write: r.cacheWrite,
       foldEventId: r.foldEventId,
     }));
-    const allBlocks = this.state.tree.all();
-    const blockById = new Map(allBlocks.map((b) => [b.id, b]));
+    const dbBlocks = this.db ? this.db.blocksForSession(this.host.sessionId()) : [];
+    const dbBlockMap = new Map(dbBlocks.map((b) => [b.block_id, b]));
+    const allTreeBlocks = this.state.tree.all();
+    const treeBlockMap = new Map(allTreeBlocks.map((b) => [b.id, b]));
     const folds: FoldEvent[] = [];
     const seenFoldIds = new Set<string>();
 
     for (const r of rounds) {
       if (r.foldEventId && !seenFoldIds.has(r.foldEventId)) {
         seenFoldIds.add(r.foldEventId);
-        const b = blockById.get(r.foldEventId);
+        const dbB = dbBlockMap.get(r.foldEventId);
+        const trB = treeBlockMap.get(r.foldEventId);
+        const tokensBefore = dbB ? dbB.tokens_before : (trB ? trB.tokensBefore : 0);
+        const tokensAfter = dbB ? dbB.tokens_after : (trB ? trB.tokensAfter : 0);
+        const topic = dbB ? dbB.topic : trB?.topic;
         folds.push({
           id: r.foldEventId,
           at: r.ts,
-          tokensCompressed: b ? b.tokensBefore - b.tokensAfter : 0,
-          summaryTokens: b ? b.tokensAfter : 0,
-          topic: b?.topic,
+          tokensCompressed: Math.max(0, tokensBefore - tokensAfter),
+          summaryTokens: tokensAfter,
+          topic,
         });
       }
     }
 
-    for (const b of allBlocks) {
-      if (!seenFoldIds.has(b.id)) {
-        seenFoldIds.add(b.id);
-        folds.push({
-          id: b.id,
-          at: b.createdAt,
-          tokensCompressed: b.tokensBefore - b.tokensAfter,
-          summaryTokens: b.tokensAfter,
-          topic: b.topic,
-        });
+    if (dbBlocks.length > 0) {
+      for (const b of dbBlocks) {
+        if (!seenFoldIds.has(b.block_id)) {
+          seenFoldIds.add(b.block_id);
+          folds.push({
+            id: b.block_id,
+            at: b.created_at,
+            tokensCompressed: Math.max(0, b.tokens_before - b.tokens_after),
+            summaryTokens: b.tokens_after,
+            topic: b.topic,
+          });
+        }
+      }
+    } else {
+      for (const b of allTreeBlocks) {
+        if (!seenFoldIds.has(b.id)) {
+          seenFoldIds.add(b.id);
+          folds.push({
+            id: b.id,
+            at: b.createdAt,
+            tokensCompressed: Math.max(0, b.tokensBefore - b.tokensAfter),
+            summaryTokens: b.tokensAfter,
+            topic: b.topic,
+          });
+        }
       }
     }
 
