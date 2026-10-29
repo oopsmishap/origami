@@ -48,6 +48,7 @@ Messages beginning with \`[origami]\` are folding reminders.
 - Emergency (context nearly full): fold before doing anything else. Not optional.
 - Efficiency: lists candidate ranges, largest first, with size and tool share. Fold the finished ones — all or a subset, using the advertised boundaries. Defer any range whose work is still in active use; the reminder returns after more growth.
 - Promotion: suggests merging tier-1 (or tier-2) blocks into the next tier. Merge related blocks; if candidate tier-1 ranges are also pending, wrap them up in the same fold call to reclaim prompt space. Defer if they cover unrelated threads you still need apart.
+- Background fold candidates: accept when the covered work is finished, edit if the summary misses something, reject otherwise.
 Do not restate the nudge; fold, then continue your work.`;
 
 export function doctrinePrompt(): string {

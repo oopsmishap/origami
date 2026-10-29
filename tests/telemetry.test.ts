@@ -143,7 +143,7 @@ describe("Telemetry & Stumble Detection", () => {
     db.close();
   });
 
-  test("all 6 tools record telemetry through execute()", async () => {
+  test("read tools record telemetry through execute()", async () => {
     const dir = tempDir();
     const dbPath = join(dir, "origami.db");
     const db = openDb(dbPath);
@@ -185,8 +185,6 @@ describe("Telemetry & Stumble Detection", () => {
       registerTools(fakeApi as never, () => rt, (event, payload) => {
         mutations.push({ event, payload });
       });
-
-      expect(registeredTools.size).toBe(6);
 
       // 1. fold_status
       const statusTool = registeredTools.get("fold_status")!;

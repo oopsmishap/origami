@@ -7,6 +7,8 @@ import { getAgentDir, settings } from "@oh-my-pi/pi-coding-agent";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { countTokens, Encoding as NativeEncoding } from "@oh-my-pi/pi-natives";
 import { join } from "node:path";
+import { candidateRanges, formatCandidate, generateCandidate, isCandidateRequest, liveCandidate } from "./candidates.ts";
+import { recordToolTelemetry } from "./telemetry.ts";
 import { handleRecallToolResult } from "./federation/recall-hook.ts";
 import { loadOrigamiConfig } from "./config-load.ts";
 import { configFromPreset, type OrigamiConfig } from "./config.ts";
@@ -48,15 +50,12 @@ const COMPACTION_SETTING_KEYS = [
   "compaction.dropUseless",
 ] as const;
 
-let disarmed = false;
-
+/** Idempotent; reapplied whenever a main session starts so a settings reload cannot re-arm host compaction. */
 function disarmCompaction(): void {
-  if (disarmed) return;
   for (const key of COMPACTION_SETTING_KEYS) {
     const s = lookup(key);
     if (s) s.override(settings, false);
   }
-  disarmed = true;
 }
 
 /** A registered session that is still running. */
@@ -256,6 +255,11 @@ export default function origamiExtension(api: ExtensionAPI): void {
       };
     };
 
+    // Speculative-fold side turn: fold-render only. No doctrine fallback, nudges, hints or
+    // status bookkeeping, so the side turn leaves the main turn's nudge state untouched.
+    if (isCandidateRequest(event.messages)) {
+      return { messages: rt.engine.render(event.messages, makeFoldMessage) as never };
+    }
 
     const status = rt.engine.status();
     registry.touch(record.sessionId, { status });
@@ -273,12 +277,17 @@ export default function origamiExtension(api: ExtensionAPI): void {
 
     const decision = rt.engine.decideNudge();
     const nudgeText = decision.text ?? rt.engine.nudgeText;
-    if (nudgeText) {
+    const nudgeKind = decision.text ? decision.kind : rt.engine.nudgeTextKind;
+    const candidate = liveCandidate(rt.engine, rt.candidates);
+    if (nudgeText && !(candidate && nudgeKind === "efficiency")) {
       rendered.push({
         role: "developer",
         content: [{ type: "text", text: nudgeText }],
         timestamp: Date.now(),
       } as never);
+    }
+    if (candidate) {
+      rendered.push({ role: "developer", content: [{ type: "text", text: formatCandidate(candidate) }], timestamp: Date.now() } as never);
     }
     const hint = rt.engine.recallHintText();
     if (hint) {
@@ -333,11 +342,40 @@ export default function origamiExtension(api: ExtensionAPI): void {
     return handleRecallToolResult(event, sessionId, record.runtime);
   });
 
+  // Speculative folds (opt-in): draft one candidate in a side turn once a turn ends.
+  api.on("turn_end", (_event, ctx) => {
+    const { record, rt } = getOrInitRuntime(ctx);
+    if (!record.config.speculativeFolds || ctx.agent.kind !== "main" || isSubagentDormant(ctx, record.config)) return;
+    const run = ctx.runEphemeralTurn?.bind(ctx);
+    if (!run || rt.candidates.inFlight || rt.candidates.pending) return;
+    rt.sync();
+    const ranges = candidateRanges(rt.engine, rt.candidates);
+    if (!ranges) return;
+    const t0 = performance.now();
+    void generateCandidate(
+      rt.engine,
+      rt.candidates,
+      run,
+      ranges,
+      (error) => {
+        recordToolTelemetry(rt, {
+          tool: "fold_candidate_gen",
+          durationMs: performance.now() - t0,
+          ok: false,
+          error,
+          inputSummary: ranges.map((r) => `${r.start}..${r.end}`).join(","),
+          outputSummary: "candidate discarded",
+        });
+      },
+      () => rt.sync(),
+    );
+  });
 
   api.on("session_shutdown", (_event, ctx) => {
     const sessionId = ctx.sessionManager.getSessionId();
     const record = registry.live(sessionId);
     if (!record) return;
+    record.runtime?.candidates.inFlight?.abort();
     const root = registry.rootOf(sessionId);
     const db = record.runtime?.db;
     registry.end(sessionId);

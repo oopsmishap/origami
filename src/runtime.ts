@@ -1,3 +1,4 @@
+import { CandidateStore } from "./candidates.ts";
 import { OrigamiEngine } from "./engine.ts";
 import type { HostPort } from "./engine.ts";
 import { messageFacts } from "./kernel/message-facts.ts";
@@ -53,6 +54,8 @@ export interface HostBinding {
 export class OrigamiRuntime {
   readonly engine: OrigamiEngine;
   db: OrigamiDb | null = null;
+  /** Background fold candidate state (speculativeFolds). */
+  readonly candidates = new CandidateStore();
   private host: HostBinding;
 
   constructor(opts: { host: HostBinding; modelId: string; config?: OrigamiConfig; countFn?: (input: string, encoding?: string) => number }) {

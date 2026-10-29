@@ -27,6 +27,7 @@ import {
 import { nativeAvailable } from "../ui/native.ts";
 import { checkFoldBreaker, CIRCUIT_BREAKER_FAIL_THRESHOLD, recordFoldFailure, recordFoldSuccess, recordToolTelemetry } from "../telemetry.ts";
 import { salvageFoldParams } from "./salvage.ts";
+import { candidateStale } from "../candidates.ts";
 
 export type ToolMutationListener = (
   event: "fold" | "unfold" | "telemetry",
@@ -213,6 +214,69 @@ export function registerTools(
     },
   });
 
+  registerInlineTool(api, {
+    name: "fold_candidate",
+    label: "Fold Candidate",
+    description:
+      "Answer a background fold candidate announced by an [origami] note: accept it, edit it with your own topic/summary, or reject it.",
+    parameters: t.Object({
+      id: t.String({ description: "Candidate id from the [origami] note, e.g. c1" }),
+      action: t.Union([t.Literal("accept"), t.Literal("reject"), t.Literal("edit")]),
+      topic: t.Optional(t.String({ description: "Replacement topic (edit)" })),
+      summary: t.Optional(t.String({ description: "Replacement summary (edit)" })),
+    }),
+    loadMode: "discoverable",
+    approval: "read",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const t0 = performance.now();
+      const rt = getRuntime(ctx);
+      rt.sync();
+      const store = rt.candidates;
+      const report = (text: string, ok: boolean, outputSummary: string) => {
+        const row = recordToolTelemetry(rt, {
+          tool: "fold_candidate",
+          durationMs: performance.now() - t0,
+          ok,
+          error: ok ? null : text,
+          inputSummary: `${params.action} ${params.id}`,
+          outputSummary,
+        });
+        if (row) onMutation?.("telemetry", row, ctx);
+        return textResult(text, { summary: outputSummary, rows: [] }, !ok);
+      };
+      const c = store.pending;
+      if (!c || c.id !== params.id) return report(`no pending candidate ${params.id}`, false, "unknown candidate");
+      if (candidateStale(rt.engine, c)) {
+        store.pending = null;
+        return report(`candidate ${c.id} is stale (its source changed); discarded`, false, "stale candidate");
+      }
+      if (params.action === "reject") {
+        store.pending = null;
+        store.rejectedAtGrowth = rt.engine.growthSinceFold();
+        return report(`rejected ${c.id}`, true, `rejected ${c.id}`);
+      }
+      let spec = c.spec;
+      if (params.action === "edit") {
+        const topic = (params.topic ?? "").trim();
+        const summary = (params.summary ?? "").trim();
+        if (!topic || !summary) return report("edit needs topic and summary", false, "edit rejected");
+        spec = { ...spec, topic, summary };
+      }
+      const result = rt.engine.executeFold({ folds: [spec], tier: 1 });
+      store.pending = null;
+      if (!result.ok) return report(`error: ${result.error}`, false, "candidate fold rejected");
+      recordFoldSuccess(rt.sessionId);
+      onMutation?.("fold", result.outcome, ctx);
+      return report(formatFoldOutcome(result.outcome), true, `${c.id} ${params.action}ed · -${formatTokens(result.outcome.tokensReclaimed)}t`);
+    },
+    renderCall(args, options, uiTheme) {
+      const a = (args ?? {}) as { id?: string; action?: string };
+      return renderInlineToolCall("Fold Candidate", a.action, a.id ? [a.id] : [], options, uiTheme);
+    },
+    renderResult(result, options, uiTheme) {
+      return renderInlineToolResult("Fold Candidate", "context.compaction", result, options, uiTheme);
+    },
+  });
 
   registerInlineTool(api, {
     name: "unfold",
