@@ -356,18 +356,23 @@ describe("Standalone Web Dashboard Server", () => {
       const updateConfigRes = await fetch(`${baseUrl}/api/config`, {
         method: "POST",
         headers: { ...authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ preset: "lean", speculativeFolds: true, cooldownTurns: 4 }),
+        body: JSON.stringify({ preset: "lean", speculativeFolds: true, cooldownTurns: 4, hydration: true, hydrationMode: "full", hydrationMaxBlocks: 3 }),
       });
       expect(updateConfigRes.status).toBe(200);
-      const updateData = (await updateConfigRes.json()) as { ok: boolean; config: { preset: string; speculativeFolds: boolean; cooldownTurns: number } };
+      const updateData = (await updateConfigRes.json()) as { ok: boolean; config: { preset: string; speculativeFolds: boolean; cooldownTurns: number; hydration: boolean; hydrationMode: string; hydrationMaxBlocks: number } };
       expect(updateData.ok).toBe(true);
       expect(updateData.config.preset).toBe("lean");
       expect(updateData.config.speculativeFolds).toBe(true);
       expect(updateData.config.cooldownTurns).toBe(4);
+      expect(updateData.config.hydration).toBe(true);
+      expect(updateData.config.hydrationMode).toBe("full");
+      expect(updateData.config.hydrationMaxBlocks).toBe(3);
       expect(runtime.engine.config.preset).toBe("lean");
       expect(runtime.engine.config.speculativeFolds).toBe(true);
       expect(runtime.engine.config.cooldownTurns).toBe(4);
-
+      expect(runtime.engine.config.hydration).toBe(true);
+      expect(runtime.engine.config.hydrationMode).toBe("full");
+      expect(runtime.engine.config.hydrationMaxBlocks).toBe(3);
       // 7. GET /api/events -> SSE connection test
       const eventsRes = await fetch(`${baseUrl}/api/events?token=${dashboard.token}`);
       expect(eventsRes.status).toBe(200);

@@ -29,7 +29,7 @@ import { buildCacheReport, foldEventsFromBlocks, resolveEconomicsPrice, type Cac
 import { formatCoverage, mergeRanges, parseBlockRangeList, parseRangeList, rangesFromRefs } from "./engine-ranges.ts";
 import { renderOutbound } from "./engine-render.ts";
 import { foldTiming as buildFoldTiming, recommendedRanges as buildRecommendedRanges } from "./engine-timing.ts";
-import { recall as recallMessages, recallHintText as buildRecallHintText, searchBlocks, searchMessages as searchArchivedMessages, unfoldArtifact as buildUnfoldArtifact } from "./engine-recall.ts";
+import { hydrationText as buildHydrationText, recall as recallMessages, recallHintText as buildRecallHintText, searchBlocks, searchMessages as searchArchivedMessages, unfoldArtifact as buildUnfoldArtifact } from "./engine-recall.ts";
 import { archiveDigest as buildArchiveDigest } from "./engine-folds.ts";
 import type { CacheRound, EngineContext, FoldCreatedBlock, FoldError, FoldMessageHit, FoldParams, FoldResult, FoldSearchHit, FoldSpec, HostPort, MessageRow, PlannedFold, StatusReport, StatusVaultReport, StatusZoneRow } from "./engine-types.ts";
 export type { CacheRound, EngineContext, FoldCreatedBlock, FoldError, FoldKeep, FoldMessageHit, FoldOutcome, FoldParams, FoldResult, FoldSearchHit, FoldSpec, HostPort, MessageRow, PlannedFold, StatusBlockRow, StatusReport, StatusVaultReport, StatusZoneRow } from "./engine-types.ts";
@@ -91,7 +91,8 @@ export class OrigamiEngine {
   private lastFoldTiming: FoldTiming | null = null;
   /** Turn at which each block was last named in a recall hint. */
   private hintedAt = new Map<string, number>();
-  /** The omp host rewrote the prompt (compaction/shake) since the last recorded round. */
+  /** Turn at which each block was last reactively hydrated. */
+  private hydratedAt = new Map<string, number>();
   private pendingHostRewrite = false;
   /** Content hash per ref as last sent, to detect host-side rewrites of history. */
   private seenHashes = new Map<string, string>();
@@ -324,6 +325,10 @@ export class OrigamiEngine {
     return buildRecallHintText(this.context(), this.hintedAt, RECALL_HINT_QUIET_TURNS);
   }
 
+  /** Tail note reactively hydrating key decisions and constraints from matching folded history. */
+  hydrationText(): string | null {
+    return buildHydrationText(this.context(), this.hydratedAt, RECALL_HINT_QUIET_TURNS);
+  }
   project(spec: string, tier: 1 | 2 | 3): ProjectUnitResult {
     if (tier === 1) {
       return projectUnit({

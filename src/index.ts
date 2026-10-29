@@ -284,8 +284,13 @@ export default function origamiExtension(api: ExtensionAPI): void {
         emergencyAppended = nudgeKind === "emergency";
       }
       if (candidate) rendered.push({ role: "developer", content: [{ type: "text", text: formatCandidate(candidate) }], timestamp: Date.now() } as never);
-      const hint = rt.engine.recallHintText();
-      if (hint) rendered.push({ role: "developer", content: [{ type: "text", text: hint }], timestamp: Date.now() } as never);
+      const hydration = rt.engine.hydrationText();
+      if (hydration) {
+        rendered.push({ role: "developer", content: [{ type: "text", text: hydration }], timestamp: Date.now() } as never);
+      } else {
+        const hint = rt.engine.recallHintText();
+        if (hint) rendered.push({ role: "developer", content: [{ type: "text", text: hint }], timestamp: Date.now() } as never);
+      }
       if (emergencyAppended) rt.engine.noteEmergencySent();
       return rendered;
     };
@@ -561,6 +566,7 @@ export default function origamiExtension(api: ExtensionAPI): void {
             `  • Cooldown: ${cfg.cooldownTurns ?? 2} turns`,
             `  • Payback horizon: ${cfg.paybackHorizonTurns} turns`,
             `  • Language: ${cfg.language}`,
+            `  • JIT Hydration: ${cfg.hydration ? "enabled" : "disabled"} (${cfg.hydrationMode}, max ${cfg.hydrationMaxBlocks} blocks)`,
             `Run '/fold config preset <balanced|lean|relaxed>' or '/fold config set <key> <val>'`,
           ];
           if (ctx.hasUI) ctx.ui.notify(lines.join("\n"), "info");

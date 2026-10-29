@@ -543,6 +543,9 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
                   saveConfigFile(projectFile, {
                     preset: updated.preset,
                     speculativeFolds: updated.speculativeFolds,
+                    hydration: updated.hydration,
+                    hydrationMode: updated.hydrationMode,
+                    hydrationMaxBlocks: updated.hydrationMaxBlocks,
                     emergencyFillPct: updated.emergencyFillPct,
                     growthStep: updated.growthStep,
                     compressibleFloor: updated.compressibleFloor,
@@ -2041,6 +2044,26 @@ function renderDashboardHtml(): string {
               </div>
             </label>
             <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+              <input type="checkbox" id="cfg-hydration" style="margin-top:2px;">
+              <div>
+                <div style="font-size:12.5px;font-weight:500;">JIT Reactive Hydration</div>
+                <div style="font-size:11px;color:var(--text-secondary);">Automatically inject relevant pinned decisions, constraints, and ghost pointers when touching historical files.</div>
+              </div>
+            </label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div>
+                <label style="display:block;font-size:11.5px;font-weight:500;margin-bottom:4px;">Hydration Mode</label>
+                <select id="cfg-hydrationMode" class="chip" style="width:100%;max-width:none;border-radius:6px;padding:6px 10px;">
+                  <option value="full">full (decisions, excerpts, pointers)</option>
+                  <option value="decisions">decisions (pinned ledger only)</option>
+                  <option value="pointers">pointers (ghost pointers only)</option>
+                </select>
+              </div>
+              <div>
+                <label style="display:block;font-size:11.5px;font-weight:500;margin-bottom:4px;">Max Hydrated Blocks</label>
+                <input type="number" id="cfg-hydrationMaxBlocks" class="search-input" style="width:100%" min="1" max="5">
+              </div>
+            </div>
               <input type="checkbox" id="cfg-refTags" style="margin-top:2px;">
               <div>
                 <div style="font-size:12.5px;font-weight:500;">Message Reference Tags</div>
@@ -3250,8 +3273,10 @@ function renderDashboardHtml(): string {
         $('cfg-val-emergencyFillPct').textContent = pct + '%';
       }
       if ($('cfg-speculativeFolds')) $('cfg-speculativeFolds').checked = Boolean(cfg.speculativeFolds);
+      if ($('cfg-hydration')) $('cfg-hydration').checked = cfg.hydration !== false;
+      if ($('cfg-hydrationMode')) $('cfg-hydrationMode').value = cfg.hydrationMode || 'full';
+      if ($('cfg-hydrationMaxBlocks')) $('cfg-hydrationMaxBlocks').value = cfg.hydrationMaxBlocks != null ? cfg.hydrationMaxBlocks : 2;
       if ($('cfg-refTags')) $('cfg-refTags').checked = Boolean(cfg.refTags);
-      if ($('cfg-cooldownTurns')) $('cfg-cooldownTurns').value = cfg.cooldownTurns != null ? cfg.cooldownTurns : 2;
       if ($('cfg-paybackHorizonTurns')) $('cfg-paybackHorizonTurns').value = cfg.paybackHorizonTurns != null ? cfg.paybackHorizonTurns : 6;
       if ($('cfg-language')) $('cfg-language').value = cfg.language || 'preserve';
     }
@@ -3285,10 +3310,11 @@ function renderDashboardHtml(): string {
         const compressibleFloor = Number($('cfg-compressibleFloor')?.value || 22500);
         const emergencyFillPct = Number($('cfg-emergencyFillPct')?.value || 85) / 100;
         const speculativeFolds = Boolean($('cfg-speculativeFolds')?.checked);
+        const hydration = Boolean($('cfg-hydration')?.checked);
+        const hydrationMode = $('cfg-hydrationMode')?.value || 'full';
+        const hydrationMaxBlocks = Number($('cfg-hydrationMaxBlocks')?.value || 2);
         const refTags = Boolean($('cfg-refTags')?.checked);
         const cooldownTurns = Number($('cfg-cooldownTurns')?.value || 2);
-        const paybackHorizonTurns = Number($('cfg-paybackHorizonTurns')?.value || 6);
-        const language = $('cfg-language')?.value || 'preserve';
 
         const payload = {
           preset,
@@ -3296,8 +3322,10 @@ function renderDashboardHtml(): string {
           compressibleFloor,
           emergencyFillPct,
           speculativeFolds,
+          hydration,
+          hydrationMode,
+          hydrationMaxBlocks,
           refTags,
-          cooldownTurns,
           paybackHorizonTurns,
           language,
           save: Boolean(saveToDisk),

@@ -3,6 +3,7 @@ import { parseRef } from "./kernel/types.ts";
 import { expandRefRange } from "./kernel/render.ts";
 import { extractPlanTerms, rerankHitsWithPlan } from "./kernel/plan-search.ts";
 import { formatRecallHints, matchRecallHints } from "./kernel/recall-hints.ts";
+import { formatHydration, matchHydration } from "./kernel/hydration.ts";
 
 export interface RecalledMessage { ref: string; role: string | null; text: string | null; source: "context" | "archive" | "missing" }
 
@@ -47,6 +48,29 @@ export function recallHintText(context: Readonly<EngineContext>, hintedAt: Map<s
   return formatRecallHints(hints);
 }
 
+export function hydrationText(context: Readonly<EngineContext>, hydratedAt: Map<string, number>, quietTurns = 3): string | null {
+  if (!context.config.hydration) return null;
+  const maxBlocks = context.config.hydrationMaxBlocks;
+  if (maxBlocks <= 0) return null;
+  const probe = context.state.bound.filter((message) => !message.ephemeral && message.turn === context.activeTurn).map((message) => message.text).join("\n");
+  if (!probe || probe.trim().length === 0) return null;
+  const exclude = new Set<string>();
+  for (const [id, turn] of hydratedAt) {
+    const age = context.activeTurn - turn;
+    if (age >= 1 && age <= quietTurns) exclude.add(id);
+  }
+  const matches = matchHydration({
+    blocks: context.state.tree.live(),
+    probe,
+    exclude,
+    maxBlocks,
+    maxRecordsPerBlock: context.config.hydrationMaxRecords,
+    mode: context.config.hydrationMode,
+  });
+  if (matches.length === 0) return null;
+  for (const match of matches) hydratedAt.set(match.blockId, context.activeTurn);
+  return formatHydration(matches);
+}
 export async function unfoldArtifact(context: Readonly<EngineContext>, id: string): Promise<{ ok: true; path: string; refs: string[]; toc: string } | { ok: false; error: string }> {
   const block = context.state.tree.get(id);
   if (!block) return { ok: false, error: `unknown block: ${id}` };

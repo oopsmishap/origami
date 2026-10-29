@@ -1,7 +1,17 @@
 # Changelog
 
-## 0.4.1 — 2026-10-30
+## 0.4.2 — 2026-10-30
 
+### Features & Improvements
+- **Just-In-Time reactive hydration**: Solves the near-zero spontaneous retrieval rate of models in long sessions. When the active turn touches files, symbols, errors, or commits recorded in earlier folded history, Origami extracts the exact pinned constraints, decisions, summary excerpts, and ghost pointers from matching blocks and injects them directly into an ephemeral tail message (`[origami hydration]`). This eliminates the need for manual retrieval tool turns while leaving the long prompt-cache prefix undisturbed.
+- **Configurable hydration modes and budgets**: Added `hydration: boolean` (default `true`), `hydrationMaxBlocks: number` (default `2`), `hydrationMaxRecords: number` (default `3`), and `hydrationMode: "decisions" | "full" | "pointers"` (default `"full"`) across configuration layers.
+- **Surfaces and settings integration**: Added live hydration toggles, detail level selectors, and block budget controls to the Web UI Settings panel (`#settings`) and the `/fold config` terminal command.
+
+### Safety & Correctness
+- Constraint and decision prioritization: Pinned architectural constraints and decisions always outrank conversational user intents in hydrated context, ensuring invariants established in earlier turns are never pushed out by chat phrasing.
+- Fallback recall support: If reactive hydration is disabled or yields no relevant matches, the system cleanly falls back to standard `[origami recall]` advisory hints.
+
+## 0.4.1 — 2026-10-30
 ### Features & Improvements
 - **Live configuration controls across all surfaces**: Added an interactive Settings tab to the Web UI dashboard (`#settings`) with preset cards (`balanced`, `lean`, `relaxed`), threshold inputs (`growthStep`, `compressibleFloor`, `emergencyFillPct`, `cooldownTurns`, `paybackHorizonTurns`), runtime toggles, and instant session apply or save to `.omp/origami.yml`. Added `/fold config [preset <name> | set <key> <val>]` terminal command for headless or CLI environments. Added `GET /api/config` and `POST /api/config` endpoints with validation and SSE status broadcasting.
 - **Semantic task boundary slicing**: Candidate range generation in `src/kernel/nudge.ts` now identifies natural developer milestones via `src/kernel/semantic-boundary.ts`: git commit deliverables, verified test suite passes (`0 fail` / `pass`), completed tasks (`todo op: "done"`), and clean user turn endpoints. In addition to full contiguous spans, `recommendRanges` surfaces cohesive milestone sub-ranges, preventing arbitrary cuts across active workflows and giving candidate generators clean task-aligned ranges.

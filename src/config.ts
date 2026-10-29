@@ -46,6 +46,14 @@ export interface OrigamiConfig {
   recallHintMax: number;
   /** Generate fold candidates in a background side turn (opt-in). */
   speculativeFolds: boolean;
+  /** Just-In-Time reactive hydration: automatically injects relevant pinned decisions, constraints, and excerpts into turn context. */
+  hydration: boolean;
+  /** Maximum folded blocks hydrated in one turn; 0 disables hydration. */
+  hydrationMaxBlocks: number;
+  /** Maximum ledger records per hydrated block. */
+  hydrationMaxRecords: number;
+  /** Hydration detail level: "decisions" (ledger only), "full" (ledger + summary excerpts + ghost pointers), or "pointers". */
+  hydrationMode: "decisions" | "full" | "pointers";
 }
 
 type PresetKeys =
@@ -124,6 +132,10 @@ export function configFromPreset(preset: Preset): OrigamiConfig {
     refTags: true,
     recallHintMax: 3,
     speculativeFolds: false,
+    hydration: true,
+    hydrationMaxBlocks: 2,
+    hydrationMaxRecords: 3,
+    hydrationMode: "full",
     ...PRESETS[preset],
   };
 }
@@ -158,6 +170,8 @@ const NON_NEGATIVE_INT_KEYS: Record<string, true> = {
   paybackHorizonTurns: true,
   recallHintMax: true,
   cooldownTurns: true,
+  hydrationMaxBlocks: true,
+  hydrationMaxRecords: true,
 };
 
 /** Fractions in [0, 1): 0 disables the feature. */
@@ -169,6 +183,7 @@ const FRACTION_OR_ZERO_KEYS: Record<string, true> = {
 const BOOLEAN_KEYS: Record<string, true> = {
   refTags: true,
   speculativeFolds: true,
+  hydration: true,
 };
 
 const PCT_KEYS: Record<string, true> = {
@@ -245,6 +260,13 @@ export function applyOverrides(base: OrigamiConfig, raw: unknown, file: string):
         throw new ConfigError(file, `invalid language: ${String(value)}`);
       }
       out.language = value;
+      continue;
+    }
+    if (key === "hydrationMode") {
+      if (value !== "decisions" && value !== "full" && value !== "pointers") {
+        throw new ConfigError(file, `invalid hydrationMode: ${String(value)}`);
+      }
+      out.hydrationMode = value;
       continue;
     }
     throw new ConfigError(file, `unknown config key: ${key}`);
