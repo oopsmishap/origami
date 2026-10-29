@@ -7,7 +7,8 @@
 - **Per-Fold Payback & Cadence Health**: Tracks measured re-pay $T$, summary cost $\sigma$, gross token savings $S$, net prompt tokens saved, break-even rounds $n^*$, and interleave cadence health across all folds in the session.
 - **Dynamic Cadence Protection**: When a fold requires multiple rounds to amortize its measured re-pay penalty, `decideNudge` automatically adjusts post-fold cooldown to ensure the active fold breaks even before triggering subsequent advisory folds.
 - **Cache Write Alias Normalization**: Maps diverse provider usage payloads (including camelCase `cacheWrite`, snake_case `cache_creation_input_tokens`, and `cacheCreationInputTokens`) to accurately record cache write creation tokens.
-- **Web UI & CLI Tool Integration**: Added `/api/cache-report` API endpoint, Cache Miss Decomposition stat tiles and Per-Fold Payback & Cadence table in the Web UI, and upgraded the `fold_cache` tool CLI output with decomposition metrics and fold ledger.
+- **Web UI & CLI Tool Integration**: Added `/api/cache-report` API endpoint and four integrated KPI decomposition cards (Fresh Growth, Fold Re-pay, TTL Eviction, Net Prompt Saved) matching the dashboard design system. Replaced stacked tables with a unified ledger card featuring an inline switcher between the per-request cache ledger and the per-fold payback ledger.
+- **Batch-Aware Cadence & Session Scoping**: Measures fold interleave cadence across distinct round boundaries so sibling folds executed within the same tool turn are not penalized with distance zero. Scopes cache report generation to active session blocks.
 
 ## 0.2.9 — 2026-10-28
 
