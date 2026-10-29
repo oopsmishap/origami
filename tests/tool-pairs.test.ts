@@ -13,6 +13,8 @@ function makeMsg(partial: Partial<BoundMessage> & { ref: string; role: BoundMess
     turn: 1,
     contentHash: "hash",
     text: "text",
+    prose: "text",
+    isError: false,
     signedThinking: false,
     bytes: 10,
     ...partial,
@@ -27,7 +29,7 @@ describe("computeToolPairGroups and buildToolPairPartnerMap", () => {
         ref: "m00002",
         role: "assistant",
         turn: 1,
-        toolCalls: [{ id: "call_1", name: "read" }],
+        toolCalls: [{ id: "call_1", name: "read", arguments: null }],
       }),
       makeMsg({
         ref: "m00003",
@@ -57,8 +59,8 @@ describe("computeToolPairGroups and buildToolPairPartnerMap", () => {
         role: "assistant",
         turn: 1,
         toolCalls: [
-          { id: "call_a", name: "read" },
-          { id: "call_b", name: "grep" },
+          { id: "call_a", name: "read", arguments: null },
+          { id: "call_b", name: "grep", arguments: null },
         ],
       }),
       makeMsg({ ref: "m00003", role: "toolResult", toolCallId: "call_a", turn: 1 }),
@@ -81,7 +83,7 @@ describe("widenSelectedToolPairs", () => {
         role: "assistant",
         turn: 1,
         index: 1,
-        toolCalls: [{ id: "call_1", name: "read" }],
+        toolCalls: [{ id: "call_1", name: "read", arguments: null }],
       }),
       makeMsg({
         ref: "m00003",
@@ -113,7 +115,7 @@ describe("widenSelectedToolPairs", () => {
         role: "assistant",
         turn: 1,
         index: 1,
-        toolCalls: [{ id: "call_1", name: "read" }],
+        toolCalls: [{ id: "call_1", name: "read", arguments: null }],
       }),
       makeMsg({
         ref: "m00003",

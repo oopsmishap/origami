@@ -13,6 +13,8 @@ function msg(ref: string, turn: number, role: BoundMessage["role"] = "user", ext
     index: 0,
     contentHash: `h${ref}`,
     text: `text-${ref}`,
+    prose: `text-${ref}`,
+    isError: false,
     bytes: ref.length,
     signedThinking: false,
     ephemeral: false,
@@ -206,7 +208,7 @@ describe("engine ref tags", () => {
     const engine = engineAt(1_000);
     const out = engine.render(raw, fold) as { role: string; content: unknown }[];
     const refs = engine.bound.map((m) => m.ref);
-    expect(out[0]!.content).toBe(`[#${refs[0]}] first instruction`);
+    expect(out[0]!.content).toBe("first instruction");
     expect(out[1]!.content).toEqual(raw[1]!.content);
     expect((out[2]!.content as { type: string; text: string }[])[0]).toEqual({ type: "text", text: `[#${refs[2]}]` });
     expect(out[3]!.content).toBe("done reading");
@@ -216,12 +218,12 @@ describe("engine ref tags", () => {
     expect(engine.bound.map((m) => m.ref)).toEqual(refs);
   });
 
-  it("leaves an elided tool result's label untagged", () => {
+  it("protects a first-turn tool result from elision", () => {
     const engine = engineAt(9_800);
     const out = engine.render(raw, fold) as { role: string; content: unknown }[];
     const ref = engine.bound[2]!.ref;
-    expect((out[2]!.content as { text: string }[])).toHaveLength(1);
-    expect((out[2]!.content as { text: string }[])[0]!.text).toMatch(new RegExp(`^\\[#${ref} · .*elided\\]$`));
+    expect((out[2]!.content as { text: string }[])).toHaveLength(2);
+    expect((out[2]!.content as { text: string }[])[0]!.text).toBe(`[#${ref}]`);
   });
 
   it("emits no tags when refTags is off", () => {
@@ -268,6 +270,6 @@ describe("initial context head", () => {
     expect(out.some((m) => m.role === "custom")).toBe(true);
     expect(out.some((m) => JSON.stringify(m.content).includes("· elided]"))).toBe(true);
     expect(out[0]).toEqual(raw[0]!);
-    expect(out[1]!.content).toBe(`[#${head.ref}] initial task`);
+    expect(out[1]!.content).toBe("initial task");
   });
 });

@@ -611,7 +611,10 @@ export function formatStatusReport(report: StatusReport): string {
   if (report.zones.length > 0) {
     lines.push("");
     lines.push("zones:");
-    for (const z of report.zones) lines.push(`  ${z.kind} ${z.start}..${z.end} (${formatTokens(z.tokens)}t)`);
+    for (const z of report.zones) {
+      const cache = z.cacheCoverage === "none" ? "uncached" : `${formatTokens(z.cachedTokens)}t cached${z.cacheCoverage === "partial" ? " (partial)" : ""}`;
+      lines.push(`  ${z.kind} ${z.start}..${z.end} (${formatTokens(z.tokens)}t · ${cache})`);
+    }
   }
   if (report.uncoveredRuns && report.uncoveredRuns.length > 0) {
     lines.push("");

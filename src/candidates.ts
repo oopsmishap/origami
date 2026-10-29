@@ -7,10 +7,22 @@
  * validated with `planFoldBatch` and surfaced to the main model, which accepts, edits or
  * rejects it via `fold_candidate`. Nothing is folded without the main model's approval.
  */
-import type { FoldParams, FoldSpec, OrigamiEngine } from "./engine.ts";
+import type { FoldParams, FoldSpec, MessageRow, PlannedFold } from "./engine.ts";
+import type { SessionState } from "./kernel/state.ts";
 import { contentHash } from "./kernel/hash.ts";
 import { formatTokens, type NudgeRange } from "./kernel/nudge.ts";
+import type { FoldTiming } from "./kernel/fold-timing.ts";
 import { salvageFoldParams } from "./tools/salvage.ts";
+
+export interface CandidateEngineView {
+  state: SessionState;
+  config: { growthStep: number };
+  turn: number;
+  planFoldBatch(params: FoldParams): { ok: true; planned: PlannedFold[] } | { ok: false; error: string; foldIndex: number };
+  recommendedRanges(maxRanges?: number): NudgeRange[];
+  foldTiming(ranges: readonly NudgeRange[]): FoldTiming;
+  growthSinceFold(): number;
+}
 
 export const CANDIDATE_MARKER = "[origami:candidate-request]";
 /** A surfaced candidate expires after this many turns without an answer. */
@@ -64,19 +76,19 @@ export function sourceDigest(texts: readonly string[]): string {
 }
 
 /** Digest of the current bound text of `refs` (missing refs digest as empty strings). */
-export function digestRefs(engine: OrigamiEngine, refs: readonly string[]): string {
+export function digestRefs(engine: CandidateEngineView, refs: readonly string[]): string {
   const byRef = new Map(engine.state.bound.filter((m) => !m.ephemeral).map((m) => [m.ref, m.text]));
   return sourceDigest(refs.map((r) => byRef.get(r) ?? ""));
 }
 
 /** True when the candidate no longer matches the session: a ref was folded or its text changed. */
-export function candidateStale(engine: OrigamiEngine, c: FoldCandidate): boolean {
+export function candidateStale(engine: CandidateEngineView, c: FoldCandidate): boolean {
   const folded = engine.state.foldedRefs();
   return c.refs.some((r) => folded.has(r)) || digestRefs(engine, c.refs) !== c.sourceDigest;
 }
 
 /** Validate a side-turn reply against the current state and build the pending candidate. */
-export function buildCandidate(engine: OrigamiEngine, store: CandidateStore, reply: string): FoldCandidate | { error: string } {
+export function buildCandidate(engine: CandidateEngineView, store: CandidateStore, reply: string): FoldCandidate | { error: string } {
   const params = parseCandidateReply(reply);
   if ("error" in params) return params;
   const plan = engine.planFoldBatch(params);
@@ -117,7 +129,7 @@ export function isCandidateRequest(messages: readonly unknown[]): boolean {
 }
 
 /** The pending candidate if still valid; expired ones back off generation, stale ones are dropped. */
-export function liveCandidate(engine: OrigamiEngine, store: CandidateStore): FoldCandidate | null {
+export function liveCandidate(engine: CandidateEngineView, store: CandidateStore): FoldCandidate | null {
   const c = store.pending;
   if (!c) return null;
   if (engine.turn - c.createdTurn > CANDIDATE_MAX_AGE_TURNS) {
@@ -133,7 +145,7 @@ export function liveCandidate(engine: OrigamiEngine, store: CandidateStore): Fol
 }
 
 /** Ranges worth drafting a candidate for now, or null when generation should not start. */
-export function candidateRanges(engine: OrigamiEngine, store: CandidateStore): NudgeRange[] | null {
+export function candidateRanges(engine: CandidateEngineView, store: CandidateStore): NudgeRange[] | null {
   if (store.disabled || store.inFlight || store.pending) return null;
   const ranges = engine.recommendedRanges(4);
   if (ranges.length === 0 || !engine.foldTiming(ranges).allowed) return null;
@@ -153,7 +165,7 @@ export type RunEphemeralTurn = (options: {
  * keeps the main prompt cache. Failures are reported, never thrown.
  */
 export async function generateCandidate(
-  engine: OrigamiEngine,
+  engine: CandidateEngineView,
   store: CandidateStore,
   run: RunEphemeralTurn,
   ranges: readonly NudgeRange[],

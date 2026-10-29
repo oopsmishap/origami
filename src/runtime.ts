@@ -44,6 +44,7 @@ export interface HostBinding {
   saveArtifact(content: string, toolType: string): Promise<string | undefined>;
   windowTokens(): number;
   projectedTokens(): number;
+  modelCost?(): { input: number; output: number; cacheRead: number; cacheWrite: number } | undefined;
   entries(): readonly SessionEntryLike[];
 }
 

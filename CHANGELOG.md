@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.0 — 2026-10-29
+
+### Features & Improvements
+- **Hard context-window enforcement**: Origami now estimates the complete rendered outbound request, including injected doctrine, nudges, recall hints, ref tags and host overhead. After two ignored emergency turns it can execute normal validated emergency folds automatically; safe later tool results may be elided, and requests that still cannot fit are aborted instead of knowingly exceeding the model window.
+- **Provenance-aware recall metadata**: Message facts retain natural-language prose, structured tool-call arguments and explicit tool-result failure state separately from canonical hash text. Manifests no longer treat successful source reads as path or error evidence, while real failed results remain recallable.
+- **Bounded pinned ledgers**: Tier-2 and tier-3 ledgers are semantically deduplicated and deterministically budgeted at 12 records / 4,000 characters and 8 records / 2,500 characters. Constraints and decisions outrank retireable objectives and intents, and inherited record IDs remain stable.
+- **Model-derived fold economics**: Cache-read, output and cache-write ratios resolve from the active model with optional per-field configuration overrides and conservative fallbacks. Each cache round persists its effective profile, and cache-write premiums now participate in fold payback decisions and reports.
+- **Forward-readable storage**: Schema v7 adds `minimum_reader_schema` metadata and historical price profiles. Future additive writers may remain writable by v7 readers when they explicitly declare compatibility; incompatible or malformed future schemas fail before WAL or migration changes.
+- **Truthful replay comparisons**: `bun run replay` can compare the current policy with the replay-only v0.2.3 policy, isolate state per policy, and consume deterministic cached model summaries. `bench/replay-summaries.ts` fills missing summary requests resumably through an isolated OMP agent directory.
+- **Usable turn-end candidates**: Turn end is now a real fold-timing boundary even when speculative candidates are disabled; later messages invalidate the marker. Candidate generation remains opt-in, side-turn-only and non-mutating until accepted.
+- **Focused engine modules**: Range, rendering, timing, fold, status, recall and shared type operations now have dedicated modules, while `OrigamiEngine` remains the compatibility entry point.
+
+### Safety & Correctness
+- The initial user instruction remains untagged, first-turn tool results are never elided, and later user/tool-result refs remain citeable.
+- The cost gate estimates the complete suffix after the earliest candidate rather than only raw trailing messages; measured post-fold telemetry remains independent.
+- Replay current-policy runs never record a sent context at or above the configured window.
+
+### Notes
+- Database schema v7 is the forward-compatibility baseline. Released v6 builds still cannot open v7 or future databases.
+- Automatic pricing uses model catalog costs when valid; fallback ratios are cache read `0.1`, output `4`, and cache write `1`.
+- The release benchmark retained 100% of constraints, lost 0 facts, and reported 0 invariant violations across 400 turns.
+
 ## 0.3.0 — 2026-10-29
 
 ### Features & Improvements

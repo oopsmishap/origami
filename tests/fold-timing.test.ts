@@ -12,12 +12,12 @@ const base: FoldTimingInput = {
   windowTokens: 200_000,
   minFoldFillPct: 0.45,
   minFoldFillCapTokens: 160_000,
-  atUserBoundary: true,
+  boundary: "user" as const,
   cacheCold: false,
   growthSinceFoldTokens: 0,
   growthStep: 50_000,
   candidateTokens: 40_000,
-  rewriteTokens: 5_000,
+  estimatedRewriteTokens: 5_000,
   summaryRatio: 0.05,
   telemetry: true,
   price: DEFAULT_PRICE,
@@ -40,25 +40,31 @@ describe("assessFoldTiming", () => {
   });
 
   it("blocks mid-task without a boundary, until growth reaches twice the step", () => {
-    const mid = { ...base, atUserBoundary: false, growthSinceFoldTokens: 99_999 };
+    const mid = { ...base, boundary: null, growthSinceFoldTokens: 99_999 };
     expect(assessFoldTiming(mid).blockedBy).toBe("mid-task");
     const grown = assessFoldTiming({ ...mid, growthSinceFoldTokens: 100_000 });
     expect(grown.allowed).toBe(true);
     expect(grown.boundary).toBe("growth");
   });
 
+  it("recognizes turn end before cold-cache and growth fallbacks", () => {
+    const timing = assessFoldTiming({ ...base, boundary: "turn-end", cacheCold: true, growthSinceFoldTokens: 100_000 });
+    expect(timing.allowed).toBe(true);
+    expect(timing.boundary).toBe("turn-end");
+  });
+
   it("a cold cache costs no rewrite, admitting a fold the warm path blocks by cost", () => {
-    const warm = { ...base, candidateTokens: 6_000, rewriteTokens: 120_000 };
+    const warm = { ...base, candidateTokens: 6_000, estimatedRewriteTokens: 120_000 };
     const blocked = assessFoldTiming(warm);
     expect(blocked.blockedBy).toBe("cost");
     expect(blocked.breakevenTurns!).toBeGreaterThan(10);
-    const cold = assessFoldTiming({ ...warm, atUserBoundary: false, cacheCold: true });
+    const cold = assessFoldTiming({ ...warm, boundary: null, cacheCold: true });
     expect(cold.allowed).toBe(true);
     expect(cold.boundary).toBe("cold-cache");
   });
 
   it("skips the cost gate without cache telemetry", () => {
-    const t = assessFoldTiming({ ...base, candidateTokens: 6_000, rewriteTokens: 120_000, telemetry: false });
+    const t = assessFoldTiming({ ...base, candidateTokens: 6_000, estimatedRewriteTokens: 120_000, telemetry: false });
     expect(t.allowed).toBe(true);
     expect(t.breakevenTurns).toBeNull();
   });

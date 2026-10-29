@@ -9,8 +9,8 @@ import { messageFacts } from "../src/kernel/message-facts.ts";
 describe("Emergency guard test (overflow elision)", () => {
   it("leaves context untouched when under emergency threshold", () => {
     const candidates = [
-      { ref: "m00003", index: 2, tokens: 10_000 },
-      { ref: "m00005", index: 4, tokens: 15_000 },
+      { ref: "m00003", index: 2, tokens: 10_000, turn: 2 },
+      { ref: "m00005", index: 4, tokens: 15_000, turn: 2 },
     ];
     const plan = planElision({
       projectedTokens: 80_000,
@@ -24,9 +24,9 @@ describe("Emergency guard test (overflow elision)", () => {
 
   it("plans elision to bring context below target fill when crossing emergency threshold", () => {
     const candidates = [
-      { ref: "m00003", index: 2, tokens: 10_000 },
-      { ref: "m00005", index: 4, tokens: 15_000 },
-      { ref: "m00007", index: 6, tokens: 5_000 },
+      { ref: "m00003", index: 2, tokens: 10_000, turn: 2 },
+      { ref: "m00005", index: 4, tokens: 15_000, turn: 2 },
+      { ref: "m00007", index: 6, tokens: 5_000, turn: 2 },
     ];
     // 90K / 100K = 90% >= 85% elideFillPct. Target = 70K
     const plan = planElision({
@@ -45,11 +45,11 @@ describe("Emergency guard test (overflow elision)", () => {
 
   it("never selects assistant, user, or thinking messages as elide candidates", () => {
     const bound = [
-      { ref: "m00001", index: 0, role: "system", tokens: 500, ephemeral: true },
-      { ref: "m00002", index: 1, role: "user", tokens: 2_000, ephemeral: false },
-      { ref: "m00003", index: 2, role: "assistant", tokens: 8_000, ephemeral: false },
-      { ref: "m00004", index: 3, role: "toolResult", tokens: 25_000, ephemeral: false },
-      { ref: "m00005", index: 4, role: "assistant", tokens: 6_000, ephemeral: false },
+      { ref: "m00001", index: 0, role: "system", tokens: 500, ephemeral: true, turn: 1 },
+      { ref: "m00002", index: 1, role: "user", tokens: 2_000, ephemeral: false, turn: 1 },
+      { ref: "m00003", index: 2, role: "assistant", tokens: 8_000, ephemeral: false, turn: 1 },
+      { ref: "m00004", index: 3, role: "toolResult", tokens: 25_000, ephemeral: false, turn: 2 },
+      { ref: "m00005", index: 4, role: "assistant", tokens: 6_000, ephemeral: false, turn: 2 },
     ];
 
     const candidates = selectElideCandidates(bound);
@@ -102,11 +102,13 @@ describe("Emergency guard test (overflow elision)", () => {
     const journal: JournalOp[] = [];
     const entries = [
       { type: "message", id: "m0", message: { role: "system", content: "system prompt" } },
-      { type: "message", id: "m1", message: { role: "user", content: "run command" } },
-      { type: "message", id: "m2", message: { role: "assistant", content: "running..." } },
-      { type: "message", id: "m3", message: { role: "toolResult", content: "output line 1\noutput line 2\n" + "X".repeat(5000) } },
-      { type: "message", id: "m4", message: { role: "assistant", content: "done" } },
-      { type: "message", id: "m5", message: { role: "user", content: "next prompt" } },
+      { type: "message", id: "m1", message: { role: "user", content: "prepare command" } },
+      { type: "message", id: "m2", message: { role: "assistant", content: "prepared" } },
+      { type: "message", id: "m3", message: { role: "user", content: "run command" } },
+      { type: "message", id: "m4", message: { role: "assistant", content: "running..." } },
+      { type: "message", id: "m5", message: { role: "toolResult", content: "output line 1\noutput line 2\n" + "X".repeat(5000) } },
+      { type: "message", id: "m6", message: { role: "assistant", content: "done" } },
+      { type: "message", id: "m7", message: { role: "user", content: "next prompt" } },
     ];
 
     let projected = 96_000;
@@ -149,14 +151,14 @@ describe("Emergency guard test (overflow elision)", () => {
 
     // 1. With projectedTokens at 96K (>= 95K elideFillPct): emergency elision fires
     const elidedRender = engine.render(entries.map((e) => e.message), makeFold);
-    const toolMsg = elidedRender[3] as { role: string; content: string };
+    const toolMsg = elidedRender[5] as { role: string; content: string };
     expect(toolMsg.role).toBe("toolResult");
     expect(toolMsg.content).toContain("· elided]");
 
     // 2. If projectedTokens drops back to 50K (< 85K): no elision fires
     projected = 50_000;
     const normalRender = engine.render(entries.map((e) => e.message), makeFold);
-    const normalToolMsg = normalRender[3] as { role: string; content: string };
+    const normalToolMsg = normalRender[5] as { role: string; content: string };
     expect(normalToolMsg.content).toContain("output line 1");
   });
 });

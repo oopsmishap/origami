@@ -2,6 +2,7 @@ export interface ElideCandidate {
   ref: string;
   index: number;
   tokens: number;
+  turn: number;
 }
 
 export interface ElidePlan {
@@ -57,6 +58,6 @@ export function applyElision<T extends { role: string }>(
   });
 }
 
-export function selectElideCandidates(bound: readonly { ref: string; index: number; role: string; tokens: number; ephemeral: boolean }[]): ElideCandidate[] {
-  return bound.filter((m) => m.role === "toolResult" && !m.ephemeral).map((m) => ({ ref: m.ref, index: m.index, tokens: m.tokens }));
+export function selectElideCandidates(bound: readonly { ref: string; index: number; role: string; tokens: number; ephemeral: boolean; turn: number }[]): ElideCandidate[] {
+  return bound.filter((m) => m.role === "toolResult" && !m.ephemeral && m.turn > 1).map((m) => ({ ref: m.ref, index: m.index, tokens: m.tokens, turn: m.turn }));
 }

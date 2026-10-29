@@ -37,15 +37,17 @@ Reference result: lean preset, 1,200 turns, 64K window, seed 7. Mass promotion p
 `bun run replay` replays real omp session journals through the engine, deterministically and offline (no model calls). Tokens are estimated as characters / 4; cache hits are simulated from the common prefix with the previous request, cold after `cacheTtlMs` of idle time.
 
 ```bash
-bun run replay -- --dir ~/.omp/agent/sessions/<project-dir> --mode simulated --json out.json
-bun run replay -- --session a.jsonl --session b.jsonl --mode recorded --no-hints
+bun run replay -- --dir ~/.omp/agent/sessions/<project-dir> --mode simulated --policy both --summary-source extractive --json out.json
+bun run replay -- --session a.jsonl --mode recorded --policy current --no-hints
 ```
 
-- `--mode simulated` (default) drops the journal's recorded folds and folds whenever the engine nudges, using an extractive digest as the summary. `--mode recorded` keeps the folds the model actually made.
-- `--preset` and `--window` (default `200000`) select the configuration; `--no-hints` disables recall hints.
-- Far-recall probes take error lines and commits from tool results and check, at checkpoints and at the end, whether facts at least 300 refs old are still in context, reachable through a recall hint, or lost.
+- `--mode simulated` (default) drops recorded folds and applies either `--policy current` or the replay-only historical `--policy legacy-0.2`; `--policy both` runs each against isolated state. Recorded mode accepts one policy only.
+- `--summary-source extractive` is offline and deterministic. `--summary-source cache --summary-cache file.jsonl` requires every deterministic request key; `--summary-misses file.jsonl` writes all missing requests before exiting non-zero.
+- Fill misses with `bun bench/replay-summaries.ts --requests misses.jsonl --out cache.jsonl --agent-dir <isolated-dir>`. The filler is resumable and never uses replay-time network access.
+- `--preset` and `--window` (default `200000`) select configuration; `--no-hints` disables recall hints.
+- Far-recall probes use explicit failed tool results and commits, then check whether facts at least 300 refs old remain in context, are reachable through a recall hint, or are lost.
 
-Each session prints one table row (requests, folds per tier, mean/peak context, simulated hit rate, billed units against the unfolded baseline, hints, probe outcomes, host compactions) plus a totals row.
+Each session prints one row per policy plus policy-grouped totals in JSON.
 
 ## Release
 

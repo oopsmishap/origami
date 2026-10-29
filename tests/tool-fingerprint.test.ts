@@ -55,7 +55,7 @@ describe("Tool Call Assistant Message Fingerprinting (#4110)", () => {
     };
 
     const facts = messageFacts(msg);
-    expect(facts?.toolCalls).toEqual([{ id: "call_camel", name: "fetch_data" }]);
+    expect(facts?.toolCalls).toEqual([{ id: "call_camel", name: "fetch_data", arguments: { page: 1 } }]);
     expect(facts?.text).toContain("toolCall:call_camel:fetch_data");
   });
 });

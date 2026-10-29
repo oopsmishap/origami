@@ -12,20 +12,20 @@
 import { foldBreakeven, type PriceProfile } from "./cache-report.ts";
 
 export type FoldGateBlock = "fill-floor" | "mid-task" | "cost";
-export type FoldBoundary = "user" | "cold-cache" | "growth";
+export type FoldBoundary = "user" | "turn-end" | "cold-cache" | "growth";
 
 export interface FoldTimingInput {
   projectedTokens: number;
   windowTokens: number;
   minFoldFillPct: number;
   minFoldFillCapTokens: number;
-  atUserBoundary: boolean;
+  boundary: "user" | "turn-end" | null;
   cacheCold: boolean;
   growthSinceFoldTokens: number;
   growthStep: number;
   candidateTokens: number;
-  /** Live tokens after the candidate ranges (unfolded messages and summaries) re-sent uncached by the fold. */
-  rewriteTokens: number;
+  /** Upper-bound suffix tokens rewritten after the earliest candidate, excluding source tokens and summary. */
+  estimatedRewriteTokens: number;
   summaryRatio: number;
   telemetry: boolean;
   price: PriceProfile;
@@ -55,8 +55,8 @@ export function assessFoldTiming(i: FoldTimingInput): FoldTiming {
   });
   if (i.projectedTokens < fillFloorTokens) return blocked("fill-floor", null);
 
-  const boundary: FoldBoundary | null = i.atUserBoundary
-    ? "user"
+  const boundary: FoldBoundary | null = i.boundary
+    ? i.boundary
     : i.cacheCold
       ? "cold-cache"
       : i.growthSinceFoldTokens >= 2 * i.growthStep
@@ -68,8 +68,8 @@ export function assessFoldTiming(i: FoldTimingInput): FoldTiming {
   if (i.telemetry && i.paybackHorizonTurns > 0) {
     const S = i.candidateTokens;
     const sigma = Math.round(S * i.summaryRatio);
-    // The re-paid suffix is the new summary plus everything after it; a cold cache re-pays nothing extra.
-    const T = i.cacheCold ? 0 : i.rewriteTokens + sigma;
+    // Candidate source tokens are S; sigma replaces them and is added exactly once here.
+    const T = i.cacheCold ? 0 : i.estimatedRewriteTokens + sigma;
     breakevenTurns = foldBreakeven(S, sigma, T, i.price).breakevenTurns;
     if (breakevenTurns === null || breakevenTurns > i.paybackHorizonTurns) return blocked("cost", boundary, breakevenTurns);
   }

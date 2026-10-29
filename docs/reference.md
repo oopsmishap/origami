@@ -7,13 +7,13 @@ Origami replaces destructive full-window compaction with incremental, reversible
 - Tier 1 summarizes raw message ranges.
 - Tier 2 merges two or more Tier 1 blocks.
 - Tier 3 condenses lower-tier blocks across long sessions.
-- Newest messages, the latest user turn, and the initial prompt stay protected.
-- Efficiency nudges are advisory; emergency nudges are mandatory.
-- Advisory folds pass a timing gate: context above the fill floor (`minFoldFillPct` of the window, capped by `minFoldFillCapTokens`), a task boundary (a fresh user turn, an idle cold cache, or twice the growth step of unfolded work), and, once cache telemetry exists, break-even within `paybackHorizonTurns`. `fold_status` prints the current `Fold gate:` line. Emergency folds ignore the gate.
-- User and tool-result messages carry `[#mNNNNN]` ref tags (`refTags`) so summaries and recalls can cite exact refs.
+- Newest messages, the latest user turn, the initial prompt, and first-turn tool results stay protected.
+- Efficiency nudges are advisory; emergency nudges are mandatory. After two ignored emergency turn transitions, Origami may execute validated emergency folds automatically; it otherwise elides safe later tool results or blocks an oversized request.
+- Advisory folds pass a timing gate: context above the fill floor (`minFoldFillPct` of the window, capped by `minFoldFillCapTokens`), a task boundary (a fresh user turn, turn end, an idle cold cache, or twice the growth step of unfolded work), and, once cache telemetry exists, break-even within `paybackHorizonTurns`. `fold_status` prints the current `Fold gate:` line. Emergency folds ignore the gate.
+- The initial user instruction is untagged. Later user and tool-result messages carry `[#mNNNNN]` ref tags (`refTags`) so summaries and recalls can cite exact refs.
 - Every block records a manifest of the file paths, symbols, errors, commits and tools in its source. When the current turn touches manifest items of a folded block, a tail `[origami recall]` hint names that block (at most `recallHintMax`, each block at most once per 5 turns).
 - Summary lint: paths, commits and errors from the manifest that a summary omits are attached to the block as `Also covered`, and the block's token count measures the full rendered text.
-- Pinned ledger: user messages of a tier-1 fold are pinned as intents, and `keep` records (`constraint`, `decision`, `objective`) are pinned explicitly. Pinned records render under `Pinned:` and are carried verbatim through every tier-2/3 merge; objectives and intents are dropped with `retire` on a merge.
+- Pinned ledger: user messages of a tier-1 fold are pinned as intents, and `keep` records (`constraint`, `decision`, `objective`) are pinned explicitly. Pinned records render under `Pinned:` and are carried verbatim subject to deterministic semantic deduplication and tier-2/3 count and character budgets; constraints and decisions outrank retireable objectives and intents.
 - Folded originals are archived locally and remain searchable (topics, summaries, manifests and pinned records) and recoverable.
 
 Blocks are `active`, `consumed` by a higher tier, or `unfolded`. Status checks enforce unique coverage, valid parent-child state, and branch membership.
@@ -49,7 +49,7 @@ Origami tracks the long-term economics of context management:
 ## Workbench
 
 Open with `/fold` or `Alt+F`.
-
+- Context zones show the latest provider cache-read prefix as cached-token coverage per protected, folded, or compressible zone. The cached boundary may split one zone (`partial`); prompt overhead is subtracted before mapping cache-read tokens onto conversation zones.
 - Overview: context map, occupancy split, vault storage KPI tiles, and payback status.
 - Trajectory: 1:1 discrete round bars, cache read rates, and fold markers.
 - Blocks: fold list, lifecycle, summaries, and unfold actions.

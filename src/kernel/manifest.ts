@@ -40,33 +40,51 @@ function firstSeenUnique(values: Iterable<string>, cap: number): string[] {
 function pathsIn(text: string): string[] {
   return [...text.matchAll(PATH_RE)].map((m) => m[1]!);
 }
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
 
-export function extractManifest(messages: readonly Pick<KernelMessage, "role" | "text" | "toolCalls">[]): BlockManifest {
+export function extractManifest(messages: readonly Pick<KernelMessage, "role" | "text" | "prose" | "toolCalls" | "isError">[]): BlockManifest {
   const paths: string[] = [];
   const symbols: string[] = [];
   const errors: string[] = [];
   const commits: string[] = [];
   const tools: string[] = [];
   for (const m of messages) {
-    paths.push(...pathsIn(m.text));
-    if (m.role === "user" || m.role === "assistant") {
-      for (const s of m.text.matchAll(SYMBOL_RE)) symbols.push(s[1]!);
+    const conversational = m.role === "user" || m.role === "assistant";
+    if (conversational) {
+      paths.push(...pathsIn(m.prose));
+      for (const s of m.prose.matchAll(SYMBOL_RE)) symbols.push(s[1]!);
+      for (const re of COMMIT_RES) for (const c of m.prose.matchAll(re)) commits.push(c[1]!);
     }
-    if (m.role === "toolResult") {
-      for (const line of m.text.split("\n")) {
-        if (ERROR_LINE_RE.test(line)) errors.push(line.replace(/\s+/g, " ").trim().slice(0, 200));
+    for (const call of m.toolCalls ?? []) {
+      tools.push(call.name);
+      if (m.role === "assistant") paths.push(...pathsIn(stableJson(call.arguments)));
+    }
+    if (m.role === "toolResult" && m.isError) {
+      const lines = m.text.split("\n");
+      let marked = false;
+      for (const line of lines) {
+        if (!ERROR_LINE_RE.test(line)) continue;
+        marked = true;
+        errors.push(line.replace(/\s+/g, " ").trim().slice(0, 200));
       }
+      if (!marked) {
+        const first = lines.map((line) => line.replace(/\s+/g, " ").trim()).find(Boolean);
+        if (first) errors.push(first.slice(0, 200));
+      }
+      for (const re of COMMIT_RES) for (const c of m.text.matchAll(re)) commits.push(c[1]!);
     }
-    for (const re of COMMIT_RES) for (const c of m.text.matchAll(re)) commits.push(c[1]!);
-    for (const call of m.toolCalls ?? []) tools.push(call.name);
   }
   const pathSet = new Set(paths);
   return {
     paths: sortedUnique(paths, CAPS.paths),
-    symbols: sortedUnique(
-      symbols.filter((s) => s.length >= 3 && s.length <= 80 && !pathSet.has(s) && pathsIn(s).join("") !== s),
-      CAPS.symbols,
-    ),
+    symbols: sortedUnique(symbols.filter((s) => s.length >= 3 && s.length <= 80 && !pathSet.has(s) && pathsIn(s).join("") !== s), CAPS.symbols),
     errors: firstSeenUnique(errors.filter(Boolean), CAPS.errors),
     commits: firstSeenUnique(commits, CAPS.commits),
     tools: sortedUnique(tools, CAPS.tools),

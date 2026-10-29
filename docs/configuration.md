@@ -29,8 +29,9 @@ Origami works without configuration. To customize it, create `origami.yml` globa
 | `blockMatureFolds` | integer ≥ 0 | Preset | Later folds a block must survive before merge eligibility. |
 | `minFoldFillPct` | number `[0,1)` | Preset | Advisory folds wait until context reaches this window fraction (capped by `minFoldFillCapTokens`); must be below `emergencyFillPct`. |
 | `minFoldFillCapTokens` | integer ≥ 0 | Preset | Cap on the fill floor in tokens; `0` leaves it uncapped. |
-| `cacheReadPrice` | number `(0,1)` | `0.1` | Price of a cache-read token relative to an uncached input token (fold economics). |
-| `outputPrice` | number | `4` | Price of an output token relative to an uncached input token. |
+| `cacheReadPrice` | number ≥ 0 | Active model / `0.1` fallback | Optional cache-read price override relative to an uncached input token. |
+| `outputPrice` | number ≥ 0 | Active model / `4` fallback | Optional output-token price override relative to an uncached input token. |
+| `cacheWritePrice` | number ≥ 0 | Active model / `1` fallback | Optional cache-write price override relative to an uncached input token. |
 | `cacheTtlMs` | integer ≥ 0 | `300000` | Idle time after which the prompt cache counts as cold, making a fold free of re-pay; `0` never assumes cold. |
 | `paybackHorizonTurns` | integer ≥ 0 | `10` | Advisory folds must break even within this many turns; `0` disables the cost gate. |
 | `refTags` | boolean | `true` | Prefix user and tool-result messages with their `[#mNNNNN]` ref so summaries can cite them. |

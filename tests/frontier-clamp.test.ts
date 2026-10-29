@@ -13,6 +13,8 @@ function msg(ref: string, turn: number, role: KernelRole = "user"): BoundMessage
     contentHash: "h-" + ref,
     signedThinking: false,
     text: "text",
+    prose: "text",
+    isError: false,
     bytes: 400,
   };
 }

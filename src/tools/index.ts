@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { expandRefRange } from "../kernel/render.ts";
-import { formatTokens, parseRangeList, type FoldSpec } from "../engine.ts";
+import { formatTokens, type FoldSpec } from "../engine.ts";
+import { parseRangeList } from "../engine-ranges.ts";
 import type { OrigamiRuntime } from "../runtime.ts";
 import {
   cacheCallView,
@@ -82,7 +83,7 @@ export function registerTools(
                   text: t.String({ description: "Verbatim record (≤500 chars)" }),
                   ref: t.Optional(t.String({ description: "Source message ref inside this fold, e.g. m00042" })),
                 }),
-                { description: "Pinned ledger records carried verbatim through every later merge" },
+                { description: "Pinned ledger records carried subject to deterministic deduplication and tier budgets" },
               ),
             ),
             retire: t.Optional(t.Array(t.String(), { description: "Ledger ids (objectives/intents) to drop when merging blocks" })),

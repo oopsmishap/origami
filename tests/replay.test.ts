@@ -35,7 +35,7 @@ function syntheticJournal(turns: number): JournalEntry[] {
     add({ role: "user", content: `Turn ${turn}: inspect module ${turn} and report. ${"context ".repeat(60)}` });
     add({ role: "assistant", content: [{ type: "toolCall", id: `c${turn}`, name: "bash", arguments: { command: `cat src/mod${turn}/index.ts` } }] });
     const body = `${"output line ".repeat(120)}${turn === 2 ? "\nError: ENOENT src/foo/bar.ts missing\n" : ""}${"tail ".repeat(40)}`;
-    add({ role: "toolResult", toolCallId: `c${turn}`, toolName: "bash", content: [{ type: "text", text: body }] });
+    add({ role: "toolResult", toolCallId: `c${turn}`, toolName: "bash", isError: turn === 2, content: [{ type: "text", text: body }] });
     add({ role: "assistant", content: `Module ${turn} looks fine. ${"analysis ".repeat(40)}` });
   }
   return out;
@@ -44,7 +44,7 @@ function syntheticJournal(turns: number): JournalEntry[] {
 describe("replaySession", () => {
   const config = { ...configFromPreset("lean"), minFoldFillPct: 0, paybackHorizonTurns: 0 };
   const run = (hints: boolean) =>
-    replaySession(syntheticJournal(40), { mode: "simulated", config, windowTokens: 20_000, hints, probeDistanceRefs: 20, checkpointEvery: 200 });
+    replaySession(syntheticJournal(40), { mode: "simulated", policy: "current", summarySource: "extractive", config, windowTokens: 20_000, hints, probeDistanceRefs: 20, checkpointEvery: 200 });
 
   it("folds a long session and never loses a far fact", () => {
     const r = run(true);
@@ -58,5 +58,17 @@ describe("replaySession", () => {
 
   it("credits no recall to hints when hints are off", () => {
     expect(run(false).probes.viaHint).toBe(0);
+  });
+
+  it("runs legacy and current policies from identical immutable input", () => {
+    const entries = syntheticJournal(40);
+    const before = JSON.stringify(entries);
+    const options = { mode: "simulated" as const, summarySource: "extractive" as const, config, windowTokens: 12_000, hints: true, probeDistanceRefs: 20, checkpointEvery: 200 };
+    const legacy = replaySession(entries, { ...options, policy: "legacy-0.2" });
+    const current = replaySession(entries, { ...options, policy: "current" });
+    expect(JSON.stringify(entries)).toBe(before);
+    expect(current.requests).toBe(legacy.requests);
+    expect(current.baselineBilledUnits).toBe(legacy.baselineBilledUnits);
+    expect(current.peakContextTokens).toBeLessThan(12_000);
   });
 });

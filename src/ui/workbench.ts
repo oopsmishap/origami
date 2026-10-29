@@ -577,13 +577,15 @@ export class WorkbenchComponent implements Component {
       usedCols += cols;
       const color: ThemeColor =
         z.kind === "folded" ? "syntaxKeyword" : z.kind === "compressible" ? "success" : "muted";
-      bar += theme.fg(color, "█".repeat(Math.max(1, Math.min(cols, barW))));
+      const cachedCols = z.tokens > 0 ? Math.min(cols, Math.round((z.cachedTokens / z.tokens) * cols)) : 0;
+      bar += theme.fg(color, "▓".repeat(cachedCols) + "░".repeat(Math.max(0, cols - cachedCols)));
     });
     lines.push(truncateToWidth(bar, width, Ellipsis.Omit));
     lines.push(
-      `${theme.fg("muted", "█")} ${theme.fg("dim", "protected")}   ` +
-        `${theme.fg("syntaxKeyword", "█")} ${theme.fg("dim", "folded")}   ` +
-        `${theme.fg("success", "█")} ${theme.fg("dim", "compressible")}`,
+      `${theme.fg("accent", "▓")} ${theme.fg("dim", "cached prefix")}   ${theme.fg("muted", "░")} ${theme.fg("dim", "uncached")}\n` +
+        `${theme.fg("muted", "░")} ${theme.fg("dim", "protected")}   ` +
+        `${theme.fg("syntaxKeyword", "░")} ${theme.fg("dim", "folded")}   ` +
+        `${theme.fg("success", "░")} ${theme.fg("dim", "compressible")}`,
     );
     lines.push("");
 
@@ -595,7 +597,7 @@ export class WorkbenchComponent implements Component {
         truncateToWidth(
           `  ${theme.fg(color, z.kind.padEnd(14))} ${theme.fg("text", `${z.start}..${z.end}`.padEnd(18))} ` +
             `${theme.fg("muted", `${String(z.messages).padStart(3)} msg`)}   ` +
-            `${theme.fg("text", formatTokens(z.tokens).padStart(7))} ${theme.fg("dim", `(${String(pct).padStart(2)}%)`)}`,
+            `${theme.fg("text", formatTokens(z.tokens).padStart(7))} ${theme.fg("accent", `${formatTokens(z.cachedTokens)} cached`)} ${theme.fg("dim", `(${String(pct).padStart(2)}%)`)}`,
           width,
           Ellipsis.Unicode,
         ),
@@ -822,7 +824,7 @@ export class WorkbenchComponent implements Component {
         parts: m.zones.map((z) => ({
           value: Math.max(1, z.tokens) / totalZoneTokens,
           token: z.kind === "folded" ? "syntaxKeyword" : z.kind === "compressible" ? "success" : "muted",
-          label: `${z.kind} (${z.start}..${z.end}) · ${formatTokens(z.tokens)}`,
+          label: `${z.kind} (${z.start}..${z.end}) · ${formatTokens(z.tokens)} · ${formatTokens(z.cachedTokens)} cached${z.cacheCoverage === "partial" ? " (partial)" : ""}`,
         })),
         aria: "Context zone token distribution",
       },
@@ -838,6 +840,7 @@ export class WorkbenchComponent implements Component {
           { id: "span", head: "Span" },
           { id: "msgs", head: "Messages", align: "end" },
           { id: "tokens", head: "Tokens", align: "end" },
+          { id: "cached", head: "Cached", align: "end" },
           { id: "share", head: "Share", align: "end" },
         ],
         rows: m.zones.map((z, idx) => {
@@ -850,6 +853,7 @@ export class WorkbenchComponent implements Component {
               span: [span(`${z.start}..${z.end}`, "mono")],
               msgs: [span(String(z.messages), "mono muted")],
               tokens: [span(formatTokens(z.tokens), "mono")],
+              cached: [span(z.cacheCoverage === "none" ? "—" : `${formatTokens(z.cachedTokens)}${z.cacheCoverage === "partial" ? " partial" : ""}`, "mono accent")],
               share: [span(pct, "mono muted")],
             },
           };

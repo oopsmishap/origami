@@ -6,7 +6,7 @@ const KEEP_DROP_RULES = `## KEEP VERBATIM
 - Decisions AND their rationale ("chose X over Y because Z" — the "because" is load-bearing).
 - Constraints discovered ("must support Node 22", "no new dependencies").
 - Exact values: versions, config keys, thresholds, magic numbers.
-- User intent: quote short user messages verbatim ONLY with their message ref (\`[#m00132]\`). Without a verifiable ref, paraphrase. User and tool-result messages carry \`[#mNNNNN]\` tags; assistant messages are untagged — cite the nearest tagged ref.
+- User intent: quote short user messages verbatim ONLY with their message ref (\`[#m00132]\`). The initial user instruction intentionally has no ref tag; paraphrase it without a verifiable ref. Later user and tool-result messages carry \`[#mNNNNN]\` tags; assistant messages are untagged — cite the nearest tagged ref. First-turn tool results are protected from emergency elision.
 - Open objectives — if any source message names work still open, the summary MUST keep a one-line \`Open objectives:\` entry naming each with its ref. Drop completed or resolved objectives so finished work is never re-executed.
 - Time sensitivity — file paths, line numbers, and code snippets are snapshots taken at fold time that drift over subsequent edits; always re-read live files before anchoring edits.
 
@@ -34,7 +34,7 @@ const TIER3_RULES = `## Tier 3 — Ultra-condense (fold block ranges)
 Merge at least 2 active lower-tier blocks. Keep ONLY: the goal, open objectives, and the load-bearing constraints. Everything else is expendable.`;
 
 const LEDGER_RULES = `## Pinned ledger
-Constraints, decisions with rationale, and open objectives go in \`keep\` (kind + text + ref), not only in the summary; pinned records are carried verbatim through every merge and survive tier 3. User messages are pinned automatically. When an objective is done, list its id in \`retire\` on the next tier-2/3 merge.`;
+Constraints, decisions with rationale, and open objectives go in \`keep\` (kind + text + ref), not only in the summary; pinned records are carried verbatim subject to deterministic deduplication and tier budgets. Constraints and decisions outrank retireable objectives and intents. User messages are pinned automatically. When an objective is done, list its id in \`retire\` on the next tier-2/3 merge.`;
 
 const RECOVERY_RULES = `## Getting detail back (in-session history)
 - THIS SESSION: When looking for earlier turns, previous decisions, instructions, or roadmap notes from THIS conversation, ALWAYS use \`fold_search\` and \`fold_recall\`. Do NOT use \`recall\` (Mnemopi) for in-session history.

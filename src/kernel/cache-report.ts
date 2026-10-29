@@ -19,6 +19,8 @@ export interface CacheSample {
   input: number;
   cached: number;
   write?: number;
+  price?: PriceProfile;
+  priceSource?: PriceSource;
   foldEventId?: string | null;
   /** The omp host rewrote the prompt prefix before this request. */
   hostRewrite?: boolean;
@@ -38,9 +40,41 @@ export interface FoldEvent {
 export interface PriceProfile {
   cacheRead: number;
   output: number;
+  cacheWrite: number;
 }
+export type PriceSource = "config" | "model" | "fallback" | "mixed";
+export const DEFAULT_PRICE: PriceProfile = { cacheRead: 0.1, output: 4, cacheWrite: 1 };
 
-export const DEFAULT_PRICE: PriceProfile = { cacheRead: 0.1, output: 4 };
+export function resolveEconomicsPrice(
+  modelCost: { input: number; output: number; cacheRead: number; cacheWrite: number } | undefined,
+  overrides: { cacheReadPrice?: number; outputPrice?: number; cacheWritePrice?: number },
+): { price: PriceProfile; source: PriceSource } {
+  const modelValid = modelCost && Number.isFinite(modelCost.input) && modelCost.input > 0;
+  const fields = [
+    ["cacheRead", "cacheReadPrice", 0.1],
+    ["output", "outputPrice", 4],
+    ["cacheWrite", "cacheWritePrice", 1],
+  ] as const;
+  const origins = new Set<Exclude<PriceSource, "mixed">>();
+  const price = {} as PriceProfile;
+  for (const [field, override, fallback] of fields) {
+    const explicit = overrides[override];
+    if (typeof explicit === "number" && Number.isFinite(explicit) && explicit >= 0) {
+      price[field] = explicit;
+      origins.add("config");
+    } else {
+      const raw = modelCost?.[field];
+      if (modelValid && typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
+        price[field] = raw / modelCost.input;
+        origins.add("model");
+      } else {
+        price[field] = fallback;
+        origins.add("fallback");
+      }
+    }
+  }
+  return { price, source: origins.size === 1 ? [...origins][0]! : "mixed" };
+}
 
 export interface FoldBlockInfo {
   id: string;
@@ -79,7 +113,8 @@ export function foldBreakeven(
 ): { oneTimeCostUnits: number; perTurnSavingUnits: number; breakevenTurns: number | null } {
   const r = price.cacheRead;
   const q = price.output;
-  const oneTimeCostUnits = (1 - r) * T + q * sigma - r * S;
+  const w = price.cacheWrite;
+  const oneTimeCostUnits = (Math.max(1, w) - r) * T + q * sigma - r * S;
   const perTurnSavingUnits = r * (S - sigma);
   const breakevenTurns = perTurnSavingUnits > 0 ? Math.max(0, oneTimeCostUnits) / perTurnSavingUnits : null;
   return { oneTimeCostUnits, perTurnSavingUnits, breakevenTurns };
@@ -274,7 +309,9 @@ export function buildCacheReport(
     const S = f.replacedTokens;
     const sigma = f.summaryTokens;
     const T = foldRepayMap.get(f.id) ?? 0;
-    const { oneTimeCostUnits, perTurnSavingUnits, breakevenTurns } = foldBreakeven(S, sigma, T, price);
+    const pricedSample = sampleIdx >= 0 ? samples[sampleIdx] : samples[samples.length - 1];
+    const foldPrice = pricedSample?.price ?? price;
+    const { oneTimeCostUnits, perTurnSavingUnits, breakevenTurns } = foldBreakeven(S, sigma, T, foldPrice);
     const paidBack = breakevenTurns !== null && requestsAfter >= breakevenTurns;
     const cadenceOk = turnsToNextFold !== null && breakevenTurns !== null ? turnsToNextFold >= breakevenTurns : null;
     const netUnits = perTurnSavingUnits * requestsAfter - Math.max(0, oneTimeCostUnits);

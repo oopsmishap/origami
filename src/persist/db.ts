@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import type { Block } from "../kernel/types.ts";
 import { EMPTY_MANIFEST, manifestTerms } from "../kernel/manifest.ts";
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 export const MAX_SEARCH_HITS = 50;
 
 export interface DbBlockRow {
@@ -37,6 +37,10 @@ export interface DbRoundRow {
   fold_event_id: string | null;
   /** 1 when the omp host rewrote the prompt prefix before this round. */
   host_rewrite: number;
+  cache_read_price?: number;
+  output_price?: number;
+  cache_write_price?: number;
+  price_source?: string;
 }
 
 export interface DbMessageRow {
@@ -114,6 +118,8 @@ export interface ToolTelemetrySummary {
 
 export interface OrigamiDb {
   readonly schemaVersion: number;
+  readonly minimumReaderSchema: number;
+  readonly forwardCompatible: boolean;
   readonly recovered: string | null;
   integrity(): { ok: boolean; detail: string };
   persistFoldBatch(batch: DbFoldBatch): void;
@@ -134,6 +140,8 @@ export interface OrigamiDb {
   toolTelemetrySummary(sessionId: string): ToolTelemetrySummary;
   exportSession(sessionId: string): {
     schemaVersion: number;
+    minimumReaderSchema: number;
+    forwardCompatible: boolean;
     sessionId: string;
     exportedAt: number;
     blocks: DbBlockRow[];
@@ -303,6 +311,17 @@ INSERT INTO blocks_fts(blocks_fts) VALUES ('rebuild');
 `);
 }
 
+function MIGRATION_7(sqlite: Database): void {
+  sqlite.exec("CREATE TABLE IF NOT EXISTS schema_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);");
+  sqlite.query("INSERT INTO schema_meta(key, value) VALUES ('minimum_reader_schema', '7') ON CONFLICT(key) DO UPDATE SET value='7'").run();
+  addColumnsIfMissing(sqlite, "rounds", {
+    cache_read_price: "REAL NOT NULL DEFAULT 0.1",
+    output_price: "REAL NOT NULL DEFAULT 4",
+    cache_write_price: "REAL NOT NULL DEFAULT 1",
+    price_source: "TEXT NOT NULL DEFAULT 'fallback'",
+  });
+}
+
 interface ParsedQuery {
   terms: string[];
   tier: number | null;
@@ -430,28 +449,42 @@ function openChecked(path: string): { sqlite: Database; recovered: string | null
 export function openDb(path: string): OrigamiDb {
   const opened = openChecked(path);
   const sqlite = opened.sqlite;
-  sqlite.exec("PRAGMA journal_mode=WAL;");
-
   let version = Number(sqlite.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0);
+  let minimumReaderSchema = SCHEMA_VERSION;
+  let forwardCompatible = false;
   if (version > SCHEMA_VERSION) {
-    sqlite.close();
-    throw new Error(`origami.db schema v${version} is newer than supported v${SCHEMA_VERSION}`);
+    let raw: string | undefined;
+    try { raw = sqlite.query<{ value: string }, []>("SELECT value FROM schema_meta WHERE key='minimum_reader_schema'").get()?.value; } catch {}
+    const minimum = raw !== undefined && /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN;
+    if (!Number.isInteger(minimum)) {
+      sqlite.close();
+      throw new Error(`origami.db schema v${version} requires valid minimum_reader_schema metadata; this build supports v${SCHEMA_VERSION}`);
+    }
+    if (minimum > SCHEMA_VERSION) {
+      sqlite.close();
+      throw new Error(`origami.db schema v${version} requires reader v${minimum}; this build supports v${SCHEMA_VERSION}`);
+    }
+    minimumReaderSchema = minimum;
+    forwardCompatible = true;
+  } else {
+    const migrations: readonly (string | ((db: Database) => void))[] = [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7];
+    while (version < SCHEMA_VERSION) {
+      const next = version + 1;
+      transaction(sqlite, () => {
+        const step = migrations[next - 1]!;
+        if (typeof step === "string") sqlite.exec(step); else step(sqlite);
+        sqlite.exec(`PRAGMA user_version = ${next}`);
+      });
+      version = next;
+    }
+    minimumReaderSchema = Number(sqlite.query<{ value: string }, []>("SELECT value FROM schema_meta WHERE key='minimum_reader_schema'").get()?.value ?? SCHEMA_VERSION);
   }
-
-  const migrations: readonly (string | ((db: Database) => void))[] = [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6];
-  while (version < SCHEMA_VERSION) {
-    const next = version + 1;
-    transaction(sqlite, () => {
-      const step = migrations[next - 1]!;
-      if (typeof step === "string") sqlite.exec(step);
-      else step(sqlite);
-      sqlite.exec(`PRAGMA user_version = ${next}`);
-    });
-    version = next;
-  }
+  sqlite.exec("PRAGMA journal_mode=WAL;");
 
   const db: OrigamiDb = {
     schemaVersion: version,
+    minimumReaderSchema,
+    forwardCompatible,
     recovered: opened.recovered,
     integrity() {
       return integrityResult(sqlite);
@@ -557,8 +590,8 @@ export function openDb(path: string): OrigamiDb {
       });
     },
     insertRound(row) {
-      sqlite.query("INSERT INTO rounds (session_id, ts, total_in, cache_read, cache_write, fold_event_id, host_rewrite) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(row.session_id, row.ts, row.total_in, row.cache_read, row.cache_write, row.fold_event_id, row.host_rewrite);
+      sqlite.query("INSERT INTO rounds (session_id, ts, total_in, cache_read, cache_write, fold_event_id, host_rewrite, cache_read_price, output_price, cache_write_price, price_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(row.session_id, row.ts, row.total_in, row.cache_read, row.cache_write, row.fold_event_id, row.host_rewrite, row.cache_read_price ?? 0.1, row.output_price ?? 4, row.cache_write_price ?? 1, row.price_source ?? "fallback");
     },
     archiveMessages(rows) {
       if (rows.length === 0) return;
@@ -625,6 +658,8 @@ export function openDb(path: string): OrigamiDb {
     exportSession(sessionId) {
       return {
         schemaVersion: version,
+        minimumReaderSchema,
+        forwardCompatible,
         sessionId,
         exportedAt: Date.now(),
         blocks: db.blocksForSession(sessionId),

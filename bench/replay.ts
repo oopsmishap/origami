@@ -7,11 +7,17 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { configFromPreset, type Preset } from "../src/config.ts";
+import type { ReplayPolicy } from "./replay-policy.ts";
+import { loadReplaySummaryCache, type ReplaySummarySource } from "./replay-summary.ts";
 import { parseJournal, replaySession, type ReplayResult } from "./replay-lib.ts";
 
 interface Options {
   sessions: string[];
   mode: "recorded" | "simulated";
+  policy: ReplayPolicy | "both";
+  summarySource: ReplaySummarySource;
+  summaryCache: string | null;
+  summaryMisses: string | null;
   preset: Preset;
   window: number;
   hints: boolean;
@@ -19,7 +25,7 @@ interface Options {
 }
 
 function parseArgs(argv: readonly string[]): Options {
-  const o: Options = { sessions: [], mode: "simulated", preset: "balanced", window: 200_000, hints: true, json: null };
+  const o: Options = { sessions: [], mode: "simulated", policy: "current", summarySource: "extractive", summaryCache: null, summaryMisses: null, preset: "balanced", window: 200_000, hints: true, json: null };
   const value = (i: number, flag: string): string => {
     const v = argv[i + 1];
     if (v === undefined || v.startsWith("--")) throw new Error(`${flag} needs a value`);
@@ -35,7 +41,17 @@ function parseArgs(argv: readonly string[]): Options {
       const m = value(i++, a);
       if (m !== "recorded" && m !== "simulated") throw new Error(`--mode must be recorded or simulated, got ${m}`);
       o.mode = m;
-    } else if (a === "--preset") {
+    } else if (a === "--policy") {
+      const policy = value(i++, a);
+      if (policy !== "current" && policy !== "legacy-0.2" && policy !== "both") throw new Error(`--policy must be current, legacy-0.2 or both, got ${policy}`);
+      o.policy = policy;
+    } else if (a === "--summary-source") {
+      const source = value(i++, a);
+      if (source !== "extractive" && source !== "cache") throw new Error(`--summary-source must be extractive or cache, got ${source}`);
+      o.summarySource = source;
+    } else if (a === "--summary-cache") o.summaryCache = value(i++, a);
+    else if (a === "--summary-misses") o.summaryMisses = value(i++, a);
+    else if (a === "--preset") {
       const p = value(i++, a);
       if (p !== "balanced" && p !== "lean" && p !== "relaxed") throw new Error(`--preset must be balanced, lean or relaxed, got ${p}`);
       o.preset = p;
@@ -48,6 +64,8 @@ function parseArgs(argv: readonly string[]): Options {
     else throw new Error(`unknown option: ${a}`);
   }
   if (o.sessions.length === 0) throw new Error("no input: pass --session <file.jsonl> or --dir <dir>");
+  if (o.mode === "recorded" && o.policy === "both") throw new Error("--policy both is not valid with recorded mode");
+  if (o.summarySource === "cache" && !o.summaryCache) throw new Error("--summary-source cache requires --summary-cache <file.jsonl>");
   return o;
 }
 
@@ -61,8 +79,11 @@ function row(name: string, r: ReplayResult): string {
 function main(): void {
   const o = parseArgs(process.argv.slice(2));
   const config = configFromPreset(o.preset);
-  const results: { session: string; result: ReplayResult }[] = [];
-  console.log(`origami replay · mode ${o.mode} · preset ${o.preset} · window ${o.window} · hints ${o.hints ? "on" : "off"}\n`);
+  const results: { session: string; policy: ReplayPolicy; result: ReplayResult }[] = [];
+  const policies: ReplayPolicy[] = o.policy === "both" ? ["legacy-0.2", "current"] : [o.policy];
+  const summaryCache = o.summaryCache ? loadReplaySummaryCache(o.summaryCache) : undefined;
+  const misses = new Map();
+  console.log(`origami replay · mode ${o.mode} · policy ${o.policy} · preset ${o.preset} · window ${o.window} · hints ${o.hints ? "on" : "off"} · summaries ${o.summarySource}${o.summaryCache ? ` (${o.summaryCache})` : ""}\n`);
   console.log("| session | requests | folds t1/t2/t3 | mean ctx | peak ctx | hit | billed | baseline | hints | probes | in/hint/lost | min in-ctx | host compactions | malformed |");
   console.log("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const path of o.sessions) {
@@ -74,15 +95,19 @@ function main(): void {
       continue;
     }
     const { entries, malformedLines } = parseJournal(text);
-    const result = replaySession(entries, { mode: o.mode, config, windowTokens: o.window, hints: o.hints, probeDistanceRefs: 300, checkpointEvery: 200 });
-    result.malformedLines = malformedLines;
-    results.push({ session: path, result });
-    console.log(row(path.split("/").pop()!.slice(0, 32), result));
+    for (const policy of policies) {
+      const result = replaySession(entries, { mode: o.mode, policy, summarySource: o.summarySource, summaryCache, summaryMisses: misses, config, windowTokens: o.window, hints: o.hints, probeDistanceRefs: 300, checkpointEvery: 200 });
+      result.malformedLines = malformedLines;
+      results.push({ session: path, policy, result });
+      console.log(row(`${path.split("/").pop()!.slice(0, 22)}:${policy}`, result));
+    }
   }
   if (results.length > 0) {
     const sum = (f: (r: ReplayResult) => number) => results.reduce((s, x) => s + f(x.result), 0);
     const requests = sum((r) => r.requests);
     const total: ReplayResult = {
+      policy: policies.length === 1 ? policies[0]! : "current",
+      price: results[0]!.result.price,
       requests,
       malformedLines: sum((r) => r.malformedLines),
       hostCompactions: sum((r) => r.hostCompactions),
@@ -108,6 +133,8 @@ function main(): void {
     };
     console.log(row("**total**", total));
   }
+  if (o.summaryMisses && misses.size > 0) writeFileSync(o.summaryMisses, `${[...misses.values()].map((request) => JSON.stringify(request)).join("\n")}\n`);
+  if (o.summarySource === "cache" && misses.size > 0) throw new Error(`${misses.size} replay summaries missing`);
   if (o.json) writeFileSync(o.json, `${JSON.stringify({ options: o, results }, null, 2)}\n`);
 }
 

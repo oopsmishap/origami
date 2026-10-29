@@ -294,10 +294,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
                     topic: b.topic,
                   };
                 });
-                const price = record?.config
-                  ? { cacheRead: record.config.cacheReadPrice, output: record.config.outputPrice }
-                  : DEFAULT_PRICE;
-                return buildCacheReport(samples, foldEventsFromBlocks(infos), price);
+                return buildCacheReport(samples, foldEventsFromBlocks(infos), DEFAULT_PRICE);
               });
               if (rep) return Response.json(rep);
             }
@@ -1028,6 +1025,9 @@ function renderDashboardHtml(): string {
     .zone-protected { background: #475569; }
     .zone-folded { background: var(--accent-violet); }
     .zone-compressible { background: var(--accent-green); }
+    .zone-cached { position: absolute; inset: 0 auto 0 0; background: var(--accent-cyan); opacity: 0.42; pointer-events: none; }
+    .zone-seg { position: relative; }
+    .zone-seg-label { position: relative; z-index: 1; }
 
     /* Search */
     .search-toolbar {
@@ -2554,15 +2554,21 @@ function renderDashboardHtml(): string {
           $('zones-bar').innerHTML = zones.map((z) => {
             const weight = Math.max(1, Number(z.tokens) || 1);
             const cls = 'zone-seg zone-' + z.kind;
-            return '<div class="' + cls + '" style="flex:' + weight + ';" title="' + escapeHtml(z.kind + ' · ' + z.start + '..' + z.end + ' · ' + formatK(z.tokens || 0) + 't') + '">' + escapeHtml(z.start + '..' + z.end) + '</div>';
+            const cached = Math.max(0, Math.min(weight, Number(z.cachedTokens) || 0));
+            const cachedPct = weight > 0 ? (cached / weight) * 100 : 0;
+            const cacheText = cached > 0 ? formatK(cached) + 't cached' + (z.cacheCoverage === 'partial' ? ' (partial)' : '') : 'uncached';
+            return '<div class="' + cls + '" style="flex:' + weight + ';" title="' + escapeHtml(z.kind + ' · ' + z.start + '..' + z.end + ' · ' + formatK(z.tokens || 0) + 't · ' + cacheText) + '">' +
+              '<div class="zone-cached" style="width:' + cachedPct.toFixed(1) + '%"></div>' +
+              '<span class="zone-seg-label">' + escapeHtml(z.start + '..' + z.end) + '</span></div>';
           }).join('');
           let rowsHtml = zones.map((z) => {
             const share = (((Number(z.tokens) || 0) / totalZ) * 100).toFixed(1) + '%';
+            const cacheText = z.cacheCoverage === 'none' ? '—' : formatK(z.cachedTokens || 0) + (z.cacheCoverage === 'partial' ? ' partial' : '');
             return '<tr>' +
               '<td><span class="status-pill" style="background:var(--bg-elevated);color:var(--text-primary)">' + escapeHtml(z.kind) + '</span></td>' +
               '<td class="mono">' + escapeHtml(z.start + '..' + z.end) + '</td>' +
               '<td class="num">' + (z.messages != null ? z.messages : '—') + '</td>' +
-              '<td class="num">' + formatK(z.tokens || 0) + '</td>' +
+              '<td class="num">' + formatK(z.tokens || 0) + ' · ' + cacheText + ' cached</td>' +
               '<td class="num">' + share + '</td>' +
               '</tr>';
           }).join('');

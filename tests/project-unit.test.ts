@@ -10,6 +10,8 @@ function msg(ref: string, turn: number, role: BoundMessage["role"] = "user", ext
     index: 0,
     contentHash: `h${ref}`,
     text: `bytes-${ref}`,
+    prose: `bytes-${ref}`,
+    isError: false,
     bytes: ref.length + 6,
     signedThinking: false,
     ephemeral: false,

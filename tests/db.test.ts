@@ -169,7 +169,7 @@ describe("OrigamiDb", () => {
     v5.close();
 
     const db = openDb(path);
-    expect(db.schemaVersion).toBe(6);
+    expect(db.schemaVersion).toBe(SCHEMA_VERSION);
     db.insertBlock(block({ facts: "src/kernel/nudge.ts\ndecideNudge" }));
     expect(db.searchBlocks("nudge.ts", 10).map((h) => h.block_id)).toEqual(["b1"]);
     expect(db.blocksForSession("session-1")[0]!.facts).toBe("src/kernel/nudge.ts\ndecideNudge");
@@ -189,12 +189,40 @@ describe("OrigamiDb", () => {
     db.close();
   });
 
-  test("refuses a schema newer than supported", () => {
+  test("requires valid compatibility metadata for a newer schema", () => {
     const { path } = tempDb();
     const sqlite = new Database(path, { create: true });
     sqlite.exec("PRAGMA user_version = 99");
     sqlite.close();
-    expect(() => openDb(path)).toThrow(`origami.db schema v99 is newer than supported v${SCHEMA_VERSION}`);
+    expect(() => openDb(path)).toThrow(`origami.db schema v99 requires valid minimum_reader_schema metadata; this build supports v${SCHEMA_VERSION}`);
+  });
+
+  test("opens a declared additive future schema without lowering its writer version", () => {
+    const { path } = tempDb();
+    const current = openDb(path);
+    current.close();
+    const future = new Database(path);
+    future.exec("PRAGMA user_version = 8; UPDATE schema_meta SET value='7' WHERE key='minimum_reader_schema'; ALTER TABLE rounds ADD COLUMN future_note TEXT DEFAULT '';");
+    future.close();
+    const db = openDb(path);
+    expect(db.schemaVersion).toBe(8);
+    expect(db.minimumReaderSchema).toBe(7);
+    expect(db.forwardCompatible).toBe(true);
+    db.insertRound({ session_id: "future", ts: 1, total_in: 2, cache_read: 1, cache_write: 0, fold_event_id: null, host_rewrite: 0 });
+    expect(db.roundsForSession("future")).toHaveLength(1);
+    db.close();
+    const raw = new Database(path);
+    expect(raw.query<{ user_version: number }, []>("PRAGMA user_version").get()!.user_version).toBe(8);
+    raw.close();
+  });
+
+  test("rejects a future schema requiring a newer reader", () => {
+    const { path } = tempDb();
+    const current = openDb(path); current.close();
+    const future = new Database(path);
+    future.exec("PRAGMA user_version = 8; UPDATE schema_meta SET value='8' WHERE key='minimum_reader_schema';");
+    future.close();
+    expect(() => openDb(path)).toThrow("origami.db schema v8 requires reader v8; this build supports v7");
   });
 
   test("quarantines a corrupt database and opens a fresh one", () => {

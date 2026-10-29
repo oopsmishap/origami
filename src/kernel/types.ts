@@ -8,14 +8,25 @@ export type KernelRole =
   | "developer"
   | "system";
 
+export interface KernelToolCall {
+  id: string;
+  name: string;
+  arguments: unknown;
+}
+
 export interface KernelMessage {
   role: KernelRole;
   toolCallId?: string;
-  /** Tool calls an assistant message makes (id and tool name). */
-  toolCalls?: { id: string; name: string }[];
+  /** Structured assistant tool calls, preserving their original arguments. */
+  toolCalls?: KernelToolCall[];
   contentHash: string;
   signedThinking: boolean;
+  /** Canonical byte-stable representation used for hashing and token accounting. */
   text: string;
+  /** Natural-language user/assistant text, excluding tool-call serialization. */
+  prose: string;
+  /** Explicit host failure flag; meaningful only for toolResult messages. */
+  isError: boolean;
   bytes: number;
   imageTokens?: number;
 }
@@ -60,7 +71,7 @@ export interface Block {
   manifest?: BlockManifest;
   /** Manifest items the summary did not mention; rendered as "Also covered". */
   missing?: string[];
-  /** Pinned records carried verbatim through every merge. */
+  /** Pinned records carried verbatim subject to deterministic deduplication and tier budgets. */
   ledger?: LedgerRecord[];
 }
 

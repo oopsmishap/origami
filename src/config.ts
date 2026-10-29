@@ -30,10 +30,12 @@ export interface OrigamiConfig {
   minFoldFillPct: number;
   /** Cap on the fill floor in tokens; 0 = uncapped. */
   minFoldFillCapTokens: number;
-  /** Price of a cache-read token relative to an uncached input token. */
-  cacheReadPrice: number;
-  /** Price of an output token relative to an uncached input token. */
-  outputPrice: number;
+  /** Optional cache-read ratio override; otherwise resolved from the active model. */
+  cacheReadPrice?: number;
+  /** Optional output ratio override; otherwise resolved from the active model. */
+  outputPrice?: number;
+  /** Optional cache-write ratio override; otherwise resolved from the active model. */
+  cacheWritePrice?: number;
   /** Idle time after which the provider prompt cache is assumed cold; 0 = never cold. */
   cacheTtlMs: number;
   /** Advisory folds must break even within this many turns; 0 disables the cost gate. */
@@ -117,8 +119,6 @@ export function configFromPreset(preset: Preset): OrigamiConfig {
     subagentActivateTokens: DEFAULT_SUBACTIVATE_TOKENS,
     retentionDays: 0,
     language: "preserve",
-    cacheReadPrice: 0.1,
-    outputPrice: 4,
     cacheTtlMs: 300000,
     paybackHorizonTurns: 10,
     refTags: true,
@@ -145,7 +145,6 @@ const NUMERIC_KEYS: Record<string, true> = {
   subagentActivateTokens: true,
   tier2MassTokens: true,
   tier3MassTokens: true,
-  outputPrice: true,
 };
 
 const NON_NEGATIVE_INT_KEYS: Record<string, true> = {
@@ -174,7 +173,12 @@ const BOOLEAN_KEYS: Record<string, true> = {
 const PCT_KEYS: Record<string, true> = {
   emergencyFillPct: true,
   elideFillPct: true,
+};
+
+const NON_NEGATIVE_PRICE_KEYS: Record<string, true> = {
   cacheReadPrice: true,
+  outputPrice: true,
+  cacheWritePrice: true,
 };
 
 export function applyOverrides(base: OrigamiConfig, raw: unknown, file: string): OrigamiConfig {
@@ -217,6 +221,13 @@ export function applyOverrides(base: OrigamiConfig, raw: unknown, file: string):
     if (key in PCT_KEYS) {
       if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value >= 1) {
         throw new ConfigError(file, `${key} must be a fraction in (0, 1), got ${String(value)}`);
+      }
+      Object.assign(out, { [key]: value });
+      continue;
+    }
+    if (key in NON_NEGATIVE_PRICE_KEYS) {
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+        throw new ConfigError(file, `${key} must be a finite non-negative number, got ${String(value)}`);
       }
       Object.assign(out, { [key]: value });
       continue;

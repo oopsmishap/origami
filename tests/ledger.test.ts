@@ -5,6 +5,7 @@ import { messageFacts } from "../src/kernel/message-facts.ts";
 import { renderBlockText } from "../src/kernel/render.ts";
 import { makeFoldOp, parseJournalOp, JOURNAL_ENTRY_TYPE } from "../src/persist/journal.ts";
 import type { KernelMessage } from "../src/kernel/types.ts";
+import { normalizeInheritedLedger, TIER_LEDGER_BUDGET } from "../src/kernel/ledger.ts";
 
 function setup() {
   const entries: { type: string; id: string; customType?: string; data?: unknown; message?: { role: string; content: string } }[] = [];
@@ -60,7 +61,7 @@ describe("pinned ledger", () => {
     expect(text).toContain("\nPinned:\n");
     expect(text).toContain("- [constraint] must support Node 22 (m00003)");
     expect(text).toContain("- [objective] ship part 3 docs");
-    expect(b3.ledger!.map((r) => r.id)).toEqual(["b1.L1", "b1.L2", "b2.L1", "b2.L2"]);
+    expect(b3.ledger!.map((r) => r.id)).toEqual(["b1.L2", "b2.L2", "b1.L1", "b2.L1"]);
   });
 
   it("retires objectives on merge but refuses to retire constraints or unknown ids", () => {
@@ -95,5 +96,33 @@ describe("pinned ledger", () => {
     const parsed = parseJournalOp(JSON.parse(JSON.stringify(makeFoldOp(block))));
     expect(parsed?.op).toBe("fold");
     if (parsed?.op === "fold") expect(parsed.block.ledger).toEqual(block.ledger);
+  });
+
+  it("deduplicates semantic records while preserving ids and distinct refs/kinds", () => {
+    const records = [
+      { id: "a", kind: "constraint" as const, text: "keep   exact", ref: "m00001" },
+      { id: "b", kind: "constraint" as const, text: " keep exact ", ref: "m00001" },
+      { id: "c", kind: "decision" as const, text: "keep exact", ref: "m00001" },
+      { id: "d", kind: "constraint" as const, text: "keep exact", ref: "m00002" },
+    ];
+    expect(normalizeInheritedLedger(records, 2).map((r) => r.id)).toEqual(["a", "d", "c"]);
+  });
+
+  it("enforces tier count and character budgets in priority and source order", () => {
+    const make = (id: string, kind: "constraint" | "decision" | "objective" | "intent", length: number) => ({ id, kind, text: id.repeat(length).slice(0, length), ref: null });
+    const records = [
+      ...Array.from({ length: 10 }, (_, i) => make(`i${i}`, "intent", 20)),
+      ...Array.from({ length: 4 }, (_, i) => make(`c${i}`, "constraint", 20)),
+      ...Array.from({ length: 6 }, (_, i) => make(`d${i}`, "decision", 20)),
+      ...Array.from({ length: 4 }, (_, i) => make(`o${i}`, "objective", 20)),
+    ];
+    const tier3 = normalizeInheritedLedger(records, 3);
+    expect(tier3).toHaveLength(TIER_LEDGER_BUDGET[3].maxRecords);
+    expect(tier3.map((r) => r.id)).toEqual(["c0", "c1", "c2", "c3", "d0", "d1", "d2", "d3"]);
+    expect(tier3.reduce((sum, r) => sum + r.text.length, 0)).toBeLessThanOrEqual(TIER_LEDGER_BUDGET[3].maxChars);
+
+    const oversized = make("x", "constraint", TIER_LEDGER_BUDGET[2].maxChars + 1);
+    const fits = make("y", "decision", TIER_LEDGER_BUDGET[2].maxChars);
+    expect(normalizeInheritedLedger([oversized, fits], 2).map((r) => r.id)).toEqual(["y"]);
   });
 });

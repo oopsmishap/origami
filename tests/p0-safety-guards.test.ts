@@ -13,6 +13,8 @@ function makeBoundMsg(partial: Partial<BoundMessage> & { ref: string; role: Boun
     ephemeral: false,
     contentHash: "hash",
     text: "content",
+    prose: "content",
+    isError: false,
     signedThinking: false,
     bytes: 20,
     ...partial,
@@ -93,7 +95,7 @@ describe("P0 Safety: Tool Pairing Atomicity Guard", () => {
         role: "assistant",
         turn: 1,
         index: 1,
-        toolCalls: [{ id: "call_abc", name: "bash" }],
+        toolCalls: [{ id: "call_abc", name: "bash", arguments: null }],
       }),
       makeBoundMsg({
         ref: "m00003",
@@ -132,7 +134,7 @@ describe("P0 Safety: Tool Pairing Atomicity Guard", () => {
         role: "assistant",
         turn: 1,
         index: 1,
-        toolCalls: [{ id: "call_tail", name: "bash" }],
+        toolCalls: [{ id: "call_tail", name: "bash", arguments: null }],
       }),
       // toolResult sits in turn 2 (which is protected)
       makeBoundMsg({
@@ -262,7 +264,7 @@ describe("P0 Safety: Tool Pairing Atomicity Guard", () => {
         tokens: 150,
         tool: false,
         role: "assistant",
-        toolCalls: [{ id: "call_unanswered", name: "bash" }],
+        toolCalls: [{ id: "call_unanswered", name: "bash", arguments: null }],
       },
       // Result sits in turn 2 (protected tail)
       {

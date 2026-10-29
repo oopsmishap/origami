@@ -17,6 +17,8 @@ import type { SessionEntryLike } from "../src/kernel/state.ts";
 import { parseRef } from "../src/kernel/types.ts";
 import { JOURNAL_ENTRY_TYPE } from "../src/persist/journal.ts";
 import { kernelMessagesFromEntries } from "../src/runtime.ts";
+import { createReplayPolicyState, decideReplayPolicy, type ReplayPolicy } from "./replay-policy.ts";
+import { cachedFoldSpec, replaySummaryRequest, type ReplaySummaryRecord, type ReplaySummaryRequest, type ReplaySummarySource } from "./replay-summary.ts";
 
 export interface JournalEntry {
   type: string;
@@ -31,6 +33,10 @@ export interface JournalEntry {
 
 export interface ReplayOptions {
   mode: "recorded" | "simulated";
+  policy: ReplayPolicy;
+  summarySource: ReplaySummarySource;
+  summaryCache?: ReadonlyMap<string, ReplaySummaryRecord>;
+  summaryMisses?: Map<string, ReplaySummaryRequest>;
   config: OrigamiConfig;
   windowTokens: number;
   hints: boolean;
@@ -39,6 +45,8 @@ export interface ReplayOptions {
 }
 
 export interface ReplayResult {
+  policy: ReplayPolicy;
+  price: { cacheRead: number; output: number; cacheWrite: number; source: string };
   requests: number;
   malformedLines: number;
   hostCompactions: number;
@@ -123,7 +131,10 @@ export function replaySession(entries: readonly JournalEntry[], o: ReplayOptions
     now: () => now,
   });
 
+  const policyState = createReplayPolicyState();
   const result: ReplayResult = {
+    policy: o.policy,
+    price: { cacheRead: o.config.cacheReadPrice ?? 0.1, output: o.config.outputPrice ?? 4, cacheWrite: o.config.cacheWritePrice ?? 1, source: "fallback" },
     requests: 0,
     malformedLines: 0,
     hostCompactions: 0,
@@ -137,8 +148,8 @@ export function replaySession(entries: readonly JournalEntry[], o: ReplayOptions
     probes: { total: 0, inContext: 0, viaHint: 0, lost: 0, minInContextPct: 100 },
     recordedUsage: { input: 0, cacheRead: 0, cacheWrite: 0 },
   };
-  const r = o.config.cacheReadPrice;
-  const q = o.config.outputPrice;
+  const r = o.config.cacheReadPrice ?? 0.1;
+  const q = o.config.outputPrice ?? 4;
 
   const foldAll = (specs: { range: string; topic: string; summary: string }[], tier: 1 | 2 | 3): number => {
     let pending = specs.filter((s) => s.summary.length > 0);
@@ -152,32 +163,33 @@ export function replaySession(entries: readonly JournalEntry[], o: ReplayOptions
     }
     return 0;
   };
+  const summarySpec = (tier: 1 | 2 | 3, range: string, ids: readonly string[], source: string, topic: string, extractive: string) => {
+    if (o.summarySource === "extractive") return { range, tier, topic, summary: extractive };
+    const request = replaySummaryRequest(tier, range, ids, source);
+    const record = o.summaryCache?.get(request.key);
+    if (!record) {
+      o.summaryMisses?.set(request.key, request);
+      return null;
+    }
+    return cachedFoldSpec(request, o.summaryCache!);
+  };
   const simulateFold = (): number => {
-    const decision = engine.decideNudge();
+    const decision = decideReplayPolicy(o.policy, engine, policyState);
     if (decision.kind === "promotion" && decision.promotion) {
       const fromTier = decision.promotion.fromTier;
       const blocks = engine.state.tree.live().filter((b) => b.tier === fromTier);
       if (blocks.length < 2) return 0;
-      return foldAll(
-        [
-          {
-            range: blocks.map((b) => b.id).join(","),
-            topic: `replay merge ${blocks[0]!.id}..${blocks.at(-1)!.id}`,
-            summary: `- ${blocks.map((b) => b.topic).join("\n- ")}`,
-          },
-        ],
-        (fromTier + 1) as 2 | 3,
-      );
+      const range = blocks.map((b) => b.id).join(",");
+      const spec = summarySpec((fromTier + 1) as 2 | 3, range, blocks.map((b) => b.id), blocks.map((b) => engine.renderBlock(b)).join("\n\n"), `replay merge ${blocks[0]!.id}..${blocks.at(-1)!.id}`, `- ${blocks.map((b) => b.topic).join("\n- ")}`);
+      return spec ? foldAll([spec], (fromTier + 1) as 2 | 3) : 0;
     }
     if (decision.kind === "efficiency" || decision.kind === "emergency") {
-      return foldAll(
-        engine.recommendedRanges().map((x) => ({
-          range: `${x.start}..${x.end}`,
-          topic: `replay ${x.start}..${x.end}`,
-          summary: engine.archiveDigest([{ start: x.start, end: x.end }]),
-        })),
-        1,
-      );
+      const specs = engine.recommendedRanges().map((x) => {
+        const range = `${x.start}..${x.end}`;
+        const selected = engine.bound.filter((m) => !m.ephemeral && parseRef(m.ref) >= parseRef(x.start) && parseRef(m.ref) <= parseRef(x.end));
+        return summarySpec(1, range, selected.map((m) => m.ref), selected.map((m) => m.text).join("\n"), `replay ${range}`, engine.archiveDigest([{ start: x.start, end: x.end }]));
+      }).filter((spec): spec is NonNullable<typeof spec> => spec !== null);
+      return foldAll(specs, 1);
     }
     return 0;
   };
@@ -260,8 +272,8 @@ export function replaySession(entries: readonly JournalEntry[], o: ReplayOptions
     }
 
     const raw = working.map((e) => entryMessage(e as SessionEntryLike)).filter((m): m is NonNullable<typeof m> => m !== undefined);
-    const rendered = engine.render(raw, (text) => ({ role: "custom", content: text }));
-    const strings = rendered.map((m) => `${roleOf(m)}:${textOf(m)}`);
+    let rendered = engine.render(raw, (text) => ({ role: "custom", content: text }));
+    let strings = rendered.map((m) => `${roleOf(m)}:${textOf(m)}`);
     // Simulated mode already decided (and acted on) the nudge before rendering.
     const nudge = o.mode === "simulated" ? engine.nudgeText : (engine.decideNudge().text ?? engine.nudgeText);
     if (nudge) strings.push(`developer:${nudge}`);
@@ -272,7 +284,18 @@ export function replaySession(entries: readonly JournalEntry[], o: ReplayOptions
         result.hintsEmitted++;
       }
     }
-    const total = strings.reduce((s, x) => s + countTokens(x), 0);
+    let total = strings.reduce((s, x) => s + countTokens(x), 0);
+    if (o.policy === "current" && total >= o.windowTokens) {
+      rendered = engine.render(raw, (text) => ({ role: "custom", content: text }), total);
+      strings = rendered.map((m) => `${roleOf(m)}:${textOf(m)}`);
+      if (nudge) strings.push(`developer:${nudge}`);
+      total = strings.reduce((s, x) => s + countTokens(x), 0);
+      if (total >= o.windowTokens) {
+        // The current hook aborts this provider request; no oversized outbound context is sent.
+        strings = [];
+        total = 0;
+      }
+    }
     const warm = prevNow !== null && (o.config.cacheTtlMs === 0 || now - prevNow < o.config.cacheTtlMs);
     const cached = cachedPrefix(prevStrings, strings, warm);
     result.billedUnits += total - cached + cached * r + foldSigma * q;

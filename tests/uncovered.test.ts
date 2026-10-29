@@ -13,6 +13,8 @@ function msg(ref: string, turn: number, tokens = 100, role: KernelRole = "user")
     contentHash: "hash-" + ref,
     signedThinking: false,
     text: "text",
+    prose: "text",
+    isError: false,
     bytes: tokens * 4,
   };
 }

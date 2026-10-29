@@ -40,6 +40,15 @@ function canonicalText(content: unknown): string {
   if (Array.isArray(content)) return content.map(blockText).join("\n");
   return content === undefined || content === null ? "" : stableJson(content);
 }
+function proseText(role: KernelRole, content: unknown): string {
+  if (role !== "user" && role !== "assistant") return "";
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((b) => isRecord(b) && b.type === "text")
+    .map((b) => strOr((b as Record<string, unknown>).text, ""))
+    .join("\n");
+}
 
 export function messageFacts(message: unknown): KernelMessage | null {
   if (!isRecord(message)) return null;
@@ -49,12 +58,16 @@ export function messageFacts(message: unknown): KernelMessage | null {
   let text = canonicalText(message.content);
   const toolCallId = typeof message.toolCallId === "string" ? message.toolCallId : undefined;
 
-  const toolCalls: { id: string; name: string }[] = [];
+  const toolCalls: { id: string; name: string; arguments: unknown }[] = [];
+  const seenCallIds = new Set<string>();
+  const addToolCall = (id: string, name: string, args: unknown): void => {
+    if (id && seenCallIds.has(id)) return;
+    if (id) seenCallIds.add(id);
+    if (id || name) toolCalls.push({ id, name, arguments: args });
+  };
   if (Array.isArray(message.content)) {
     for (const b of message.content) {
-      if (isRecord(b) && b.type === "toolCall") {
-        toolCalls.push({ id: strOr(b.id, ""), name: strOr(b.name, "") });
-      }
+      if (isRecord(b) && b.type === "toolCall") addToolCall(strOr(b.id, ""), strOr(b.name, ""), b.arguments ?? null);
     }
   }
   const rawTopCalls = Array.isArray(message.toolCalls)
@@ -66,9 +79,8 @@ export function messageFacts(message: unknown): KernelMessage | null {
     if (!isRecord(tc)) continue;
     const id = strOr(tc.id, "");
     const name = isRecord(tc.function) ? strOr(tc.function.name, "") : strOr(tc.name, "");
-    if (id || name) {
-      toolCalls.push({ id, name });
-    }
+    const args = isRecord(tc.function) ? tc.function.arguments : tc.arguments;
+    addToolCall(id, name, args ?? null);
   }
   if (!text && rawTopCalls.length > 0) {
     text = rawTopCalls
@@ -97,6 +109,8 @@ export function messageFacts(message: unknown): KernelMessage | null {
     role: role as KernelRole,
     contentHash: contentHash(text),
     text,
+    prose: proseText(role as KernelRole, message.content),
+    isError: role === "toolResult" && message.isError === true,
     bytes: new TextEncoder().encode(text).length,
     signedThinking,
     toolCallId,

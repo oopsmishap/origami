@@ -63,6 +63,7 @@ describe("Occupancy telemetry & /api/status regression", () => {
     });
     runtime.attachDb(db);
     runtime.sync();
+    runtime.engine.recordRound({ ts: 1, totalIn: 90_000, cacheRead: 89_900, cacheWrite: 0, foldEventId: null, hostRewrite: false });
 
     const st = runtime.engine.status();
     expect(st.occupancyPct).toBe(9);
@@ -95,15 +96,19 @@ describe("Occupancy telemetry & /api/status regression", () => {
         liveTokens: number;
         usedTokens: number;
         windowTokens: number;
+        zones: Array<{ cachedTokens: number; cacheCoverage: string }>;
       };
       expect(body.occupancyPct).toBe(9);
       expect(body.liveTokens).toBe(90_000);
       expect(body.usedTokens).toBe(90_000);
       expect(body.windowTokens).toBe(1_000_000);
+      expect(body.zones.some((z) => z.cachedTokens > 0 && z.cacheCoverage !== "none")).toBe(true);
 
       const html = await (await fetch(`${dashboard.url}/`)).text();
       // Ensure client never multiplies occupancyPct by 100 again
       expect(html).not.toContain("st.occupancyPct * 100");
+      expect(html).toContain("zone-cached");
+      expect(html).toContain("cachedPct");
     } finally {
       dashboard.stop();
       db.close();
@@ -366,9 +371,9 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
       compressibleFloor: 15_000,
       blocks: [block],
       zones: [
-        { kind: "protected", start: "m00001", end: "m00001", tokens: 1_000, messages: 1 },
-        { kind: "folded", start: "m00002", end: "m00010", tokens: 600, messages: 9 },
-        { kind: "compressible", start: "m00011", end: "m00016", tokens: 13_400, messages: 6 },
+        { kind: "protected", start: "m00001", end: "m00001", tokens: 1_000, messages: 1, cachedTokens: 1_000, cacheCoverage: "full" as const },
+        { kind: "folded", start: "m00002", end: "m00010", tokens: 600, messages: 9, cachedTokens: 600, cacheCoverage: "full" as const },
+        { kind: "compressible", start: "m00011", end: "m00016", tokens: 13_400, messages: 6, cachedTokens: 4_400, cacheCoverage: "partial" as const },
       ],
       folded: 9,
       live: 7,
@@ -445,6 +450,13 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
     expect(wb.render(100).join("\n")).toContain("Context Trajectory");
     const rootTraj = wb.describe(nativeCx);
     expect(JSON.stringify(rootTraj)).toContain('"k":"chart"');
+    wb.handleInput("4");
+    expect(model.tab).toBe(3);
+    const ansiZones = wb.render(100).join("\n");
+    expect(ansiZones).toContain("cached prefix");
+    expect(ansiZones).toContain("4.4K cached");
+    expect(JSON.stringify(wb.describe(nativeCx))).toContain('"head":"Cached"');
+    wb.handleInput("3");
 
     // Switch to Blocks tab and press Enter -> opens in-overlay drilldown (NOT close/toast)
     wb.handleInput("3");

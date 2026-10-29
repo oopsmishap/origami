@@ -78,6 +78,10 @@ export default function origamiExtension(api: ExtensionAPI): void {
       saveArtifact: (content, toolType) => ctx.sessionManager.saveArtifact(content, toolType),
       windowTokens: () => ctx.getContextUsage()?.contextWindow ?? 0,
       projectedTokens: () => ctx.getContextUsage()?.tokens ?? 0,
+      modelCost: () => {
+        const cost = ctx.model?.cost;
+        return cost ? { input: cost.input, output: cost.output, cacheRead: cost.cacheRead, cacheWrite: cost.cacheWrite } : undefined;
+      },
       entries: () => ctx.sessionManager.getEntries(),
     };
   }
@@ -265,35 +269,60 @@ export default function origamiExtension(api: ExtensionAPI): void {
     registry.touch(record.sessionId, { status });
     refreshStatusChip(record.sessionId, { sessionId: record.sessionId, status });
 
-    const rendered = rt.engine.render(event.messages, makeFoldMessage);
+    const compose = (projectedTokensOverride?: number) => {
+      const rendered = rt.engine.render(event.messages, makeFoldMessage, projectedTokensOverride);
+      if (!record.doctrineInSystemPrompt) {
+        rendered.push({ role: "developer", content: [{ type: "text", text: doctrinePrompt() }], timestamp: Date.now() } as never);
+      }
+      const decision = rt.engine.decideNudge();
+      const nudgeText = decision.text ?? rt.engine.nudgeText;
+      const nudgeKind = decision.text ? decision.kind : rt.engine.nudgeTextKind;
+      const candidate = liveCandidate(rt.engine, rt.candidates);
+      let emergencyAppended = false;
+      if (nudgeText && !(candidate && nudgeKind === "efficiency")) {
+        rendered.push({ role: "developer", content: [{ type: "text", text: nudgeText }], timestamp: Date.now() } as never);
+        emergencyAppended = nudgeKind === "emergency";
+      }
+      if (candidate) rendered.push({ role: "developer", content: [{ type: "text", text: formatCandidate(candidate) }], timestamp: Date.now() } as never);
+      const hint = rt.engine.recallHintText();
+      if (hint) rendered.push({ role: "developer", content: [{ type: "text", text: hint }], timestamp: Date.now() } as never);
+      if (emergencyAppended) rt.engine.noteEmergencySent();
+      return rendered;
+    };
 
-    if (!record.doctrineInSystemPrompt) {
-      rendered.push({
-        role: "developer",
-        content: [{ type: "text", text: doctrinePrompt() }],
-        timestamp: Date.now(),
-      } as never);
+    let rendered = compose();
+    let estimate = rt.engine.outboundEstimateTokens(rendered);
+    const window = rt.engine.windowTokens;
+    if (window <= 0 || estimate.total < window) return { messages: rendered as never };
+
+    if (rt.engine.shouldAutoFoldEmergency()) {
+      const ranges = rt.engine.recommendedRanges();
+      let specs = ranges.map((range) => ({ range: `${range.start}..${range.end}`, topic: `Emergency fold ${range.start}..${range.end}`, summary: rt.engine.archiveDigest([{ start: range.start, end: range.end }]) }));
+      const selected = specs.map((spec) => spec.range);
+      const started = performance.now();
+      let result = rt.engine.executeFold({ folds: specs, tier: 1 });
+      while (!result.ok && specs.length > 1) {
+        const failedIndex = result.foldIndex;
+        specs = specs.filter((_spec, index) => index !== failedIndex);
+        result = rt.engine.executeFold({ folds: specs, tier: 1 });
+      }
+      recordToolTelemetry(rt, { tool: "emergency_auto_fold", durationMs: performance.now() - started, ok: result.ok, error: result.ok ? null : result.error, inputSummary: selected.join(","), outputSummary: result.ok ? `${result.outcome.foldCount} folds` : "fold failed" });
+      if (result.ok) {
+        for (const block of result.outcome.blocks) registry.emit("fold", record.sessionId, block);
+        rt.sync();
+        rendered = compose();
+        estimate = rt.engine.outboundEstimateTokens(rendered);
+        if (estimate.total < window) return { messages: rendered as never };
+      }
     }
 
-    const decision = rt.engine.decideNudge();
-    const nudgeText = decision.text ?? rt.engine.nudgeText;
-    const nudgeKind = decision.text ? decision.kind : rt.engine.nudgeTextKind;
-    const candidate = liveCandidate(rt.engine, rt.candidates);
-    if (nudgeText && !(candidate && nudgeKind === "efficiency")) {
-      rendered.push({
-        role: "developer",
-        content: [{ type: "text", text: nudgeText }],
-        timestamp: Date.now(),
-      } as never);
+    rendered = compose(estimate.total);
+    estimate = rt.engine.outboundEstimateTokens(rendered);
+    if (estimate.total >= window) {
+      ctx.abort();
+      if (ctx.hasUI) ctx.ui.notify("origami: request blocked at context limit; fold or start a new session.", "warning");
+      return { messages: [] as never };
     }
-    if (candidate) {
-      rendered.push({ role: "developer", content: [{ type: "text", text: formatCandidate(candidate) }], timestamp: Date.now() } as never);
-    }
-    const hint = rt.engine.recallHintText();
-    if (hint) {
-      rendered.push({ role: "developer", content: [{ type: "text", text: hint }], timestamp: Date.now() } as never);
-    }
-
     return { messages: rendered as never };
   });
 
@@ -345,10 +374,11 @@ export default function origamiExtension(api: ExtensionAPI): void {
   // Speculative folds (opt-in): draft one candidate in a side turn once a turn ends.
   api.on("turn_end", (_event, ctx) => {
     const { record, rt } = getOrInitRuntime(ctx);
+    rt.sync();
+    rt.engine.onTurnEnd();
     if (!record.config.speculativeFolds || ctx.agent.kind !== "main" || isSubagentDormant(ctx, record.config)) return;
     const run = ctx.runEphemeralTurn?.bind(ctx);
     if (!run || rt.candidates.inFlight || rt.candidates.pending) return;
-    rt.sync();
     const ranges = candidateRanges(rt.engine, rt.candidates);
     if (!ranges) return;
     const t0 = performance.now();
