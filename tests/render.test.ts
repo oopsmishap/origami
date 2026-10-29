@@ -230,3 +230,44 @@ describe("engine ref tags", () => {
     expect((engine.render(raw, fold) as { content: unknown }[])[0]!.content).toBe("first instruction");
   });
 });
+
+describe("initial context head", () => {
+  const raw: { role: string; content: unknown; toolCallId?: string; toolName?: string }[] = [
+    { role: "system", content: "host system prompt" },
+    { role: "user", content: "initial task" },
+  ];
+  for (let t = 0; t < 4; t++) {
+    raw.push({ role: "assistant", content: [{ type: "toolCall", id: `c${t}`, name: "read", arguments: { path: `src/f${t}.ts` } }] });
+    raw.push({ role: "toolResult", toolCallId: `c${t}`, toolName: "read", content: [{ type: "text", text: `output ${t} ${"y".repeat(3000)}` }] });
+    raw.push({ role: "assistant", content: `done ${t}` });
+    raw.push({ role: "user", content: `next ${t}` });
+  }
+  const entries = raw.map((message, i) => ({ type: "message" as const, id: `e${i}`, message }));
+
+  it("keeps the leading system prompt first and verbatim, and the initial user message live, through folds and elision", () => {
+    const engine = new OrigamiEngine({
+      host: {
+        sessionId: () => "head-invariant",
+        appendEvent: (op) => entries.push({ type: "custom", id: `j${entries.length}`, customType: "origami:event", data: op } as never),
+        saveArtifact: async () => "/tmp/unused.md",
+        windowTokens: () => 10_000,
+        projectedTokens: () => 9_900,
+      },
+      entries,
+      modelId: "test",
+      config: { ...configFromPreset("balanced"), protectedTailMessages: 0, protectedTailTokens: 0, minFoldBenefitTokens: 0, minFoldBenefitWindowPct: 0 },
+    });
+    engine.refresh(entries);
+    engine.ingest(raw.map((m) => messageFacts(m)).filter((f): f is KernelMessage => f !== null));
+    const head = engine.bound.find((m) => !m.ephemeral)!;
+    expect(engine.executeFold({ folds: [{ range: `${head.ref}..${engine.bound[3]!.ref}`, topic: "t", summary: "s" }] }).ok).toBe(false);
+    const turn2 = engine.bound.filter((m) => m.turn === engine.bound[6]!.turn);
+    expect(engine.executeFold({ folds: [{ range: `${turn2[0]!.ref}..${turn2[turn2.length - 1]!.ref}`, topic: "t", summary: "s" }] }).ok).toBe(true);
+
+    const out = engine.render(raw, (text: string) => ({ role: "custom", content: text })) as { role: string; content: unknown }[];
+    expect(out.some((m) => m.role === "custom")).toBe(true);
+    expect(out.some((m) => JSON.stringify(m.content).includes("· elided]"))).toBe(true);
+    expect(out[0]).toEqual(raw[0]!);
+    expect(out[1]!.content).toBe(`[#${head.ref}] initial task`);
+  });
+});

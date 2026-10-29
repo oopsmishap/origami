@@ -87,7 +87,10 @@ describe("Host disarm proof", () => {
       hasUI: false,
     } as unknown as ExtensionContext;
 
-    beforeStart({ systemPrompt: ["test prompt"] }, mainCtx);
+    const started = beforeStart({ systemPrompt: ["test prompt"] }, mainCtx) as { systemPrompt: string[] };
+    // The host system prompt stays first and intact; the doctrine is only appended after it.
+    expect(started.systemPrompt[0]).toBe("test prompt");
+    expect(started.systemPrompt).toHaveLength(2);
 
     // 5. Verify all four settings are now false!
     expect(lookup("compaction.enabled")!.get(settings)).toBe(false);
