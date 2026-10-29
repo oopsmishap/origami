@@ -229,6 +229,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
                 const c = rt.candidates.pending;
                 candidate = {
                   id: c.id,
+                  tier: c.spec.tier ?? 1,
                   range: c.spec.range,
                   topic: c.spec.topic,
                   summary: c.spec.summary,
@@ -502,7 +503,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
               if (!topic || !summary) return jsonError(400, "edit requires topic and summary");
               spec = { ...spec, topic, summary };
             }
-            const result = rt.engine.executeFold({ folds: [spec], tier: 1 });
+            const result = rt.engine.executeFold({ folds: [spec], tier: spec.tier ?? 1 });
             store.pending = null;
             if (!result.ok) return jsonError(400, result.error);
             registry.emit("fold", sessionId, { res: result });
@@ -2064,12 +2065,29 @@ function renderDashboardHtml(): string {
                 <input type="number" id="cfg-hydrationMaxBlocks" class="search-input" style="width:100%" min="1" max="5">
               </div>
             </div>
+            <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
               <input type="checkbox" id="cfg-refTags" style="margin-top:2px;">
               <div>
                 <div style="font-size:12.5px;font-weight:500;">Message Reference Tags</div>
                 <div style="font-size:11px;color:var(--text-secondary);">Prefix outbound user and tool results with [#mNNNNN] tags for deterministic citation.</div>
               </div>
             </label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div>
+                <label style="display:block;font-size:11.5px;font-weight:500;margin-bottom:4px;">Macro-Compaction</label>
+                <select id="cfg-macroCompaction" class="chip" style="width:100%;max-width:none;border-radius:6px;padding:6px 10px;">
+                  <option value="auto">auto (autonomous background consolidation)</option>
+                  <option value="review">review (queue candidate for review)</option>
+                  <option value="off">off (disabled)</option>
+                </select>
+                <div style="font-size:10.5px;color:var(--text-muted);margin-top:2px;">Autonomous background consolidation of mature blocks into Tier 2.</div>
+              </div>
+              <div>
+                <label style="display:block;font-size:11.5px;font-weight:500;margin-bottom:4px;">Min Blocks to Consolidate</label>
+                <input type="number" id="cfg-macroCompactionMinBlocks" class="search-input" style="width:100%" min="2" max="8">
+                <div style="font-size:10.5px;color:var(--text-muted);margin-top:2px;">Minimum mature blocks required before consolidation triggers.</div>
+              </div>
+            </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
               <div>
                 <label style="display:block;font-size:11.5px;font-weight:500;margin-bottom:4px;">Cooldown (turns)</label>
@@ -2893,7 +2911,7 @@ function renderDashboardHtml(): string {
           const pct = c.tokensBefore > 0 ? Math.round((saved / c.tokensBefore) * 100) : 0;
           candHtml += '<div class="cand-card" id="cand-card-' + escapeHtml(c.id) + '">' +
             '<div class="cand-header">' +
-              '<span class="cand-badge">Speculative Draft</span>' +
+              '<span class="cand-badge">' + ((c.tier || 1) > 1 ? 'Tier ' + c.tier + ' Distillation' : 'Speculative Draft') + '</span>' +
               '<span class="mono" style="color:var(--accent-cyan);font-size:11px;">#' + escapeHtml(c.id) + ' · ' + escapeHtml(c.range || '') + '</span>' +
             '</div>' +
             '<div id="cand-view-' + escapeHtml(c.id) + '">' +
@@ -3279,6 +3297,8 @@ function renderDashboardHtml(): string {
       if ($('cfg-refTags')) $('cfg-refTags').checked = Boolean(cfg.refTags);
       if ($('cfg-paybackHorizonTurns')) $('cfg-paybackHorizonTurns').value = cfg.paybackHorizonTurns != null ? cfg.paybackHorizonTurns : 6;
       if ($('cfg-language')) $('cfg-language').value = cfg.language || 'preserve';
+      if ($('cfg-macroCompaction')) $('cfg-macroCompaction').value = cfg.macroCompaction || 'auto';
+      if ($('cfg-macroCompactionMinBlocks')) $('cfg-macroCompactionMinBlocks').value = cfg.macroCompactionMinBlocks != null ? cfg.macroCompactionMinBlocks : 3;
     }
 
     function selectPreset(preset) {
@@ -3292,14 +3312,20 @@ function renderDashboardHtml(): string {
         if ($('cfg-growthStep')) { $('cfg-growthStep').value = 50000; $('cfg-val-growthStep').textContent = '50,000'; }
         if ($('cfg-compressibleFloor')) { $('cfg-compressibleFloor').value = 22500; $('cfg-val-compressibleFloor').textContent = '22,500'; }
         if ($('cfg-emergencyFillPct')) { $('cfg-emergencyFillPct').value = 85; $('cfg-val-emergencyFillPct').textContent = '85%'; }
+        if ($('cfg-macroCompaction')) $('cfg-macroCompaction').value = 'auto';
+        if ($('cfg-macroCompactionMinBlocks')) $('cfg-macroCompactionMinBlocks').value = 3;
       } else if (preset === 'lean') {
         if ($('cfg-growthStep')) { $('cfg-growthStep').value = 25000; $('cfg-val-growthStep').textContent = '25,000'; }
         if ($('cfg-compressibleFloor')) { $('cfg-compressibleFloor').value = 15000; $('cfg-val-compressibleFloor').textContent = '15,000'; }
         if ($('cfg-emergencyFillPct')) { $('cfg-emergencyFillPct').value = 75; $('cfg-val-emergencyFillPct').textContent = '75%'; }
+        if ($('cfg-macroCompaction')) $('cfg-macroCompaction').value = 'auto';
+        if ($('cfg-macroCompactionMinBlocks')) $('cfg-macroCompactionMinBlocks').value = 2;
       } else if (preset === 'relaxed') {
         if ($('cfg-growthStep')) { $('cfg-growthStep').value = 80000; $('cfg-val-growthStep').textContent = '80,000'; }
         if ($('cfg-compressibleFloor')) { $('cfg-compressibleFloor').value = 40000; $('cfg-val-compressibleFloor').textContent = '40,000'; }
         if ($('cfg-emergencyFillPct')) { $('cfg-emergencyFillPct').value = 90; $('cfg-val-emergencyFillPct').textContent = '90%'; }
+        if ($('cfg-macroCompaction')) $('cfg-macroCompaction').value = 'review';
+        if ($('cfg-macroCompactionMinBlocks')) $('cfg-macroCompactionMinBlocks').value = 4;
       }
     }
 
@@ -3315,6 +3341,8 @@ function renderDashboardHtml(): string {
         const hydrationMaxBlocks = Number($('cfg-hydrationMaxBlocks')?.value || 2);
         const refTags = Boolean($('cfg-refTags')?.checked);
         const cooldownTurns = Number($('cfg-cooldownTurns')?.value || 2);
+        const macroCompaction = $('cfg-macroCompaction')?.value || 'auto';
+        const macroCompactionMinBlocks = Number($('cfg-macroCompactionMinBlocks')?.value || 3);
 
         const payload = {
           preset,
@@ -3326,6 +3354,8 @@ function renderDashboardHtml(): string {
           hydrationMode,
           hydrationMaxBlocks,
           refTags,
+          macroCompaction,
+          macroCompactionMinBlocks,
           paybackHorizonTurns,
           language,
           save: Boolean(saveToDisk),

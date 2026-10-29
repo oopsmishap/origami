@@ -7,7 +7,7 @@ import { getAgentDir, settings } from "@oh-my-pi/pi-coding-agent";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { countTokens, Encoding as NativeEncoding } from "@oh-my-pi/pi-natives";
 import { join } from "node:path";
-import { candidateRanges, formatCandidate, generateCandidate, isCandidateRequest, liveCandidate } from "./candidates.ts";
+import { candidateRanges, candidateWork, formatCandidate, generateCandidate, isCandidateRequest, liveCandidate } from "./candidates.ts";
 import { recordToolTelemetry } from "./telemetry.ts";
 import { handleRecallToolResult } from "./federation/recall-hook.ts";
 import { loadOrigamiConfig, saveConfigFile } from "./config-load.ts";
@@ -376,33 +376,55 @@ export default function origamiExtension(api: ExtensionAPI): void {
     return handleRecallToolResult(event, sessionId, record.runtime);
   });
 
-  // Speculative folds (opt-in): draft one candidate in a side turn once a turn ends.
+  // Speculative folds & Autonomous Macro-Compaction: draft or consolidate in a side turn once a turn ends.
   api.on("turn_end", (_event, ctx) => {
     const { record, rt } = getOrInitRuntime(ctx);
     rt.sync();
     rt.engine.onTurnEnd();
-    if (!record.config.speculativeFolds || ctx.agent.kind !== "main" || isSubagentDormant(ctx, record.config)) return;
-    const run = ctx.runEphemeralTurn?.bind(ctx);
-    if (!run || rt.candidates.inFlight || rt.candidates.pending) return;
-    const ranges = candidateRanges(rt.engine, rt.candidates);
-    if (!ranges) return;
+    const canRun = Boolean(
+      ctx.runEphemeralTurn &&
+      (record.config.speculativeFolds || record.config.macroCompaction !== "off") &&
+      ctx.agent.kind === "main" &&
+      !isSubagentDormant(ctx, record.config),
+    );
+    if (!canRun) return;
+    const run = ctx.runEphemeralTurn!.bind(ctx);
+    if (rt.candidates.inFlight || rt.candidates.pending) return;
+    const work = candidateWork(rt.engine, rt.candidates);
+    if (!work) return;
     const t0 = performance.now();
     void generateCandidate(
       rt.engine,
       rt.candidates,
       run,
-      ranges,
-      (error) => {
-        recordToolTelemetry(rt, {
-          tool: "fold_candidate_gen",
-          durationMs: performance.now() - t0,
-          ok: false,
-          error,
-          inputSummary: ranges.map((r) => `${r.start}..${r.end}`).join(","),
-          outputSummary: "candidate discarded",
-        });
+      work,
+      {
+        onAutoApplied: (outcome, candidate) => {
+          recordToolTelemetry(rt, {
+            tool: "macro_compaction",
+            durationMs: performance.now() - t0,
+            ok: true,
+            inputSummary: candidate.spec.range,
+            outputSummary: `consolidated ${candidate.spec.range} into ${outcome.blocks.map((b) => b.id).join(", ")} (-${formatStatusTokens(outcome.tokensReclaimed)})`,
+          });
+          registry.emit("fold", record.sessionId, outcome);
+          refreshStatusChip(record.sessionId);
+        },
+        onFailure: (error) => {
+          recordToolTelemetry(rt, {
+            tool: work.kind === "consolidation" ? "macro_compaction" : "fold_candidate_gen",
+            durationMs: performance.now() - t0,
+            ok: false,
+            error,
+            inputSummary:
+              work.kind === "consolidation"
+                ? work.consolidation.blocks.map((b) => b.id).join(",")
+                : work.ranges.map((r) => `${r.start}..${r.end}`).join(","),
+            outputSummary: "candidate discarded",
+          });
+        },
+        beforeBuild: () => rt.sync(),
       },
-      () => rt.sync(),
     );
   });
 
@@ -567,6 +589,7 @@ export default function origamiExtension(api: ExtensionAPI): void {
             `  • Payback horizon: ${cfg.paybackHorizonTurns} turns`,
             `  • Language: ${cfg.language}`,
             `  • JIT Hydration: ${cfg.hydration ? "enabled" : "disabled"} (${cfg.hydrationMode}, max ${cfg.hydrationMaxBlocks} blocks)`,
+            `  • Macro-compaction: ${cfg.macroCompaction} (min ${cfg.macroCompactionMinBlocks ?? 3} blocks)`,
             `Run '/fold config preset <balanced|lean|relaxed>' or '/fold config set <key> <val>'`,
           ];
           if (ctx.hasUI) ctx.ui.notify(lines.join("\n"), "info");

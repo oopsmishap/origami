@@ -263,7 +263,7 @@ export function registerTools(
         if (!topic || !summary) return report("edit needs topic and summary", false, "edit rejected");
         spec = { ...spec, topic, summary };
       }
-      const result = rt.engine.executeFold({ folds: [spec], tier: 1 });
+      const result = rt.engine.executeFold({ folds: [spec], tier: spec.tier ?? 1 });
       store.pending = null;
       if (!result.ok) return report(`error: ${result.error}`, false, "candidate fold rejected");
       recordFoldSuccess(rt.sessionId);

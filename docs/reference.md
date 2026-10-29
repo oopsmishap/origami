@@ -38,6 +38,7 @@ Origami enforces structural safety checks before committing any context changes:
 - Plan-aware retrieval: Full-text search extracts active tasks and planning state from the recent message window, boosting relevant candidate blocks above unrelated matches.
 - Semantic task boundary slicing: Candidate range detection slices uncompressed history along natural developer milestones (git commit deliverables, test suite passes, completed tasks, and clean user-turn endpoints), ensuring candidate ranges encapsulate cohesive units of work rather than arbitrary message windows.
 - Just-In-Time reactive hydration: When an agent touches files, symbols, errors, or commits recorded in earlier folded history, Origami reactively hydrates the exact pinned decisions, constraints, and interface contracts into ephemeral tail context for the turn. This eliminates the need for manual retrieval tool calls without invalidating the prompt-cache prefix.
+- Autonomous macro-compaction: When mature Tier 1 blocks accumulate (defined by `macroCompactionMinBlocks` and `blockMatureFolds`), Origami consolidates them into Tier 2 distillations in the background. In `auto` mode, valid candidates execute autonomously without interrupting the agent or user; in `review` mode, candidates queue for one-click approval in the Web UI dashboard or terminal.
 Origami tracks the long-term economics of context management:
 
 - Archived Stored: Raw message tokens preserved in local SQLite storage.

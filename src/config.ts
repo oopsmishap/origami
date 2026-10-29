@@ -54,6 +54,10 @@ export interface OrigamiConfig {
   hydrationMaxRecords: number;
   /** Hydration detail level: "decisions" (ledger only), "full" (ledger + summary excerpts + ghost pointers), or "pointers". */
   hydrationMode: "decisions" | "full" | "pointers";
+  /** Autonomous background consolidation of mature Tier 1 blocks into Tier 2: "auto" executes silently, "review" places candidate in queue, "off" disables. */
+  macroCompaction: "auto" | "review" | "off";
+  /** Minimum mature Tier 1 blocks required before autonomous macro-compaction triggers. */
+  macroCompactionMinBlocks: number;
 }
 
 type PresetKeys =
@@ -69,7 +73,9 @@ type PresetKeys =
   | "minFoldBenefitWindowPct"
   | "blockMatureFolds"
   | "minFoldFillPct"
-  | "minFoldFillCapTokens";
+  | "minFoldFillCapTokens"
+  | "macroCompaction"
+  | "macroCompactionMinBlocks";
 
 export const PRESETS: Record<Preset, Pick<OrigamiConfig, PresetKeys>> = {
   balanced: {
@@ -86,6 +92,8 @@ export const PRESETS: Record<Preset, Pick<OrigamiConfig, PresetKeys>> = {
     blockMatureFolds: 2,
     minFoldFillPct: 0.45,
     minFoldFillCapTokens: 160000,
+    macroCompaction: "auto",
+    macroCompactionMinBlocks: 3,
   },
   lean: {
     growthStep: 20000,
@@ -101,6 +109,8 @@ export const PRESETS: Record<Preset, Pick<OrigamiConfig, PresetKeys>> = {
     blockMatureFolds: 1,
     minFoldFillPct: 0.3,
     minFoldFillCapTokens: 100000,
+    macroCompaction: "auto",
+    macroCompactionMinBlocks: 2,
   },
   relaxed: {
     growthStep: 100000,
@@ -116,6 +126,8 @@ export const PRESETS: Record<Preset, Pick<OrigamiConfig, PresetKeys>> = {
     blockMatureFolds: 3,
     minFoldFillPct: 0.55,
     minFoldFillCapTokens: 200000,
+    macroCompaction: "review",
+    macroCompactionMinBlocks: 4,
   },
 };
 
@@ -172,6 +184,7 @@ const NON_NEGATIVE_INT_KEYS: Record<string, true> = {
   cooldownTurns: true,
   hydrationMaxBlocks: true,
   hydrationMaxRecords: true,
+  macroCompactionMinBlocks: true,
 };
 
 /** Fractions in [0, 1): 0 disables the feature. */
@@ -267,6 +280,13 @@ export function applyOverrides(base: OrigamiConfig, raw: unknown, file: string):
         throw new ConfigError(file, `invalid hydrationMode: ${String(value)}`);
       }
       out.hydrationMode = value;
+      continue;
+    }
+    if (key === "macroCompaction") {
+      if (value !== "auto" && value !== "review" && value !== "off") {
+        throw new ConfigError(file, `invalid macroCompaction: ${String(value)}`);
+      }
+      out.macroCompaction = value;
       continue;
     }
     throw new ConfigError(file, `unknown config key: ${key}`);

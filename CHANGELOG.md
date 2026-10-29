@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0 — 2026-10-30
+
+### Features & Improvements
+- **Autonomous macro-compaction (Tier 1 to Tier 2 consolidation)**: Closes the architectural loop on hierarchical compression. When multiple mature Tier 1 blocks accumulate in active context (configured by `macroCompactionMinBlocks`, default 3; and `blockMatureFolds`, default 2), Origami synthesizes a unified Tier 2 distillation in an ephemeral background side turn. In `auto` mode (default in `balanced` and `lean` presets), Origami validates the candidate against structural pre-commit invariants and net-shrink requirements, executes the fold autonomously, records telemetry, and emits live updates without agent or user intervention. In `review` mode (default in `relaxed`), candidates enter the pending queue for one-click review in the Web UI dashboard or approval via `fold_candidate`.
+- **Configurable macro-compaction policies**: Added `macroCompaction: "auto" | "review" | "off"` and `macroCompactionMinBlocks: number` to `OrigamiConfig`, with preset defaults:
+  - `balanced`: `macroCompaction: "auto"`, `macroCompactionMinBlocks: 3`
+  - `lean`: `macroCompaction: "auto"`, `macroCompactionMinBlocks: 2`
+  - `relaxed`: `macroCompaction: "review"`, `macroCompactionMinBlocks: 4`
+- **Surface controls & Web UI candidate tiers**: Web UI Settings panel (`#settings`) and `/fold config` command now expose macro-compaction controls and minimum block thresholds. The Web UI Candidate card dynamically renders `Tier 2 Distillation` badges for consolidation drafts alongside `Speculative Draft` for raw message folds.
+- **Just-In-Time reactive hydration**: Fully integrated dynamic ghost pointers, constraint prioritization, and manifest matching into production turns, eliminating model retrieval failures across long-lived sessions.
+
+### Safety & Correctness
+- Multi-tier candidate staleness: Distillation candidates verify that all child blocks remain active and unconsumed before applying. Unfolding or consuming any child block automatically marks the candidate stale.
+- Preserved anchor attribution: Autonomous distillations inherit the maximum anchor of their consumed children rather than resetting the frontier anchor, ensuring uncompressed turn growth continues to be tracked accurately.
+- Net-shrink enforcement: Autonomous consolidations must strictly reduce summary token mass; drafts that fail the net-shrink gate are discarded cleanly.
+
 ## 0.4.2 — 2026-10-30
 
 ### Features & Improvements
