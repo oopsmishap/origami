@@ -7,3 +7,4 @@ node_modules
 .*.woff2
 .preview*
 .tmp*
+.bench_workspace*

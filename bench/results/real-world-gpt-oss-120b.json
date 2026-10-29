@@ -1,0 +1,123 @@
+{
+  "options": {
+    "sessionPath": "C:/Users/mishap/.omp/agent/sessions/--H--projects-_mishap_-origami--/2026-10-28T18-40-20-551Z_01a183d0-2c47-752f-8671-8ee42d97abc3.jsonl",
+    "model": "openai/gpt-oss-120b:free",
+    "apiKey": "[REDACTED]",
+    "milestones": [
+      40
+    ],
+    "preset": "balanced",
+    "windowTokens": 131072,
+    "jsonPath": "bench/results/real-world-gpt-oss-120b.json",
+    "markdownPath": "bench/results/real-world-gpt-oss-120b.md"
+  },
+  "milestones": [
+    {
+      "requestIndex": 40,
+      "rawCumulativeTokens": 43261,
+      "baselineContextTokens": 43202,
+      "origamiContextTokens": 14937,
+      "compressionRatio": 2.8922809131686416,
+      "activeFolds": {
+        "t1": 2,
+        "t2": 0,
+        "t3": 0
+      },
+      "probes": [
+        {
+          "probeId": "repo-and-tools",
+          "probeName": "Repo Target & Tools Exclusion",
+          "baseline": {
+            "score": 1,
+            "tokens": 80510,
+            "cachedTokens": 48,
+            "latencyMs": 8066,
+            "cost": 0.00242988,
+            "responsePreview": "We need to answer: \"What specific GitHub repository and organization was Origami instructed to be pushed to, and what was the strict rule specified re"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 24348,
+            "cachedTokens": 64,
+            "latencyMs": 12418,
+            "cost": 0.000839087,
+            "responsePreview": "**GitHub destination**  - **Organization:** `oh‑my‑pi`   - **Repository:** `github.com/oh‑my‑pi/origami` (the *origami* project lives under the `oh‑my"
+          }
+        },
+        {
+          "probeId": "telemetry-bug",
+          "probeName": "Telemetry Percentage Bug Fix",
+          "baseline": {
+            "score": 1,
+            "tokens": 80509,
+            "cachedTokens": 48,
+            "latencyMs": 19179,
+            "cost": 0.00253185,
+            "responsePreview": "**The bug** – The Web UI’s “Context Occupancy” indicator showed absurd values such as **900 %** or **1100 %** (e.g. “237 / 1.0 M tokens”). The numbers"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 24334,
+            "cachedTokens": 0,
+            "latencyMs": 15005,
+            "cost": 0.000992328,
+            "responsePreview": "**What the bug was**  The Web UI’s “WINDOW OCCUPANCY” display was showing absurd numbers like **900 %** or **1100 %** even though the engine’s `occupa"
+          }
+        },
+        {
+          "probeId": "trajectory-port",
+          "probeName": "Trajectory Visualization Port",
+          "baseline": {
+            "score": 1,
+            "tokens": 80507,
+            "cachedTokens": 80448,
+            "latencyMs": 18694,
+            "cost": 0.00132849,
+            "responsePreview": "**Visualization that was port‑ported**  The *“context‑window‑over‑time”* trajectory that lives in `../../_public_/billion‑context` – a two‑panel chart"
+          },
+          "origami": {
+            "score": 0.5,
+            "tokens": 24345,
+            "cachedTokens": 0,
+            "latencyMs": 17892,
+            "cost": 0.00085035,
+            "responsePreview": "**Visualization that was port‑ported**  The *“context‑window‑over‑time”* trajectory chart that lives in **`../../_public_/billion‑context`** – the sam"
+          }
+        },
+        {
+          "probeId": "agent-neutrality",
+          "probeName": "Agent Generality & Branding",
+          "baseline": {
+            "score": 0.5,
+            "tokens": 80504,
+            "cachedTokens": 80448,
+            "latencyMs": 11541,
+            "cost": 0.00128055,
+            "responsePreview": "The transcript contains **no explicit instruction from the user** about how Origami’s branding, logos, or social‑media references should (or should no"
+          },
+          "origami": {
+            "score": 0.5,
+            "tokens": 24342,
+            "cachedTokens": 48,
+            "latencyMs": 15720,
+            "cost": 0.00083904,
+            "responsePreview": "The user never gave a direct, explicit command about how **Origami’s branding, logos, or social links should (or shouldn’t) reference “omp” or “tern.”"
+          }
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "resolvedModel": "openai/gpt-oss-120b",
+    "totalMilestones": 1,
+    "meanBaselineAcc": 87.5,
+    "meanOrigamiAcc": 75,
+    "baselineTotalCost": 0.00757077,
+    "origamiTotalCost": 0.003520805,
+    "costSavingsPct": 53.5,
+    "meanBaselineTokens": 80508,
+    "meanOrigamiTokens": 24342,
+    "tokenReductionPct": 69.8,
+    "meanOrigamiCacheHitPct": 0.1
+  }
+}

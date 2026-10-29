@@ -32,6 +32,32 @@ Metrics include peak and mean context, constraint survival, fact recall, cache h
 
 Reference result: lean preset, 1,200 turns, 64K window, seed 7. Mass promotion peaked at 33.5K context and 8.7% of baseline input cost with two Tier 2 merges. Growth promotion peaked at 41.9K and 10.4% with no merge. Both retained all constraints with zero lost facts and zero invariant violations.
 
+## Real-world long-context benchmark
+
+`bun run bench:real-world` evaluates Origami against an uncompressed baseline on authentic session history using live model APIs. See [Real-world benchmark report](benchmark.md) for methodology and empirical results.
+
+```bash
+bun bench/web-server.ts --port 4142
+bun bench/real-world.ts --model nvidia/nemotron-3.5-super-vl:free --preset balanced
+```
+
+## Multi-strategy agentic benchmark
+
+`bun run bench:agentic` evaluates real-world compaction strategies (`origami`, `soft`, `handover`, `shake`, `sliding-window`) across 4 task modes (`programming`, `research`, `general`, `memory`) and 4 context intensity scales (`low`: 20 turns, `medium`: 60 turns, `high`: 150 turns, `insane`: 300 turns).
+
+All runs execute inside a sandboxed workspace with boundary enforcement and egress locks pinned to the configured LLM endpoint.
+
+```bash
+# Fast offline smoke test across all strategies
+bun run bench:agentic:smoke
+
+# Live execution with streaming web dashboard on port 4143
+bun run bench:agentic:web --mode programming --scale low --strategy all
+
+# Specific scenario and scale headless
+bun bench/agentic/runner.ts --mode research --scale medium --strategy origami,soft,handover
+```
+
 ## Session replay
 
 `bun run replay` replays real omp session journals through the engine, deterministically and offline (no model calls). Tokens are estimated as characters / 4; cache hits are simulated from the common prefix with the previous request, cold after `cacheTtlMs` of idle time.

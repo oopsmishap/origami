@@ -21,7 +21,11 @@
     "replay": "bun bench/replay.ts",
     "replay:smoke": "bun bench/replay.ts --session tests/fixtures/replay-session.jsonl --mode simulated --policy both",
     "replay:matrix": "bun bench/replay.ts --session tests/fixtures/replay-session.jsonl --preset all --policy both",
-    "bench:billion": "bun bench/billion.ts"
+    "bench:billion": "bun bench/billion.ts",
+    "bench:real-world": "bun bench/real-world.ts",
+    "bench:agentic": "bun bench/agentic/runner.ts",
+    "bench:agentic:smoke": "bun bench/agentic/runner.ts --mode programming --scale low --strategy all --mock",
+    "bench:agentic:web": "bun bench/agentic/runner.ts --web"
   },
   "peerDependencies": {
     "@oh-my-pi/pi-coding-agent": ">=18.6.0",

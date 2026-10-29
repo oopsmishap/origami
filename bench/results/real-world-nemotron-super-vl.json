@@ -1,0 +1,846 @@
+{
+  "status": "completed",
+  "model": "nvidia/nemotron-3.5-super-vl:free",
+  "preset": "balanced",
+  "windowTokens": 1000000,
+  "currentTurn": 327,
+  "totalTurns": 327,
+  "rawTokens": 436606,
+  "baselineTokens": 444890,
+  "origamiTokens": 63755,
+  "compressionRatio": 7,
+  "activeBlocks": {
+    "t1": 10,
+    "t2": 0,
+    "t3": 0
+  },
+  "ghostPointers": [
+    "b1 (Origami & oh-my-pi UI/TUI/Tern/Web audit and bug root causes)",
+    "b2 (Occupancy bug root-cause & billion-context trajectory request)",
+    "b3 (Billion-context trajectory port & engine telemetry overhaul)",
+    "b4 (First-party omp TUI, Tern, Web UI & typecheck pass)",
+    "b5 (Chromium visual smoke verification, UI polish & README prep)",
+    "b6 (User-facing GitHub README authoring & verification)",
+    "b7 (GitHub repo push & avoid-ai-writing audit of README.md)",
+    "b8 (Logo concept selection & failed hand-drawn wordmark draft)",
+    "b9 (Brand assets overhaul, agent-agnostic banner & social preview)",
+    "b10 (Fix Context Trajectory popup overflow in Tern workbench)"
+  ],
+  "milestones": [
+    {
+      "requestIndex": 40,
+      "milestoneIndex": 40,
+      "rawCumulativeTokens": 43261,
+      "rawTokens": 43261,
+      "baselineTokens": 43183,
+      "baselineContextTokens": 43183,
+      "origamiTokens": 14885,
+      "origamiContextTokens": 14885,
+      "ratio": 2.9,
+      "compressionRatio": 2.9,
+      "activeFolds": {
+        "t1": 2,
+        "t2": 0,
+        "t3": 0
+      },
+      "probes": [
+        {
+          "probeId": "repo-and-tools",
+          "probeName": "Repo Target & Tools Exclusion",
+          "baseline": {
+            "score": 1,
+            "tokens": 89920,
+            "latencyMs": 9345,
+            "responsePreview": "The user is asking a specific question about GitHub repository details and a rule regarding shipping the `tools/` directory, based on what appears to be instructions given to \"Origami\" in a previous c"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 27284,
+            "cachedTokens": 26016,
+            "latencyMs": 6143,
+            "responsePreview": "This information is not present in the provided conversation context. The discussion covers Origami's UI/TUI/Tern/Web redesign, occupancy/telemetry bugs, trajectory graph porting from `../../_public_/"
+          }
+        },
+        {
+          "probeId": "telemetry-bug",
+          "probeName": "Telemetry Percentage Bug Fix",
+          "baseline": {
+            "score": 1,
+            "tokens": 89923,
+            "latencyMs": 9078,
+            "responsePreview": "The user is asking about a specific issue reported with the Web UI showing 900% or 1100% context occupancy, and how the occupancy percentage calculation was corrected. Based on the transcript investig"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 27287,
+            "cachedTokens": 26016,
+            "latencyMs": 5809,
+            "responsePreview": "The user is asking about a specific bug reported in the Web UI where context occupancy was showing 900% or 1100% instead of a proper percentage. They want to know: 1. What issue was reported 2. How th"
+          }
+        },
+        {
+          "probeId": "trajectory-port",
+          "probeName": "Trajectory Visualization Port",
+          "baseline": {
+            "score": 1,
+            "tokens": 89917,
+            "latencyMs": 9330,
+            "responsePreview": "The user is asking a specific question: \"What visualization was ported from billion-context into Origami's TUI and WebUI, and how were trajectory bars bounded and scaled?\"  Looking at the conversation"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 27281,
+            "cachedTokens": 26016,
+            "latencyMs": 6462,
+            "responsePreview": "The user is asking a specific question about what visualization was ported from billion-context into Origami's TUI and WebUI, and how trajectory bars were bounded and scaled. I need to recall/combine "
+          }
+        },
+        {
+          "probeId": "agent-neutrality",
+          "probeName": "Agent Generality & Branding",
+          "baseline": {
+            "score": 0.5,
+            "tokens": 89916,
+            "latencyMs": 9222,
+            "responsePreview": "The user is asking about explicit instructions regarding Origami branding, logos, and socials - specifically whether they should mention \"omp\" or \"tern\".  Let me review the conversation history to see"
+          },
+          "origami": {
+            "score": 0.5,
+            "tokens": 27280,
+            "cachedTokens": 26016,
+            "latencyMs": 6570,
+            "responsePreview": "The user is asking about explicit instructions regarding Origami branding, logos, and socials - specifically whether they should mention \"omp\" or \"tern\".  Let me look back through the conversation his"
+          }
+        }
+      ]
+    },
+    {
+      "requestIndex": 100,
+      "milestoneIndex": 100,
+      "rawCumulativeTokens": 168515,
+      "rawTokens": 168515,
+      "baselineTokens": 167408,
+      "baselineContextTokens": 167408,
+      "origamiTokens": 27903,
+      "origamiContextTokens": 27903,
+      "ratio": 6,
+      "compressionRatio": 6,
+      "activeFolds": {
+        "t1": 4,
+        "t2": 0,
+        "t3": 0
+      },
+      "probes": [
+        {
+          "probeId": "repo-and-tools",
+          "probeName": "Repo Target & Tools Exclusion",
+          "baseline": {
+            "score": 1,
+            "tokens": 309145,
+            "latencyMs": 4835,
+            "responsePreview": "I don't see any information about a GitHub repository, organization, or rules regarding shipping the `tools/` directory in the visible conversation history or transcript provided.  The context shown f"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 51397,
+            "cachedTokens": 47696,
+            "latencyMs": 3212,
+            "responsePreview": "The user is asking about a specific GitHub repository and organization that Origami was instructed to be pushed to, and a strict rule regarding shipping the tools/ directory. This appears to be asking"
+          }
+        },
+        {
+          "probeId": "telemetry-bug",
+          "probeName": "Telemetry Percentage Bug Fix",
+          "baseline": {
+            "score": 1,
+            "tokens": 309148,
+            "latencyMs": 3680,
+            "responsePreview": "The user is asking about a specific issue reported with the Web UI showing 900% or 1100% context occupancy, and how it was corrected. I need to find evidence of this in the transcript/context.  Let me"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 51400,
+            "cachedTokens": 47696,
+            "latencyMs": 3088,
+            "responsePreview": "The user is asking about a specific bug reported in the conversation: Web UI showing 900% or 1100% context occupancy, and how the occupancy percentage calculation was corrected.  From the compressed c"
+          }
+        },
+        {
+          "probeId": "trajectory-port",
+          "probeName": "Trajectory Visualization Port",
+          "baseline": {
+            "score": 1,
+            "tokens": 309142,
+            "latencyMs": 4630,
+            "responsePreview": "The user is asking a specific question about what visualization was ported from billion-context into Origami's TUI and WebUI, and how trajectory bars were bounded and scaled. I need to find this infor"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 51394,
+            "cachedTokens": 47696,
+            "latencyMs": 3107,
+            "responsePreview": "The user is asking about a visualization ported from `billion-context` into `origami`'s TUI and WebUI, specifically how trajectory bars were bounded and scaled.  From the conversation context (the com"
+          }
+        },
+        {
+          "probeId": "agent-neutrality",
+          "probeName": "Agent Generality & Branding",
+          "baseline": {
+            "score": 0.5,
+            "tokens": 309141,
+            "latencyMs": 3892,
+            "responsePreview": "The user is asking: \"What explicit instructions did the user give regarding whether Origami branding, logos, and socials should mention omp or tern specifically?\"  I need to review the conversation tr"
+          },
+          "origami": {
+            "score": 0.5,
+            "tokens": 51393,
+            "cachedTokens": 47696,
+            "latencyMs": 3341,
+            "responsePreview": "The user is asking about explicit instructions regarding Origami branding, logos, and socials mentioning omp or tern specifically.  Let me review the conversation context to find any such instructions"
+          }
+        }
+      ]
+    },
+    {
+      "requestIndex": 200,
+      "milestoneIndex": 200,
+      "rawCumulativeTokens": 310311,
+      "rawTokens": 310311,
+      "baselineTokens": 315779,
+      "baselineContextTokens": 315779,
+      "origamiTokens": 96003,
+      "origamiContextTokens": 96003,
+      "ratio": 3.3,
+      "compressionRatio": 3.3,
+      "activeFolds": {
+        "t1": 7,
+        "t2": 0,
+        "t3": 0
+      },
+      "probes": [
+        {
+          "probeId": "repo-and-tools",
+          "probeName": "Repo Target & Tools Exclusion",
+          "baseline": {
+            "score": 1,
+            "tokens": 602698,
+            "latencyMs": 7654,
+            "responsePreview": "The user is asking two specific factual questions about the conversation history:  1. What specific GitHub repository and organization was Origami instructed to be pushed to? 2. What was the strict ru"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 190188,
+            "cachedTokens": 186448,
+            "latencyMs": 4349,
+            "responsePreview": "The user is asking two specific questions based on the compressed conversation history:  1. What specific GitHub repository and organization was Origami instructed to be pushed to? 2. What was the str"
+          }
+        },
+        {
+          "probeId": "telemetry-bug",
+          "probeName": "Telemetry Percentage Bug Fix",
+          "baseline": {
+            "score": 1,
+            "tokens": 602701,
+            "latencyMs": 7084,
+            "responsePreview": "The user is asking about a specific issue that was addressed in this long coding session: the Web UI displaying \"900%\" or \"1100%\" context occupancy, and how it was fixed.  Let me recall from the sessi"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 190191,
+            "cachedTokens": 186448,
+            "latencyMs": 4198,
+            "responsePreview": "The user is asking about a specific issue reported earlier in the conversation: the Web UI showing 900% or 1100% context occupancy, and how it was corrected.  This is a factual question about the conv"
+          }
+        },
+        {
+          "probeId": "trajectory-port",
+          "probeName": "Trajectory Visualization Port",
+          "baseline": {
+            "score": 1,
+            "tokens": 602695,
+            "latencyMs": 6951,
+            "responsePreview": "The user is asking about the visualization ported from billion-context into Origami's TUI and WebUI, and how trajectory bars were bounded and scaled. Let me recall from the transcript:  1. The user or"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 190185,
+            "cachedTokens": 186448,
+            "latencyMs": 3602,
+            "responsePreview": "The user is asking a question about the technical content from the earlier compressed conversation sections: specifically what visualization was ported from billion-context into Origami's TUI and WebU"
+          }
+        },
+        {
+          "probeId": "agent-neutrality",
+          "probeName": "Agent Generality & Branding",
+          "baseline": {
+            "score": 0.5,
+            "tokens": 602694,
+            "latencyMs": 7350,
+            "responsePreview": "The user is asking about explicit instructions regarding branding mentions. Let me recall the conversation:  1. The user's first message was about UI/TUI/Tern integration looking bad, needing better p"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 190184,
+            "cachedTokens": 186448,
+            "latencyMs": 3866,
+            "responsePreview": "The user is asking about explicit instructions regarding whether Origami branding, logos, and socials should mention omp or tern specifically. I need to recall the conversation context.  Looking at th"
+          }
+        }
+      ]
+    },
+    {
+      "requestIndex": 300,
+      "milestoneIndex": 300,
+      "rawCumulativeTokens": 415778,
+      "rawTokens": 415778,
+      "baselineTokens": 424024,
+      "baselineContextTokens": 424024,
+      "origamiTokens": 122000,
+      "origamiContextTokens": 122000,
+      "ratio": 3.5,
+      "compressionRatio": 3.5,
+      "activeFolds": {
+        "t1": 8,
+        "t2": 0,
+        "t3": 0
+      },
+      "probes": [
+        {
+          "probeId": "repo-and-tools",
+          "probeName": "Repo Target & Tools Exclusion",
+          "baseline": {
+            "score": 0,
+            "tokens": 424024,
+            "latencyMs": 0,
+            "responsePreview": "Error: The operation timed out."
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 230469,
+            "cachedTokens": 0,
+            "latencyMs": 17659,
+            "responsePreview": "The user is asking two specific factual questions based on the conversation history:  1. What specific GitHub repository and organization was Origami instructed to be pushed to? 2. What was the strict"
+          }
+        },
+        {
+          "probeId": "telemetry-bug",
+          "probeName": "Telemetry Percentage Bug Fix",
+          "baseline": {
+            "score": 0.5,
+            "tokens": 424024,
+            "latencyMs": 0,
+            "responsePreview": "Error: The operation timed out."
+          },
+          "origami": {
+            "score": 0.5,
+            "tokens": 230472,
+            "cachedTokens": 0,
+            "latencyMs": 18625,
+            "responsePreview": "The user is asking about a specific bug reported in the Web UI showing 900% or 1100% context occupancy, and how it was corrected. Let me look through the context provided in the compressed conversatio"
+          }
+        },
+        {
+          "probeId": "trajectory-port",
+          "probeName": "Trajectory Visualization Port",
+          "baseline": {
+            "score": 0,
+            "tokens": 424024,
+            "latencyMs": 0,
+            "responsePreview": "Error: The operation timed out."
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 230466,
+            "cachedTokens": 0,
+            "latencyMs": 17241,
+            "responsePreview": "The user is asking about what visualization was ported from billion-context into Origami's TUI and WebUI, and how trajectory bars were bounded and scaled.  Let me look through the compressed context t"
+          }
+        },
+        {
+          "probeId": "agent-neutrality",
+          "probeName": "Agent Generality & Branding",
+          "baseline": {
+            "score": 0,
+            "tokens": 424024,
+            "latencyMs": 0,
+            "responsePreview": "Error: The operation timed out."
+          },
+          "origami": {
+            "score": 0,
+            "tokens": 230465,
+            "cachedTokens": 0,
+            "latencyMs": 16508,
+            "responsePreview": "Based on the conversation, the user gave two explicit instructions:  1. **Agent-"
+          }
+        }
+      ]
+    }
+  ],
+  "trajectory": [
+    {
+      "turn": 5,
+      "raw": 5119,
+      "baseline": 4887,
+      "origami": 5062,
+      "folds": 0
+    },
+    {
+      "turn": 10,
+      "raw": 9339,
+      "baseline": 8689,
+      "origami": 9050,
+      "folds": 0
+    },
+    {
+      "turn": 15,
+      "raw": 17751,
+      "baseline": 17547,
+      "origami": 7897,
+      "folds": 1
+    },
+    {
+      "turn": 20,
+      "raw": 20761,
+      "baseline": 20705,
+      "origami": 11240,
+      "folds": 1
+    },
+    {
+      "turn": 25,
+      "raw": 33473,
+      "baseline": 33413,
+      "origami": 4721,
+      "folds": 2
+    },
+    {
+      "turn": 30,
+      "raw": 36273,
+      "baseline": 36350,
+      "origami": 7782,
+      "folds": 2
+    },
+    {
+      "turn": 35,
+      "raw": 40840,
+      "baseline": 40842,
+      "origami": 12440,
+      "folds": 2
+    },
+    {
+      "turn": 40,
+      "raw": 43261,
+      "baseline": 43183,
+      "origami": 14885,
+      "folds": 2
+    },
+    {
+      "turn": 45,
+      "raw": 58183,
+      "baseline": 58027,
+      "origami": 29771,
+      "folds": 2
+    },
+    {
+      "turn": 50,
+      "raw": 84987,
+      "baseline": 85045,
+      "origami": 56865,
+      "folds": 2
+    },
+    {
+      "turn": 55,
+      "raw": 86344,
+      "baseline": 86386,
+      "origami": 58248,
+      "folds": 2
+    },
+    {
+      "turn": 60,
+      "raw": 127743,
+      "baseline": 127740,
+      "origami": 99702,
+      "folds": 2
+    },
+    {
+      "turn": 65,
+      "raw": 131754,
+      "baseline": 131537,
+      "origami": 103574,
+      "folds": 2
+    },
+    {
+      "turn": 70,
+      "raw": 134737,
+      "baseline": 134777,
+      "origami": 106908,
+      "folds": 2
+    },
+    {
+      "turn": 75,
+      "raw": 136848,
+      "baseline": 136852,
+      "origami": 109032,
+      "folds": 2
+    },
+    {
+      "turn": 80,
+      "raw": 145317,
+      "baseline": 144968,
+      "origami": 5208,
+      "folds": 4
+    },
+    {
+      "turn": 85,
+      "raw": 154428,
+      "baseline": 152416,
+      "origami": 12739,
+      "folds": 4
+    },
+    {
+      "turn": 90,
+      "raw": 159849,
+      "baseline": 159272,
+      "origami": 19647,
+      "folds": 4
+    },
+    {
+      "turn": 95,
+      "raw": 165609,
+      "baseline": 163951,
+      "origami": 24377,
+      "folds": 4
+    },
+    {
+      "turn": 100,
+      "raw": 168515,
+      "baseline": 167408,
+      "origami": 27903,
+      "folds": 4
+    },
+    {
+      "turn": 105,
+      "raw": 171531,
+      "baseline": 170709,
+      "origami": 31248,
+      "folds": 4
+    },
+    {
+      "turn": 110,
+      "raw": 177999,
+      "baseline": 175883,
+      "origami": 36482,
+      "folds": 4
+    },
+    {
+      "turn": 115,
+      "raw": 182792,
+      "baseline": 182038,
+      "origami": 42694,
+      "folds": 4
+    },
+    {
+      "turn": 120,
+      "raw": 186262,
+      "baseline": 185941,
+      "origami": 7877,
+      "folds": 5
+    },
+    {
+      "turn": 125,
+      "raw": 197754,
+      "baseline": 196742,
+      "origami": 18738,
+      "folds": 5
+    },
+    {
+      "turn": 130,
+      "raw": 202890,
+      "baseline": 201335,
+      "origami": 7641,
+      "folds": 6
+    },
+    {
+      "turn": 135,
+      "raw": 204585,
+      "baseline": 204332,
+      "origami": 10698,
+      "folds": 6
+    },
+    {
+      "turn": 140,
+      "raw": 208208,
+      "baseline": 215992,
+      "origami": 22426,
+      "folds": 6
+    },
+    {
+      "turn": 145,
+      "raw": 217127,
+      "baseline": 224911,
+      "origami": 31425,
+      "folds": 6
+    },
+    {
+      "turn": 150,
+      "raw": 232120,
+      "baseline": 239830,
+      "origami": 19477,
+      "folds": 7
+    },
+    {
+      "turn": 155,
+      "raw": 233732,
+      "baseline": 241636,
+      "origami": 21326,
+      "folds": 7
+    },
+    {
+      "turn": 160,
+      "raw": 235990,
+      "baseline": 243781,
+      "origami": 23513,
+      "folds": 7
+    },
+    {
+      "turn": 165,
+      "raw": 238152,
+      "baseline": 245704,
+      "origami": 25476,
+      "folds": 7
+    },
+    {
+      "turn": 170,
+      "raw": 254100,
+      "baseline": 261999,
+      "origami": 41855,
+      "folds": 7
+    },
+    {
+      "turn": 175,
+      "raw": 274314,
+      "baseline": 277421,
+      "origami": 57330,
+      "folds": 7
+    },
+    {
+      "turn": 180,
+      "raw": 281621,
+      "baseline": 285340,
+      "origami": 65303,
+      "folds": 7
+    },
+    {
+      "turn": 185,
+      "raw": 284438,
+      "baseline": 292437,
+      "origami": 72481,
+      "folds": 7
+    },
+    {
+      "turn": 190,
+      "raw": 286799,
+      "baseline": 294812,
+      "origami": 74899,
+      "folds": 7
+    },
+    {
+      "turn": 195,
+      "raw": 299503,
+      "baseline": 299502,
+      "origami": 79640,
+      "folds": 7
+    },
+    {
+      "turn": 200,
+      "raw": 310311,
+      "baseline": 315779,
+      "origami": 96003,
+      "folds": 7
+    },
+    {
+      "turn": 205,
+      "raw": 318640,
+      "baseline": 322186,
+      "origami": 102464,
+      "folds": 7
+    },
+    {
+      "turn": 210,
+      "raw": 324053,
+      "baseline": 332113,
+      "origami": 29222,
+      "folds": 8
+    },
+    {
+      "turn": 215,
+      "raw": 328705,
+      "baseline": 336722,
+      "origami": 33894,
+      "folds": 8
+    },
+    {
+      "turn": 220,
+      "raw": 334342,
+      "baseline": 342447,
+      "origami": 39664,
+      "folds": 8
+    },
+    {
+      "turn": 225,
+      "raw": 337268,
+      "baseline": 345292,
+      "origami": 42553,
+      "folds": 8
+    },
+    {
+      "turn": 230,
+      "raw": 345457,
+      "baseline": 353660,
+      "origami": 50975,
+      "folds": 8
+    },
+    {
+      "turn": 235,
+      "raw": 349794,
+      "baseline": 357937,
+      "origami": 55314,
+      "folds": 8
+    },
+    {
+      "turn": 240,
+      "raw": 356976,
+      "baseline": 364445,
+      "origami": 61885,
+      "folds": 8
+    },
+    {
+      "turn": 245,
+      "raw": 359505,
+      "baseline": 367702,
+      "origami": 65187,
+      "folds": 8
+    },
+    {
+      "turn": 250,
+      "raw": 367370,
+      "baseline": 373970,
+      "origami": 71500,
+      "folds": 8
+    },
+    {
+      "turn": 255,
+      "raw": 370570,
+      "baseline": 378757,
+      "origami": 76331,
+      "folds": 8
+    },
+    {
+      "turn": 260,
+      "raw": 371887,
+      "baseline": 380092,
+      "origami": 77710,
+      "folds": 8
+    },
+    {
+      "turn": 265,
+      "raw": 374074,
+      "baseline": 382252,
+      "origami": 79915,
+      "folds": 8
+    },
+    {
+      "turn": 270,
+      "raw": 378979,
+      "baseline": 387203,
+      "origami": 84911,
+      "folds": 8
+    },
+    {
+      "turn": 275,
+      "raw": 382766,
+      "baseline": 391015,
+      "origami": 88768,
+      "folds": 8
+    },
+    {
+      "turn": 280,
+      "raw": 386600,
+      "baseline": 394874,
+      "origami": 92672,
+      "folds": 8
+    },
+    {
+      "turn": 285,
+      "raw": 393318,
+      "baseline": 401576,
+      "origami": 99417,
+      "folds": 8
+    },
+    {
+      "turn": 290,
+      "raw": 399343,
+      "baseline": 407512,
+      "origami": 105398,
+      "folds": 8
+    },
+    {
+      "turn": 295,
+      "raw": 404535,
+      "baseline": 412771,
+      "origami": 110702,
+      "folds": 8
+    },
+    {
+      "turn": 300,
+      "raw": 415778,
+      "baseline": 424024,
+      "origami": 122000,
+      "folds": 8
+    },
+    {
+      "turn": 305,
+      "raw": 424278,
+      "baseline": 431069,
+      "origami": 129087,
+      "folds": 8
+    },
+    {
+      "turn": 310,
+      "raw": 428565,
+      "baseline": 436741,
+      "origami": 134802,
+      "folds": 8
+    },
+    {
+      "turn": 315,
+      "raw": 431136,
+      "baseline": 439322,
+      "origami": 137427,
+      "folds": 8
+    },
+    {
+      "turn": 320,
+      "raw": 432560,
+      "baseline": 440776,
+      "origami": 138924,
+      "folds": 8
+    },
+    {
+      "turn": 325,
+      "raw": 436267,
+      "baseline": 444602,
+      "origami": 63449,
+      "folds": 10
+    }
+  ],
+  "summary": {
+    "model": "nvidia/nemotron-3.5-super-vl:free",
+    "totalMilestones": 4,
+    "meanBaselineAcc": 68.8,
+    "meanOrigamiAcc": 84.4,
+    "meanBaselineTokens": 356446,
+    "meanOrigamiTokens": 124834,
+    "tokenReductionPct": 65,
+    "meanOrigamiCacheHitPct": 71.5
+  }
+}

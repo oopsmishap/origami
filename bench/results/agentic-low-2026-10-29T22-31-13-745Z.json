@@ -1,0 +1,1742 @@
+[
+  {
+    "mode": "programming",
+    "scale": "low",
+    "strategy": "origami",
+    "model": "openrouter/nvidia/nemotron-3.5-super-vl:free",
+    "totalTurns": 20,
+    "completedTurns": 20,
+    "rubricScore": 1,
+    "rubricPassedCount": 15,
+    "rubricTotalCount": 15,
+    "rubricDetails": [
+      {
+        "id": "canvas",
+        "name": "Canvas & Game Loop",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "maze",
+        "name": "Maze Grid & Walls",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "pacman",
+        "name": "Pac-Man Entity & Movement",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "pellets",
+        "name": "Pellet Eating & Scoring",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "power-pellets",
+        "name": "Power Pellets & Energizer",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "ghost-blinky",
+        "name": "Blinky Ghost AI (Shadow/Chaser)",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "ghost-pinky",
+        "name": "Pinky Ghost AI (Speedy/Ambusher)",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "ghost-inky",
+        "name": "Inky Ghost AI (Bashful/Flanker)",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "ghost-clyde",
+        "name": "Clyde Ghost AI (Pokey/Wanderer)",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "lives",
+        "name": "Lives & Respawn System",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "levels",
+        "name": "Level Progression & Speedup",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "high-score",
+        "name": "High Score & LocalStorage",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "audio",
+        "name": "Sound Effects (Web Audio API)",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "controls",
+        "name": "Arrow Keys & WASD Controls",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "game-over",
+        "name": "Game Over & Victory Screens",
+        "weight": 1,
+        "passed": true
+      }
+    ],
+    "probeScore": 1,
+    "probePassedCount": 2,
+    "probeTotalCount": 2,
+    "probeDetails": [
+      {
+        "probeId": "pacman-files-turn-10",
+        "turnIndex": 10,
+        "passed": true,
+        "expectedKeywords": [
+          "index.html",
+          "game.js",
+          "style.css"
+        ],
+        "matchedKeywords": [
+          "index.html",
+          "game.js",
+          "style.css"
+        ],
+        "missingKeywords": [],
+        "responseSnippet": "Recall Answer: The requested information contains index.html, game.js, style.css."
+      },
+      {
+        "probeId": "pacman-files-turn-18",
+        "turnIndex": 18,
+        "passed": true,
+        "expectedKeywords": [
+          "index.html",
+          "game.js",
+          "style.css"
+        ],
+        "matchedKeywords": [
+          "index.html",
+          "game.js",
+          "style.css"
+        ],
+        "missingKeywords": [],
+        "responseSnippet": "Recall Answer: The requested information contains index.html, game.js, style.css."
+      }
+    ],
+    "tokens": {
+      "totalPrompt": 27900,
+      "totalCompletion": 2110,
+      "totalCached": 20700,
+      "cacheHitPct": 74.19354838709677,
+      "billedTokens": 9310,
+      "peakContextTokens": 1142,
+      "finalContextTokens": 1142
+    },
+    "cost": 0,
+    "wallClockMs": 33,
+    "trajectory": [
+      {
+        "turnIndex": 1,
+        "userMessage": "Let's build a feature-rich Pac-Man arcade game. Start by creating `index.html`, `style.css`, and the core `game.js` canvas setup with maze grid rendering.",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 323,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 2,
+        "userMessage": "Now add Pac-Man player controls (arrow keys and WASD) with smooth tile-aligned movement and collision against maze walls.",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 367,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 3,
+        "userMessage": "Add pellets and power pellets scattered through the maze corridors. Pac-Man should eat them to increase score.",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 408,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 4,
+        "userMessage": "Implement the four ghost personalities: Blinky (direct chase), Pinky (ambush ahead), Inky (flanking vector), and Clyde (scatter when close).",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 456,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 5,
+        "userMessage": "Add Power Pellet frightened mode: ghosts turn blue, become vulnerable to being eaten, and yield bonus points.",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 497,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 6,
+        "userMessage": "Implement player lives (3 lives), death animation, ghost respawn chamber, and game over screen.",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 534,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 7,
+        "userMessage": "Add level progression: clearing all pellets advances to the next level with increased ghost speed.",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 572,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 8,
+        "userMessage": "Add local storage high-score persistence and visual score/lives HUD.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 600,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 9,
+        "userMessage": "Add Web Audio API sound effects for waka-waka pellet chomping, ghost eating, and game start.",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 636,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 10,
+        "userMessage": "Recall check: In turn 1, what exact core files were we instructed to create for this project?",
+        "assistantSnippet": "Recall Answer: The requested information contains index.html, game.js, style.css.",
+        "isProbe": true,
+        "probeOutcome": {
+          "probeId": "pacman-files-turn-10",
+          "turnIndex": 10,
+          "passed": true,
+          "expectedKeywords": [
+            "index.html",
+            "game.js",
+            "style.css"
+          ],
+          "matchedKeywords": [
+            "index.html",
+            "game.js",
+            "style.css"
+          ],
+          "missingKeywords": [],
+          "responseSnippet": "Recall Answer: The requested information contains index.html, game.js, style.css."
+        },
+        "promptTokens": 1200,
+        "completionTokens": 80,
+        "cachedTokens": 900,
+        "contextTokens": 681,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 11,
+        "userMessage": "Now add Pac-Man player controls (arrow keys and WASD) with smooth tile-aligned movement and collision against maze walls. (Pass 2 polish and bugfix)",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 731,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 12,
+        "userMessage": "Add pellets and power pellets scattered through the maze corridors. Pac-Man should eat them to increase score. (Pass 2 polish and bugfix)",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 779,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 13,
+        "userMessage": "Implement the four ghost personalities: Blinky (direct chase), Pinky (ambush ahead), Inky (flanking vector), and Clyde (scatter when close). (Pass 2 polish and bugfix)",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 834,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 14,
+        "userMessage": "Add Power Pellet frightened mode: ghosts turn blue, become vulnerable to being eaten, and yield bonus points. (Pass 2 polish and bugfix)",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 881,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 15,
+        "userMessage": "Implement player lives (3 lives), death animation, ghost respawn chamber, and game over screen. (Pass 2 polish and bugfix)",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 925,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 16,
+        "userMessage": "Add level progression: clearing all pellets advances to the next level with increased ghost speed. (Pass 2 polish and bugfix)",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 970,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 17,
+        "userMessage": "Add local storage high-score persistence and visual score/lives HUD. (Pass 2 polish and bugfix)",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 1005,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 18,
+        "userMessage": "Recall check: In turn 1, what exact core files were we instructed to create for this project?",
+        "assistantSnippet": "Recall Answer: The requested information contains index.html, game.js, style.css.",
+        "isProbe": true,
+        "probeOutcome": {
+          "probeId": "pacman-files-turn-18",
+          "turnIndex": 18,
+          "passed": true,
+          "expectedKeywords": [
+            "index.html",
+            "game.js",
+            "style.css"
+          ],
+          "matchedKeywords": [
+            "index.html",
+            "game.js",
+            "style.css"
+          ],
+          "missingKeywords": [],
+          "responseSnippet": "Recall Answer: The requested information contains index.html, game.js, style.css."
+        },
+        "promptTokens": 1200,
+        "completionTokens": 80,
+        "cachedTokens": 900,
+        "contextTokens": 1050,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 19,
+        "userMessage": "Optimize rendering and add touch/swipe controls for mobile support alongside keyboard controls. (Pass 2 polish and bugfix)",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 1092,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 20,
+        "userMessage": "Now add Pac-Man player controls (arrow keys and WASD) with smooth tile-aligned movement and collision against maze walls. (Pass 3 polish and bugfix)",
+        "assistantSnippet": "Implemented core Pac-Man engine features in game.js.",
+        "isProbe": false,
+        "promptTokens": 1500,
+        "completionTokens": 120,
+        "cachedTokens": 1100,
+        "contextTokens": 1142,
+        "cacheHitRate": 0.7333333333333333,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      }
+    ],
+    "strategyTelemetry": {
+      "strategy": "origami",
+      "compactionEvents": 0,
+      "toolInvocations": 0,
+      "tokensReclaimed": 0,
+      "activeBlocks": {
+        "t1": 0,
+        "t2": 0,
+        "t3": 0
+      },
+      "details": {
+        "growthSinceFold": 973,
+        "hydrationInjected": false
+      }
+    },
+    "verificationSummary": "Pac-Man Feature Checklist:\n[x] Canvas & Game Loop\n[x] Maze Grid & Walls\n[x] Pac-Man Entity & Movement\n[x] Pellet Eating & Scoring\n[x] Power Pellets & Energizer\n[x] Blinky Ghost AI (Shadow/Chaser)\n[x] Pinky Ghost AI (Speedy/Ambusher)\n[x] Inky Ghost AI (Bashful/Flanker)\n[x] Clyde Ghost AI (Pokey/Wanderer)\n[x] Lives & Respawn System\n[x] Level Progression & Speedup\n[x] High Score & LocalStorage\n[x] Sound Effects (Web Audio API)\n[x] Arrow Keys & WASD Controls\n[x] Game Over & Victory Screens",
+    "workspaceDir": "C:\\Users\\mishap\\AppData\\Local\\Temp\\origami-agentic-bench-oUDz8T"
+  },
+  {
+    "mode": "research",
+    "scale": "low",
+    "strategy": "origami",
+    "model": "openrouter/nvidia/nemotron-3.5-super-vl:free",
+    "totalTurns": 20,
+    "completedTurns": 20,
+    "rubricScore": 1,
+    "rubricPassedCount": 6,
+    "rubricTotalCount": 6,
+    "rubricDetails": [
+      {
+        "id": "vuln-sql",
+        "name": "SQL Injection in User Search",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "vuln-traversal",
+        "name": "Path Traversal in File Downloader",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "vuln-rce",
+        "name": "Command Injection in Image Converter",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "vuln-secret",
+        "name": "Hardcoded API Key and JWT Secret",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "vuln-xss",
+        "name": "Stored XSS in Comment Handler",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "vuln-auth",
+        "name": "Broken Object Level Authorization (BOLA)",
+        "weight": 1,
+        "passed": true
+      }
+    ],
+    "probeScore": 1,
+    "probePassedCount": 2,
+    "probeTotalCount": 2,
+    "probeDetails": [
+      {
+        "probeId": "vuln-jwt-secret-turn-10",
+        "turnIndex": 10,
+        "passed": true,
+        "expectedKeywords": [
+          "super-secret-production-signing-key-998811"
+        ],
+        "matchedKeywords": [
+          "super-secret-production-signing-key-998811"
+        ],
+        "missingKeywords": [],
+        "responseSnippet": "Recall Answer: The requested information contains super-secret-production-signing-key-998811."
+      },
+      {
+        "probeId": "vuln-jwt-secret-turn-17",
+        "turnIndex": 17,
+        "passed": true,
+        "expectedKeywords": [
+          "super-secret-production-signing-key-998811"
+        ],
+        "matchedKeywords": [
+          "super-secret-production-signing-key-998811"
+        ],
+        "missingKeywords": [],
+        "responseSnippet": "Recall Answer: The requested information contains super-secret-production-signing-key-998811."
+      }
+    ],
+    "tokens": {
+      "totalPrompt": 27600,
+      "totalCompletion": 1780,
+      "totalCached": 20700,
+      "cacheHitPct": 75,
+      "billedTokens": 8680,
+      "peakContextTokens": 967,
+      "finalContextTokens": 967
+    },
+    "cost": 0,
+    "wallClockMs": 15,
+    "trajectory": [
+      {
+        "turnIndex": 1,
+        "userMessage": "Begin the security audit. Use `list_files` and `grep` to inspect `src/` and map the attack surface.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 292,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 2,
+        "userMessage": "Analyze `src/db/users.js` for data access flaws and injection vulnerabilities.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 326,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 3,
+        "userMessage": "Inspect `src/api/files.js` and analyze file system interactions and path validation.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 361,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 4,
+        "userMessage": "Review `src/utils/media.js` for command execution vulnerabilities and child process safety.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 398,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 5,
+        "userMessage": "Check `src/config/auth.js` for credential handling and hardcoded secrets.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 431,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 6,
+        "userMessage": "Inspect `src/api/comments.js` for cross-site scripting and template injection.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 465,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 7,
+        "userMessage": "Review `src/api/orders.js` for authorization and access control bypasses.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 498,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 8,
+        "userMessage": "Write initial findings and proof-of-concept exploits into `AUDIT_REPORT.md`.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 531,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 9,
+        "userMessage": "Draft remediation diffs and secure coding recommendations for each identified vulnerability.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 568,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 10,
+        "userMessage": "Recall check: What hardcoded JWT_SECRET was configured in `src/config/auth.js`?",
+        "assistantSnippet": "Recall Answer: The requested information contains super-secret-production-signing-key-998811.",
+        "isProbe": true,
+        "probeOutcome": {
+          "probeId": "vuln-jwt-secret-turn-10",
+          "turnIndex": 10,
+          "passed": true,
+          "expectedKeywords": [
+            "super-secret-production-signing-key-998811"
+          ],
+          "matchedKeywords": [
+            "super-secret-production-signing-key-998811"
+          ],
+          "missingKeywords": [],
+          "responseSnippet": "Recall Answer: The requested information contains super-secret-production-signing-key-998811."
+        },
+        "promptTokens": 1200,
+        "completionTokens": 80,
+        "cachedTokens": 900,
+        "contextTokens": 612,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 11,
+        "userMessage": "Inspect `src/api/files.js` and analyze file system interactions and path validation.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 647,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 12,
+        "userMessage": "Review `src/utils/media.js` for command execution vulnerabilities and child process safety.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 684,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 13,
+        "userMessage": "Check `src/config/auth.js` for credential handling and hardcoded secrets.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 717,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 14,
+        "userMessage": "Inspect `src/api/comments.js` for cross-site scripting and template injection.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 751,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 15,
+        "userMessage": "Review `src/api/orders.js` for authorization and access control bypasses.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 784,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 16,
+        "userMessage": "Write initial findings and proof-of-concept exploits into `AUDIT_REPORT.md`.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 817,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 17,
+        "userMessage": "Recall check: What hardcoded JWT_SECRET was configured in `src/config/auth.js`?",
+        "assistantSnippet": "Recall Answer: The requested information contains super-secret-production-signing-key-998811.",
+        "isProbe": true,
+        "probeOutcome": {
+          "probeId": "vuln-jwt-secret-turn-17",
+          "turnIndex": 17,
+          "passed": true,
+          "expectedKeywords": [
+            "super-secret-production-signing-key-998811"
+          ],
+          "matchedKeywords": [
+            "super-secret-production-signing-key-998811"
+          ],
+          "missingKeywords": [],
+          "responseSnippet": "Recall Answer: The requested information contains super-secret-production-signing-key-998811."
+        },
+        "promptTokens": 1200,
+        "completionTokens": 80,
+        "cachedTokens": 900,
+        "contextTokens": 861,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 18,
+        "userMessage": "Analyze `src/db/users.js` for data access flaws and injection vulnerabilities.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 895,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 19,
+        "userMessage": "Inspect `src/api/files.js` and analyze file system interactions and path validation.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 930,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 20,
+        "userMessage": "Review `src/utils/media.js` for command execution vulnerabilities and child process safety.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 967,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      }
+    ],
+    "strategyTelemetry": {
+      "strategy": "origami",
+      "compactionEvents": 0,
+      "toolInvocations": 0,
+      "tokensReclaimed": 0,
+      "activeBlocks": {
+        "t1": 0,
+        "t2": 0,
+        "t3": 0
+      },
+      "details": {
+        "growthSinceFold": 829,
+        "hydrationInjected": false
+      }
+    },
+    "verificationSummary": "Security Audit Findings:\n[x] SQL Injection in User Search\n[x] Path Traversal in File Downloader\n[x] Command Injection in Image Converter\n[x] Hardcoded API Key and JWT Secret\n[x] Stored XSS in Comment Handler\n[x] Broken Object Level Authorization (BOLA)",
+    "workspaceDir": "C:\\Users\\mishap\\AppData\\Local\\Temp\\origami-agentic-bench-mUVgeV"
+  },
+  {
+    "mode": "general",
+    "scale": "low",
+    "strategy": "origami",
+    "model": "openrouter/nvidia/nemotron-3.5-super-vl:free",
+    "totalTurns": 20,
+    "completedTurns": 20,
+    "rubricScore": 0.3333333333333333,
+    "rubricPassedCount": 1,
+    "rubricTotalCount": 3,
+    "rubricDetails": [
+      {
+        "id": "matrix-math",
+        "name": "Matrix Module Created",
+        "weight": 1,
+        "passed": false
+      },
+      {
+        "id": "architecture-docs",
+        "name": "Architecture Documentation Updated",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "unit-tests",
+        "name": "Unit Tests Added",
+        "weight": 1,
+        "passed": false
+      }
+    ],
+    "probeScore": 1,
+    "probePassedCount": 2,
+    "probeTotalCount": 2,
+    "probeDetails": [
+      {
+        "probeId": "general-pkg-turn-10",
+        "turnIndex": 10,
+        "passed": true,
+        "expectedKeywords": [
+          "core-lib",
+          "1.0.0"
+        ],
+        "matchedKeywords": [
+          "core-lib",
+          "1.0.0"
+        ],
+        "missingKeywords": [],
+        "responseSnippet": "Recall Answer: The requested information contains core-lib, 1.0.0."
+      },
+      {
+        "probeId": "general-pkg-turn-18",
+        "turnIndex": 18,
+        "passed": true,
+        "expectedKeywords": [
+          "core-lib",
+          "1.0.0"
+        ],
+        "matchedKeywords": [
+          "core-lib",
+          "1.0.0"
+        ],
+        "missingKeywords": [],
+        "responseSnippet": "Recall Answer: The requested information contains core-lib, 1.0.0."
+      }
+    ],
+    "tokens": {
+      "totalPrompt": 24800,
+      "totalCompletion": 1500,
+      "totalCached": 18950,
+      "cacheHitPct": 76.41129032258065,
+      "billedTokens": 7350,
+      "peakContextTokens": 813,
+      "finalContextTokens": 813
+    },
+    "cost": 0,
+    "wallClockMs": 35,
+    "trajectory": [
+      {
+        "turnIndex": 1,
+        "userMessage": "Initialize the project. Add input validation and division/multiplication operations in `src/index.ts`.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 248,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 2,
+        "userMessage": "Add matrix math functions `matrixAdd` and `matrixMultiply` in `src/matrix.ts`.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 282,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 3,
+        "userMessage": "Document matrix operations in `docs/ARCHITECTURE.md` with usage examples.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 312,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 4,
+        "userMessage": "Add input vector validation in `src/validate.ts`.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 339,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 5,
+        "userMessage": "Add unit tests in `tests/matrix.test.ts`.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 361,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 6,
+        "userMessage": "Refactor error handling to use custom `MathError` class in `src/errors.ts`.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 394,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 7,
+        "userMessage": "Update `package.json` to export submodules.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 416,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 8,
+        "userMessage": "Profile matrix performance and add sparse matrix representation in `src/sparse.ts`.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 451,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 9,
+        "userMessage": "Add matrix math functions `matrixAdd` and `matrixMultiply` in `src/matrix.ts`.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 485,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 10,
+        "userMessage": "Recall check: In turn 1, what project was initialized in `package.json`?",
+        "assistantSnippet": "Recall Answer: The requested information contains core-lib, 1.0.0.",
+        "isProbe": true,
+        "probeOutcome": {
+          "probeId": "general-pkg-turn-10",
+          "turnIndex": 10,
+          "passed": true,
+          "expectedKeywords": [
+            "core-lib",
+            "1.0.0"
+          ],
+          "matchedKeywords": [
+            "core-lib",
+            "1.0.0"
+          ],
+          "missingKeywords": [],
+          "responseSnippet": "Recall Answer: The requested information contains core-lib, 1.0.0."
+        },
+        "promptTokens": 1200,
+        "completionTokens": 80,
+        "cachedTokens": 900,
+        "contextTokens": 520,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 11,
+        "userMessage": "Add input vector validation in `src/validate.ts`.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 547,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 12,
+        "userMessage": "Add unit tests in `tests/matrix.test.ts`.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 569,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 13,
+        "userMessage": "Refactor error handling to use custom `MathError` class in `src/errors.ts`.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 602,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 14,
+        "userMessage": "Update `package.json` to export submodules.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 624,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 15,
+        "userMessage": "Profile matrix performance and add sparse matrix representation in `src/sparse.ts`.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 659,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 16,
+        "userMessage": "Add matrix math functions `matrixAdd` and `matrixMultiply` in `src/matrix.ts`.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 693,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 17,
+        "userMessage": "Document matrix operations in `docs/ARCHITECTURE.md` with usage examples.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 723,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 18,
+        "userMessage": "Recall check: In turn 1, what project was initialized in `package.json`?",
+        "assistantSnippet": "Recall Answer: The requested information contains core-lib, 1.0.0.",
+        "isProbe": true,
+        "probeOutcome": {
+          "probeId": "general-pkg-turn-18",
+          "turnIndex": 18,
+          "passed": true,
+          "expectedKeywords": [
+            "core-lib",
+            "1.0.0"
+          ],
+          "matchedKeywords": [
+            "core-lib",
+            "1.0.0"
+          ],
+          "missingKeywords": [],
+          "responseSnippet": "Recall Answer: The requested information contains core-lib, 1.0.0."
+        },
+        "promptTokens": 1200,
+        "completionTokens": 80,
+        "cachedTokens": 900,
+        "contextTokens": 758,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 19,
+        "userMessage": "Add unit tests in `tests/matrix.test.ts`.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 780,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 20,
+        "userMessage": "Refactor error handling to use custom `MathError` class in `src/errors.ts`.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 813,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      }
+    ],
+    "strategyTelemetry": {
+      "strategy": "origami",
+      "compactionEvents": 0,
+      "toolInvocations": 0,
+      "tokensReclaimed": 0,
+      "activeBlocks": {
+        "t1": 0,
+        "t2": 0,
+        "t3": 0
+      },
+      "details": {
+        "growthSinceFold": 724,
+        "hydrationInjected": false
+      }
+    },
+    "verificationSummary": "General Tasks Status:\n[ ] Matrix Module\n[x] Architecture Docs\n[ ] Unit Tests",
+    "workspaceDir": "C:\\Users\\mishap\\AppData\\Local\\Temp\\origami-agentic-bench-0rJr70"
+  },
+  {
+    "mode": "memory",
+    "scale": "low",
+    "strategy": "origami",
+    "model": "openrouter/nvidia/nemotron-3.5-super-vl:free",
+    "totalTurns": 20,
+    "completedTurns": 20,
+    "rubricScore": 1,
+    "rubricPassedCount": 3,
+    "rubricTotalCount": 3,
+    "rubricDetails": [
+      {
+        "id": "replica-password",
+        "name": "Recall Needle: replica-password",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "header-invariant",
+        "name": "Recall Needle: header-invariant",
+        "weight": 1,
+        "passed": true
+      },
+      {
+        "id": "deprecation-date",
+        "name": "Recall Needle: deprecation-date",
+        "weight": 1,
+        "passed": true
+      }
+    ],
+    "probeScore": 1,
+    "probePassedCount": 3,
+    "probeTotalCount": 3,
+    "probeDetails": [
+      {
+        "probeId": "needle-staging-replica",
+        "turnIndex": 7,
+        "passed": true,
+        "expectedKeywords": [
+          "9432",
+          "Krypton-7729-Beta"
+        ],
+        "matchedKeywords": [
+          "9432",
+          "Krypton-7729-Beta"
+        ],
+        "missingKeywords": [],
+        "responseSnippet": "Recall Answer: The requested information contains 9432, Krypton-7729-Beta."
+      },
+      {
+        "probeId": "needle-header-invariant",
+        "turnIndex": 13,
+        "passed": true,
+        "expectedKeywords": [
+          "X-Origin-Zone",
+          "eu-west-1a"
+        ],
+        "matchedKeywords": [
+          "X-Origin-Zone",
+          "eu-west-1a"
+        ],
+        "missingKeywords": [],
+        "responseSnippet": "Recall Answer: The requested information contains X-Origin-Zone, eu-west-1a."
+      },
+      {
+        "probeId": "needle-deprecation-date",
+        "turnIndex": 19,
+        "passed": true,
+        "expectedKeywords": [
+          "2027-04-15"
+        ],
+        "matchedKeywords": [
+          "2027-04-15"
+        ],
+        "missingKeywords": [],
+        "responseSnippet": "Recall Answer: The requested information contains 2027-04-15."
+      }
+    ],
+    "tokens": {
+      "totalPrompt": 24600,
+      "totalCompletion": 1490,
+      "totalCached": 18800,
+      "cacheHitPct": 76.42276422764228,
+      "billedTokens": 7290,
+      "peakContextTokens": 816,
+      "finalContextTokens": 816
+    },
+    "cost": 0,
+    "wallClockMs": 10,
+    "trajectory": [
+      {
+        "turnIndex": 1,
+        "userMessage": "Notice for our configuration: The staging database port is 9432 and replica password is 'Krypton-7729-Beta'. Please update README.md with this setup note.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 261,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 2,
+        "userMessage": "Notice: Architectural invariant: all API responses must include header 'X-Origin-Zone: eu-west-1a'. Implement this in src/service.ts.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 309,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 1,
+        "cost": 0
+      },
+      {
+        "turnIndex": 3,
+        "userMessage": "Directive: The deprecation date for v1 endpoints is set to 2027-04-15 by user directive. Document this in README.md.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 349,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 4,
+        "userMessage": "Refactor src/service.ts to use dependency injection.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 376,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 5,
+        "userMessage": "Add a healthcheck endpoint returning status ok.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 399,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 6,
+        "userMessage": "Add rate limiting middleware in src/rate-limit.ts.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 426,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 7,
+        "userMessage": "Recall check: What is the staging database port and replica password given in turn 1?",
+        "assistantSnippet": "Recall Answer: The requested information contains 9432, Krypton-7729-Beta.",
+        "isProbe": true,
+        "probeOutcome": {
+          "probeId": "needle-staging-replica",
+          "turnIndex": 7,
+          "passed": true,
+          "expectedKeywords": [
+            "9432",
+            "Krypton-7729-Beta"
+          ],
+          "matchedKeywords": [
+            "9432",
+            "Krypton-7729-Beta"
+          ],
+          "missingKeywords": [],
+          "responseSnippet": "Recall Answer: The requested information contains 9432, Krypton-7729-Beta."
+        },
+        "promptTokens": 1200,
+        "completionTokens": 80,
+        "cachedTokens": 900,
+        "contextTokens": 467,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 8,
+        "userMessage": "Add logging interceptor in src/logger.ts.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 492,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 9,
+        "userMessage": "Update README.md with build and test instructions.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 516,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 10,
+        "userMessage": "Refactor src/service.ts to use dependency injection.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 543,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 11,
+        "userMessage": "Add a healthcheck endpoint returning status ok.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 566,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 12,
+        "userMessage": "Add rate limiting middleware in src/rate-limit.ts.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 593,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 13,
+        "userMessage": "Recall check: What exact header and value must all API responses include?",
+        "assistantSnippet": "Recall Answer: The requested information contains X-Origin-Zone, eu-west-1a.",
+        "isProbe": true,
+        "probeOutcome": {
+          "probeId": "needle-header-invariant",
+          "turnIndex": 13,
+          "passed": true,
+          "expectedKeywords": [
+            "X-Origin-Zone",
+            "eu-west-1a"
+          ],
+          "matchedKeywords": [
+            "X-Origin-Zone",
+            "eu-west-1a"
+          ],
+          "missingKeywords": [],
+          "responseSnippet": "Recall Answer: The requested information contains X-Origin-Zone, eu-west-1a."
+        },
+        "promptTokens": 1200,
+        "completionTokens": 80,
+        "cachedTokens": 900,
+        "contextTokens": 631,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 14,
+        "userMessage": "Add logging interceptor in src/logger.ts.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 656,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 15,
+        "userMessage": "Update README.md with build and test instructions.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 680,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 16,
+        "userMessage": "Refactor src/service.ts to use dependency injection.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 707,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 17,
+        "userMessage": "Add a healthcheck endpoint returning status ok.",
+        "assistantSnippet": "Task completed successfully and verified.",
+        "isProbe": false,
+        "promptTokens": 1000,
+        "completionTokens": 50,
+        "cachedTokens": 800,
+        "contextTokens": 730,
+        "cacheHitRate": 0.8,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 18,
+        "userMessage": "Add rate limiting middleware in src/rate-limit.ts.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 757,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 19,
+        "userMessage": "Recall check: What is the exact deprecation date set for v1 endpoints?",
+        "assistantSnippet": "Recall Answer: The requested information contains 2027-04-15.",
+        "isProbe": true,
+        "probeOutcome": {
+          "probeId": "needle-deprecation-date",
+          "turnIndex": 19,
+          "passed": true,
+          "expectedKeywords": [
+            "2027-04-15"
+          ],
+          "matchedKeywords": [
+            "2027-04-15"
+          ],
+          "missingKeywords": [],
+          "responseSnippet": "Recall Answer: The requested information contains 2027-04-15."
+        },
+        "promptTokens": 1200,
+        "completionTokens": 80,
+        "cachedTokens": 900,
+        "contextTokens": 791,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      },
+      {
+        "turnIndex": 20,
+        "userMessage": "Add logging interceptor in src/logger.ts.",
+        "assistantSnippet": "Compiled vulnerability findings into AUDIT_REPORT.md.",
+        "isProbe": false,
+        "promptTokens": 1400,
+        "completionTokens": 90,
+        "cachedTokens": 1050,
+        "contextTokens": 816,
+        "cacheHitRate": 0.75,
+        "toolCallsCount": 0,
+        "latencyMs": 0,
+        "cost": 0
+      }
+    ],
+    "strategyTelemetry": {
+      "strategy": "origami",
+      "compactionEvents": 0,
+      "toolInvocations": 0,
+      "tokensReclaimed": 0,
+      "activeBlocks": {
+        "t1": 0,
+        "t2": 0,
+        "t3": 0
+      },
+      "details": {
+        "growthSinceFold": 732,
+        "hydrationInjected": false
+      }
+    },
+    "verificationSummary": "Memory scenario: evaluated via recall probe accuracy.",
+    "workspaceDir": "C:\\Users\\mishap\\AppData\\Local\\Temp\\origami-agentic-bench-7YulId"
+  }
+]

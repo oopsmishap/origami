@@ -1,0 +1,123 @@
+{
+  "options": {
+    "sessionPath": "C:/Users/mishap/.omp/agent/sessions/--H--projects-_mishap_-origami--/2026-10-28T18-40-20-551Z_01a183d0-2c47-752f-8671-8ee42d97abc3.jsonl",
+    "model": "recursive/flint-v1.0:free",
+    "apiKey": "[REDACTED]",
+    "milestones": [
+      40
+    ],
+    "preset": "balanced",
+    "windowTokens": 262144,
+    "jsonPath": "bench/results/real-world-flint-free.json",
+    "markdownPath": "bench/results/real-world-flint-free.md"
+  },
+  "milestones": [
+    {
+      "requestIndex": 40,
+      "rawCumulativeTokens": 43261,
+      "baselineContextTokens": 43202,
+      "origamiContextTokens": 14937,
+      "compressionRatio": 2.8922809131686416,
+      "activeFolds": {
+        "t1": 2,
+        "t2": 0,
+        "t3": 0
+      },
+      "probes": [
+        {
+          "probeId": "repo-and-tools",
+          "probeName": "Repo Target & Tools Exclusion",
+          "baseline": {
+            "score": 1,
+            "tokens": 76013,
+            "cachedTokens": 0,
+            "latencyMs": 7268,
+            "cost": 0,
+            "responsePreview": "We need answer user. Need parse. We are in long session transcript. User final asks: \"What specific GitHub repository and organization was Origami ins"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 22887,
+            "cachedTokens": 0,
+            "latencyMs": 5435,
+            "cost": 0,
+            "responsePreview": "We need answer user. Need parse conversation. They ask: \"What specific GitHub repository and organization was Origami instructed to be pushed to, and "
+          }
+        },
+        {
+          "probeId": "telemetry-bug",
+          "probeName": "Telemetry Percentage Bug Fix",
+          "baseline": {
+            "score": 1,
+            "tokens": 76012,
+            "cachedTokens": 75904,
+            "latencyMs": 6048,
+            "cost": 0,
+            "responsePreview": "We need answer user. We need parse current conversation. They ask: \"What issue was reported with the Web UI displaying 900% or 1100% context occupancy"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 22886,
+            "cachedTokens": 22784,
+            "latencyMs": 5533,
+            "cost": 0,
+            "responsePreview": "We need answer based session. Need parse. User asks: \"What issue was reported with the Web UI displaying 900% or 1100% context occupancy, and how was "
+          }
+        },
+        {
+          "probeId": "trajectory-port",
+          "probeName": "Trajectory Visualization Port",
+          "baseline": {
+            "score": 1,
+            "tokens": 76009,
+            "cachedTokens": 75904,
+            "latencyMs": 6761,
+            "cost": 0,
+            "responsePreview": "We need answer user question. Need parse current conversation context. We need answer accurately based on session facts/constraints/decisions. We have"
+          },
+          "origami": {
+            "score": 1,
+            "tokens": 22883,
+            "cachedTokens": 22784,
+            "latencyMs": 5366,
+            "cost": 0,
+            "responsePreview": "Let me understand the conversation. The user is asking: \"What visualization was ported from billion-context into Origami's TUI and WebUI, and how were"
+          }
+        },
+        {
+          "probeId": "agent-neutrality",
+          "probeName": "Agent Generality & Branding",
+          "baseline": {
+            "score": 0.5,
+            "tokens": 76008,
+            "cachedTokens": 75904,
+            "latencyMs": 6650,
+            "cost": 0,
+            "responsePreview": "We need answer user. We need parse. They ask: \"What explicit instructions did the user give regarding whether Origami branding, logos, and socials sho"
+          },
+          "origami": {
+            "score": 0.5,
+            "tokens": 22882,
+            "cachedTokens": 22784,
+            "latencyMs": 8799,
+            "cost": 0,
+            "responsePreview": "We need answer user. Need parse context. They ask: \"What explicit instructions did the user give regarding whether Origami branding, logos, and social"
+          }
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "resolvedModel": "recursive/flint-v1.0:free",
+    "totalMilestones": 1,
+    "meanBaselineAcc": 87.5,
+    "meanOrigamiAcc": 87.5,
+    "baselineTotalCost": 0,
+    "origamiTotalCost": 0,
+    "costSavingsPct": 0,
+    "meanBaselineTokens": 76011,
+    "meanOrigamiTokens": 22885,
+    "tokenReductionPct": 69.9,
+    "meanOrigamiCacheHitPct": 74.7
+  }
+}
