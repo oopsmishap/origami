@@ -32,6 +32,21 @@ Metrics include peak and mean context, constraint survival, fact recall, cache h
 
 Reference result: lean preset, 1,200 turns, 64K window, seed 7. Mass promotion peaked at 33.5K context and 8.7% of baseline input cost with two Tier 2 merges. Growth promotion peaked at 41.9K and 10.4% with no merge. Both retained all constraints with zero lost facts and zero invariant violations.
 
+## Session replay
+
+`bun run replay` replays real omp session journals through the engine, deterministically and offline (no model calls). Tokens are estimated as characters / 4; cache hits are simulated from the common prefix with the previous request, cold after `cacheTtlMs` of idle time.
+
+```bash
+bun run replay -- --dir ~/.omp/agent/sessions/<project-dir> --mode simulated --json out.json
+bun run replay -- --session a.jsonl --session b.jsonl --mode recorded --no-hints
+```
+
+- `--mode simulated` (default) drops the journal's recorded folds and folds whenever the engine nudges, using an extractive digest as the summary. `--mode recorded` keeps the folds the model actually made.
+- `--preset` and `--window` (default `200000`) select the configuration; `--no-hints` disables recall hints.
+- Far-recall probes take error lines and commits from tool results and check, at checkpoints and at the end, whether facts at least 300 refs old are still in context, reachable through a recall hint, or lost.
+
+Each session prints one table row (requests, folds per tier, mean/peak context, simulated hit rate, billed units against the unfolded baseline, hints, probe outcomes, host compactions) plus a totals row.
+
 ## Release
 
 GitHub plugin installation is the supported distribution channel. For a release:

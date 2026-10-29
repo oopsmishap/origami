@@ -17,7 +17,8 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "bench": "bun bench/marathon.ts"
+    "bench": "bun bench/marathon.ts",
+    "replay": "bun bench/replay.ts"
   },
   "peerDependencies": {
     "@oh-my-pi/pi-coding-agent": ">=18.6.0",
