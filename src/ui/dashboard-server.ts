@@ -1,9 +1,12 @@
 type BunServer = ReturnType<typeof Bun.serve>;
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
-import { openDb, type DbBlockRow, type OrigamiDb } from "../persist/db.ts";
-import type { SessionRecord, SessionRegistry } from "../sessions.ts";
-import { buildCacheReport, DEFAULT_PRICE, foldEventsFromBlocks } from "../kernel/cache-report.ts";
-const TOKEN_HEADER = "X-Origami-Token";
+ import { openDb, type DbBlockRow, type OrigamiDb } from "../persist/db.ts";
+ import type { SessionRecord, SessionRegistry } from "../sessions.ts";
+ import { buildCacheReport, DEFAULT_PRICE, foldEventsFromBlocks } from "../kernel/cache-report.ts";
+import type { BlockManifest } from "../kernel/manifest.ts";
+import type { LedgerRecord } from "../kernel/types.ts";
+import { ledgerSemanticKey } from "../kernel/ledger.ts";
+ const TOKEN_HEADER = "X-Origami-Token";
 
 function randomToken(): string {
   const bytes = new Uint8Array(32);
@@ -53,7 +56,8 @@ function openUrl(targetUrl: string): void {
   }
 }
 
-function parseJsonArray(text: string): unknown[] {
+function parseJsonArray(text: string | undefined): unknown[] {
+  if (!text) return [];
   try {
     const v = JSON.parse(text) as unknown;
     return Array.isArray(v) ? v : [];
@@ -62,16 +66,29 @@ function parseJsonArray(text: string): unknown[] {
   }
 }
 
-/** Persisted block row in the client's shape (coverage string, children array). */
-function dbBlockView(row: DbBlockRow) {
-  const ranges = parseJsonArray(row.ranges) as { start: string; end: string }[];
-  return {
-    ...row,
-    coverage: ranges.map((r) => `${r.start}..${r.end}`).join(", "),
-    children: parseJsonArray(row.children) as string[],
-  };
+function parseJsonObject<T>(text: string | undefined): T | null {
+  if (!text) return null;
+  try {
+    const v = JSON.parse(text) as unknown;
+    return v && typeof v === "object" && !Array.isArray(v) ? (v as T) : null;
+  } catch {
+    return null;
+  }
 }
 
+ /** Persisted block row in the client's shape (coverage string, children array). */
+ function dbBlockView(row: DbBlockRow) {
+   const ranges = parseJsonArray(row.ranges) as { start: string; end: string }[];
+  const manifest = parseJsonObject<BlockManifest>(row.manifest);
+  const ledger = parseJsonArray(row.ledger) as LedgerRecord[];
+   return {
+     ...row,
+     coverage: ranges.map((r) => `${r.start}..${r.end}`).join(", "),
+     children: parseJsonArray(row.children) as string[],
+    manifest: manifest ?? undefined,
+    ledger: ledger.length > 0 ? ledger : undefined,
+   };
+ }
 function sessionMeta(record: SessionRecord | undefined, registry: SessionRegistry) {
   if (!record) return { session: null };
   return { session: registry.summary(record) };
@@ -195,27 +212,93 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
             return jsonError(404, `unknown session ${requested}`);
           }
 
-          // 3. Status API (ended sessions serve their last snapshot)
-          if (path === "/api/status") {
-            let report = record?.lastStatus ?? null;
-            let recommended: unknown[] = [];
-            if (rt) {
-              rt.sync();
-              report = rt.engine.status();
-              recommended = rt.engine.recommendedRanges();
-            }
-            if (!report) return jsonError(503, "no active session");
-            return Response.json({
-              sessionId,
-              ...sessionMeta(record, registry),
-              liveTokens: report.usedTokens,
-              conversationTokens: report.tokenSplit.live,
-              baselineTokens: report.tokenSplit.overhead + report.tokenSplit.system,
-              savedTokens: report.tokenSplit.foldedSavings,
-              recommended,
-              ...report,
-            });
-          }
+           // 3. Status API (ended sessions serve their last snapshot)
+           if (path === "/api/status") {
+             let report = record?.lastStatus ?? null;
+             let recommended: unknown[] = [];
+            let candidate: unknown = null;
+            let activeLedger: unknown = null;
+             if (rt) {
+               rt.sync();
+               report = rt.engine.status();
+               recommended = rt.engine.recommendedRanges();
+              if (rt.candidates?.pending) {
+                const c = rt.candidates.pending;
+                candidate = {
+                  id: c.id,
+                  range: c.spec.range,
+                  topic: c.spec.topic,
+                  summary: c.spec.summary,
+                  tokensBefore: c.tokensBefore,
+                  tokensAfter: c.tokensAfter,
+                  createdTurn: c.createdTurn,
+                };
+              }
+              const activeBlocks = rt.engine.state.tree.live();
+              const seenKeys = new Set<string>();
+              const records: LedgerRecord[] = [];
+              let totalChars = 0;
+              for (const b of activeBlocks) {
+                for (const r of b.ledger ?? []) {
+                  const key = ledgerSemanticKey(r);
+                  if (seenKeys.has(key)) continue;
+                  seenKeys.add(key);
+                  records.push(r);
+                  totalChars += r.text.length;
+                }
+              }
+              activeLedger = {
+                records,
+                totalRecords: records.length,
+                totalChars,
+                constraints: records.filter((r) => r.kind === "constraint").length,
+                decisions: records.filter((r) => r.kind === "decision").length,
+                objectives: records.filter((r) => r.kind === "objective").length,
+                intents: records.filter((r) => r.kind === "intent").length,
+              };
+            } else if (sessionId) {
+              const rows = withDb(record, (db) => db.blocksForSession(sessionId));
+              const activeRows = rows.filter((r) => r.status === "active");
+              const seenKeys = new Set<string>();
+              const records: LedgerRecord[] = [];
+              let totalChars = 0;
+              for (const row of activeRows) {
+                const list = parseJsonArray(row.ledger) as LedgerRecord[];
+                for (const r of list) {
+                  const key = ledgerSemanticKey(r);
+                  if (seenKeys.has(key)) continue;
+                  seenKeys.add(key);
+                  records.push(r);
+                  totalChars += r.text.length;
+                }
+              }
+              if (records.length > 0) {
+                activeLedger = {
+                  records,
+                  totalRecords: records.length,
+                  totalChars,
+                  constraints: records.filter((r) => r.kind === "constraint").length,
+                  decisions: records.filter((r) => r.kind === "decision").length,
+                  objectives: records.filter((r) => r.kind === "objective").length,
+                  intents: records.filter((r) => r.kind === "intent").length,
+                };
+              }
+             }
+             if (!report) return jsonError(503, "no active session");
+             return Response.json({
+               sessionId,
+               ...sessionMeta(record, registry),
+               liveTokens: report.usedTokens,
+               conversationTokens: report.tokenSplit.live,
+               baselineTokens: report.tokenSplit.overhead + report.tokenSplit.system,
+               savedTokens: report.tokenSplit.foldedSavings,
+               recommended,
+              timing: report.foldGate,
+              candidate,
+              activeLedger,
+               ...report,
+             });
+           }
 
           // 4. Blocks API (persisted rows, overlaid with the live fold tree when the session is running)
           if (path === "/api/blocks") {
@@ -223,36 +306,42 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
             if (!rt) return Response.json(rows);
             rt.sync();
             const treeMap = new Map(rt.engine.state.tree.all().map((b) => [b.id, b]));
-            const merged = rows.map((row) => {
-              const live = treeMap.get(row.block_id);
-              treeMap.delete(row.block_id);
-              if (!live) return row;
-              return {
-                ...row,
-                coverage: live.ranges.map((r) => `${r.start}..${r.end}`).join(", "),
-                children: [...live.children],
-                status: live.status,
-                consumed_by: live.consumedBy,
-              };
-            });
-            for (const leftover of treeMap.values()) {
-              merged.push({
-                session_id: sessionId,
-                block_id: leftover.id,
-                tier: leftover.tier,
-                topic: leftover.topic,
-                summary: leftover.summary,
-                body: `${leftover.topic}\n${leftover.summary}`,
-                tokens_before: leftover.tokensBefore,
-                tokens_after: leftover.tokensAfter,
-                created_at: leftover.createdAt,
-                ranges: JSON.stringify(leftover.ranges),
-                coverage: leftover.ranges.map((r) => `${r.start}..${r.end}`).join(", "),
-                children: [...leftover.children],
-                status: leftover.status,
-                consumed_by: leftover.consumedBy,
-              });
-            }
+             const merged = rows.map((row) => {
+               const live = treeMap.get(row.block_id);
+               treeMap.delete(row.block_id);
+               if (!live) return row;
+               return {
+                 ...row,
+                 coverage: live.ranges.map((r) => `${r.start}..${r.end}`).join(", "),
+                 children: [...live.children],
+                 status: live.status,
+                 consumed_by: live.consumedBy,
+                manifest: live.manifest ?? row.manifest,
+                ledger: live.ledger ?? row.ledger,
+                missing: live.missing,
+               };
+             });
+             for (const leftover of treeMap.values()) {
+               merged.push({
+                 session_id: sessionId,
+                 block_id: leftover.id,
+                 tier: leftover.tier,
+                 topic: leftover.topic,
+                 summary: leftover.summary,
+                 body: `${leftover.topic}\n${leftover.summary}`,
+                 tokens_before: leftover.tokensBefore,
+                 tokens_after: leftover.tokensAfter,
+                 created_at: leftover.createdAt,
+                 ranges: JSON.stringify(leftover.ranges),
+                 coverage: leftover.ranges.map((r) => `${r.start}..${r.end}`).join(", "),
+                 children: [...leftover.children],
+                 status: leftover.status,
+                 consumed_by: leftover.consumedBy,
+                manifest: leftover.manifest,
+                ledger: leftover.ledger,
+                missing: leftover.missing,
+               });
+             }
             merged.sort((a, b) => a.created_at - b.created_at);
             return Response.json(merged);
           }
@@ -1116,6 +1205,118 @@ function renderDashboardHtml(): string {
       word-break: break-word;
       color: var(--text-primary);
     }
+    .drawer-section {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border-subtle);
+    }
+    .drawer-section-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .chip-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .chip {
+      background: var(--bg-hover);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 3px 8px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-secondary);
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .chip-err {
+      border-color: rgba(248, 81, 73, 0.4);
+      color: var(--accent-red);
+      background: rgba(248, 81, 73, 0.08);
+    }
+    .chip-commit {
+      border-color: rgba(56, 189, 248, 0.4);
+      color: var(--accent-cyan);
+      background: rgba(56, 189, 248, 0.08);
+    }
+    .chip-tool {
+      border-color: rgba(168, 85, 247, 0.4);
+      color: #c084fc;
+      background: rgba(168, 85, 247, 0.08);
+    }
+    .ledger-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .ledger-item {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 8px 10px;
+      font-size: 11.5px;
+      line-height: 1.45;
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+    }
+    .ledger-badge {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      font-family: var(--font-mono);
+    }
+    .badge-constraint { background: rgba(248, 81, 73, 0.15); color: var(--accent-red); border: 1px solid rgba(248, 81, 73, 0.35); }
+    .badge-decision   { background: rgba(56, 189, 248, 0.15); color: var(--accent-cyan); border: 1px solid rgba(56, 189, 248, 0.35); }
+    .badge-objective  { background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.35); }
+    .badge-intent     { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.35); }
+    .gate-pill {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .gate-open { background: rgba(34, 197, 94, 0.15); color: var(--accent-green); border: 1px solid rgba(34, 197, 94, 0.35); }
+    .gate-holding { background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.35); }
+    .cand-card {
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      background: rgba(56, 189, 248, 0.05);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .cand-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .cand-badge {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      background: var(--accent-cyan);
+      color: #000;
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
     .drawer-foot {
       padding: 12px 20px;
       border-top: 1px solid var(--border-default);
@@ -1339,10 +1540,23 @@ function renderDashboardHtml(): string {
           <div class="card">
             <div class="card-h">
               <span class="card-title">Compressible Candidates</span>
-              <span class="card-hint" id="cand-floor-hint">Floor: —</span>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span id="gate-indicator" class="gate-pill gate-holding">Gate: Holding</span>
+                <span class="card-hint" id="cand-floor-hint">Floor: —</span>
+              </div>
             </div>
             <div class="card-b" id="cand-body">
               <div class="card-hint">No candidate ranges above floor yet.</div>
+            </div>
+          </div>
+          <!-- Active Pinned Ledger & Constraints Card -->
+          <div class="card" id="active-ledger-card">
+            <div class="card-h">
+              <span class="card-title">Active Pinned Ledger &amp; Constraints</span>
+              <span class="card-hint" id="active-ledger-hint">0 records · 0 chars</span>
+            </div>
+            <div class="card-b" id="active-ledger-body">
+              <div class="card-hint">No active pinned constraints or decisions recorded.</div>
             </div>
           </div>
         </div>
@@ -1618,7 +1832,9 @@ function renderDashboardHtml(): string {
     <div class="drawer-body">
       <div class="drawer-kv" id="drawer-kv"></div>
       <div class="drawer-summary" id="drawer-summary"></div>
-    </div>
+      <div id="drawer-manifest"></div>
+      <div id="drawer-ledger"></div>
+      <div id="drawer-missing"></div>
     <div class="drawer-foot" id="drawer-foot"></div>
   </aside>
 
@@ -2367,17 +2583,47 @@ function renderDashboardHtml(): string {
         $('kpi-growth-sub').textContent = 'Step: ' + formatK(step) + ' (' + gPct + '%) · Pool: ' + formatK(st.compressibleTokens || 0);
         $('growth-fill').style.width = gPct + '%';
 
+        // Timing Gate Indicator
+        const gate = st.timing || st.foldGate;
+        const gateEl = $('gate-indicator');
+        if (gateEl && gate) {
+          if (gate.allowed) {
+            gateEl.className = 'gate-pill gate-open';
+            gateEl.textContent = 'Gate: Open' + (gate.boundary ? ' (' + gate.boundary + ')' : '');
+          } else {
+            gateEl.className = 'gate-pill gate-holding';
+            const reason = gate.blockedBy === 'fill-floor' ? 'Floor ' + formatK(st.liveTokens || 0) + '/' + formatK(gate.fillFloorTokens || 0)
+              : gate.blockedBy === 'payback' ? 'Payback (' + (gate.breakevenTurns ?? '?') + 't)'
+              : (gate.blockedBy || 'Holding');
+            gateEl.textContent = 'Gate: ' + reason;
+          }
+        }
+
+        // Compressible Candidates & Pending Speculative Candidate
         $('cand-floor-hint').textContent = 'Floor: ' + formatK(st.compressibleFloor || 0);
         const recs = st.recommended || [];
-        $('cand-body').innerHTML = recs.length === 0
-          ? '<div class="card-hint">No compressible message spans above floor yet.</div>'
-          : '<div class="comp-list">' + recs.slice(0, 6).map((r) => {
-              const sNum = parseInt(String(r.start || '').replace(/\\D+/g, ''), 10) || 0;
-              const eNum = parseInt(String(r.end || '').replace(/\\D+/g, ''), 10) || 0;
-              const msgCnt = eNum >= sNum && sNum > 0 ? (eNum - sNum + 1) : 1;
-              return '<div class="comp-row"><span class="mono" style="color:var(--accent-cyan)">' + escapeHtml(r.start + '..' + r.end) + '</span>'
-                + '<span class="comp-val">' + formatK(r.tokens) + 't · ' + msgCnt + ' msg' + (msgCnt === 1 ? '' : 's') + '</span></div>';
-            }).join('') + '</div>';
+        let candHtml = '';
+        if (st.candidate) {
+          const c = st.candidate;
+          candHtml += '<div class="cand-card">' +
+            '<div class="cand-header"><span class="cand-badge">Speculative Draft</span><span class="mono" style="color:var(--accent-cyan);font-size:11px;">#' + escapeHtml(c.range || '') + '</span></div>' +
+            '<div style="font-weight:600;font-size:12px;margin-bottom:4px;">' + escapeHtml(c.topic || '') + '</div>' +
+            '<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:6px;line-height:1.4;">' + escapeHtml(c.summary || '') + '</div>' +
+            '<div class="mono" style="font-size:11px;color:var(--text-muted);">' + formatK(c.tokensBefore || 0) + 't → ' + formatK(c.tokensAfter || 0) + 't (-' + formatK(Math.max(0, (c.tokensBefore || 0) - (c.tokensAfter || 0))) + 't)</div>' +
+            '</div>';
+        }
+        if (recs.length === 0 && !st.candidate) {
+          candHtml += '<div class="card-hint">No compressible message spans above floor yet.</div>';
+        } else if (recs.length > 0) {
+          candHtml += '<div class="comp-list">' + recs.slice(0, 6).map((r) => {
+            const sNum = parseInt(String(r.start || '').replace(/\D+/g, ''), 10) || 0;
+            const eNum = parseInt(String(r.end || '').replace(/\D+/g, ''), 10) || 0;
+            const msgCnt = eNum >= sNum && sNum > 0 ? (eNum - sNum + 1) : 1;
+            return '<div class="comp-row"><span class="mono" style="color:var(--accent-cyan)">' + escapeHtml(r.start + '..' + r.end) + '</span>'
+              + '<span class="comp-val">' + formatK(r.tokens) + 't · ' + msgCnt + ' msg' + (msgCnt === 1 ? '' : 's') + '</span></div>';
+          }).join('') + '</div>';
+        }
+        $('cand-body').innerHTML = candHtml;
 
         // 3. Vault & Reclaimed KPI
         const v = st.vault || {};
@@ -2413,6 +2659,26 @@ function renderDashboardHtml(): string {
         if (vSav) vSav.textContent = formatK(savedTokens) + 't';
         const vSavSub = $('vault-saved-sub');
         if (vSavSub) vSavSub.textContent = v.paybackStatus ? v.paybackStatus : 'Net prompt tokens saved';
+        // Active Pinned Ledger & Constraints Card
+        const al = st.activeLedger;
+        const alHint = $('active-ledger-hint');
+        const alBody = $('active-ledger-body');
+        if (alHint && alBody) {
+          if (al && al.records && al.records.length > 0) {
+            alHint.textContent = al.totalRecords + ' records · ' + al.totalChars + ' / 4,000 chars';
+            alBody.innerHTML = '<div class="ledger-list">' + al.records.map((r) => {
+              const badgeClass = 'badge-' + (r.kind || 'intent');
+              return '<div class="ledger-item">' +
+                '<span class="ledger-badge ' + badgeClass + '">' + escapeHtml(r.kind || 'record') + '</span>' +
+                '<div style="flex:1;">' + escapeHtml(r.text) +
+                (r.ref ? ' <span class="mono" style="color:var(--text-muted);font-size:10.5px;">#' + escapeHtml(r.ref) + '</span>' : '') +
+                '</div></div>';
+            }).join('') + '</div>';
+          } else {
+            alHint.textContent = '0 records · 0 chars';
+            alBody.innerHTML = '<div class="card-hint">No active pinned constraints or decisions recorded.</div>';
+          }
+        }
         // 4. Trajectory + Cache Hit Rate Charts & Cache Economics Table
         const lines = rounds.map((r, idx) => {
           const inp = Number(r.total_in) || 0;

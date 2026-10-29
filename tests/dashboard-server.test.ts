@@ -53,6 +53,16 @@ describe("Standalone Web Dashboard Server", () => {
       consumed_by: null,
       ranges: "[]",
       children: "[]",
+      manifest: JSON.stringify({
+        paths: ["src/cache.ts"],
+        symbols: ["TwoTierCache"],
+        errors: [],
+        commits: ["abc1234"],
+        tools: ["read", "write"],
+      }),
+      ledger: JSON.stringify([
+        { id: "b1.L1", kind: "decision", text: "Use Redis fallback", ref: "m1" },
+      ]),
     });
 
     // Seed a round into DB
@@ -113,7 +123,10 @@ describe("Standalone Web Dashboard Server", () => {
       expect(html).toContain("Audit &amp; Telemetry");
       expect(html).toContain("tab-audit");
       expect(html).toContain("Tool Execution Audit Log");
-      // Every inline script must parse; one syntax error blanks the whole dashboard.
+      expect(html).toContain("drawer-manifest");
+      expect(html).toContain("drawer-ledger");
+      expect(html).toContain("active-ledger-card");
+      expect(html).toContain("gate-indicator");
       const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
       expect(scripts.length).toBeGreaterThan(0);
       const AsyncFunction = (async () => {}).constructor as new (body: string) => unknown;
@@ -171,19 +184,31 @@ describe("Standalone Web Dashboard Server", () => {
         windowTokens: number;
         liveTokens: number;
         vault?: { archivedTokens: number; compressionRatio: number };
+        timing?: { allowed: boolean; fillFloorTokens: number };
+        activeLedger?: { totalRecords: number; totalChars: number };
       };
       expect(status.sessionId).toBe("dash-session-1");
       expect(status.windowTokens).toBe(100_000);
       expect(status.vault).toBeDefined();
       expect(status.vault?.archivedTokens).toBeGreaterThanOrEqual(0);
-      // 3. GET /api/blocks -> JSON array
+      expect(status.timing).toBeDefined();
+      expect(typeof status.timing?.allowed).toBe("boolean");
+      expect(status.activeLedger).toBeDefined();
       const blocksRes = await fetch(`${baseUrl}/api/blocks?session=dash-session-1`, { headers: authHeaders });
       expect(blocksRes.status).toBe(200);
-      const blocks = (await blocksRes.json()) as { block_id: string; topic: string }[];
+      const blocks = (await blocksRes.json()) as {
+        block_id: string;
+        topic: string;
+        manifest?: { paths: string[]; symbols: string[] };
+        ledger?: { id: string; kind: string; text: string }[];
+      }[];
       expect(blocks.length).toBe(1);
       expect(blocks[0]!.block_id).toBe("b1");
       expect(blocks[0]!.topic).toContain("Caching layer");
-
+      expect(blocks[0]!.manifest?.paths).toContain("src/cache.ts");
+      expect(blocks[0]!.manifest?.symbols).toContain("TwoTierCache");
+      expect(blocks[0]!.ledger?.[0]?.kind).toBe("decision");
+      expect(blocks[0]!.ledger?.[0]?.text).toBe("Use Redis fallback");
       // 4. GET /api/rounds -> JSON array
       const roundsRes = await fetch(`${baseUrl}/api/rounds?session=dash-session-1`, { headers: authHeaders });
       expect(roundsRes.status).toBe(200);

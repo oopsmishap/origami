@@ -24,6 +24,33 @@ interface Options {
   json: string | null;
 }
 
+function printHelp(): void {
+  console.log(`Usage: bun bench/replay.ts [options]
+
+Replay real omp session journals through the Origami context engine offline.
+
+Input Options:
+  --session <file.jsonl>   Session journal file to replay (can be passed multiple times)
+  --dir <dir>              Directory of .jsonl session journals to replay
+
+Replay Configuration:
+  --mode <mode>            'simulated' (engine folds on its nudges) or 'recorded' (replays journal folds) [default: simulated]
+  --policy <policy>        'current', 'legacy-0.2', or 'both' [default: current]
+  --preset <preset>        'balanced', 'lean', or 'relaxed' [default: balanced]
+  --window <tokens>        Context window ceiling in tokens [default: 200000]
+  --no-hints               Disable in-context [origami recall] hints
+
+Summary Source:
+  --summary-source <src>   'extractive' (deterministic fallback) or 'cache' [default: extractive]
+  --summary-cache <file>   JSONL cache file containing model summaries
+  --summary-misses <file>  Output file to record cache misses
+
+Output:
+  --json <file>            Save structured JSON replay results to file
+  -h, --help               Show this help message
+`);
+}
+
 function parseArgs(argv: readonly string[]): Options {
   const o: Options = { sessions: [], mode: "simulated", policy: "current", summarySource: "extractive", summaryCache: null, summaryMisses: null, preset: "balanced", window: 200_000, hints: true, json: null };
   const value = (i: number, flag: string): string => {
@@ -33,6 +60,10 @@ function parseArgs(argv: readonly string[]): Options {
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
+    if (a === "--help" || a === "-h") {
+      printHelp();
+      process.exit(0);
+    }
     if (a === "--session") o.sessions.push(value(i++, a));
     else if (a === "--dir") {
       const dir = value(i++, a);

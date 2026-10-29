@@ -69,8 +69,7 @@ Open with `/fold` or `Alt+F`.
 
 ## Web dashboard
 
-`/fold web` starts a token-protected loopback server on port 3780, falling back through 3789. It shows context and cache trajectories with synchronized brush zoom, protected zones, uncovered mid-history runs, fold candidates, block details, agent-session hierarchy, FTS5 search over fold summaries and archived original messages, and a real-time tool execution audit log with frustration-loop diagnosis.
-
+`/fold web` starts a token-protected loopback server on port 3780, falling back through 3789. It shows context and cache trajectories with synchronized brush zoom, protected zones, uncovered mid-history runs, fold candidates with timing-gate indicators, active pinned ledger records and character budgets, slide-over block detail drawers with provenance manifests and pinned records, agent-session hierarchy, FTS5 search over fold summaries and archived original messages, and a real-time tool execution audit log with frustration-loop diagnosis.
 The API rejects missing tokens, foreign origins, non-loopback hosts, and invalid mutation bodies.
 ## Agent tools
 

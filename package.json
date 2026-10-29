@@ -18,7 +18,8 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "bench": "bun bench/marathon.ts",
-    "replay": "bun bench/replay.ts"
+    "replay": "bun bench/replay.ts",
+    "replay:smoke": "bun bench/replay.ts --session tests/fixtures/replay-session.jsonl --mode simulated --policy both"
   },
   "peerDependencies": {
     "@oh-my-pi/pi-coding-agent": ">=18.6.0",
