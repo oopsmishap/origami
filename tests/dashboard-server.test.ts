@@ -5,6 +5,7 @@ import { OrigamiRuntime } from "../src/runtime.ts";
 import { openDb } from "../src/persist/db.ts";
 import { configFromPreset } from "../src/config.ts";
 import type { JournalOp } from "../src/persist/journal.ts";
+import { digestRefs } from "../src/candidates.ts";
 import { unlinkSync } from "node:fs";
 
 describe("Standalone Web Dashboard Server", () => {
@@ -127,6 +128,8 @@ describe("Standalone Web Dashboard Server", () => {
       expect(html).toContain("drawer-ledger");
       expect(html).toContain("active-ledger-card");
       expect(html).toContain("gate-indicator");
+      expect(html).toContain("session-count-pill");
+      expect(html).toContain("session-select");
       const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
       expect(scripts.length).toBeGreaterThan(0);
       const AsyncFunction = (async () => {}).constructor as new (body: string) => unknown;
@@ -166,6 +169,8 @@ describe("Standalone Web Dashboard Server", () => {
         ["fold", JSON.stringify({ range: "x", topic: "t", summary: "s", tier: 4 }), "tier must be 1, 2, or 3"],
         ["unfold", JSON.stringify({ id: "b1", mode: "deep" }), "mode must be file or inline"],
         ["unfold", JSON.stringify({}), "id must be a non-empty string"],
+        ["candidate", JSON.stringify({ id: "c1", action: "maybe" }), "action must be accept, reject, or edit"],
+        ["candidate", JSON.stringify({ action: "accept" }), "id must be a non-empty string"],
       ] as const) {
         const response = await fetch(`${baseUrl}/api/${path}`, {
           method: "POST",
@@ -290,6 +295,52 @@ describe("Standalone Web Dashboard Server", () => {
       const unfoldData = (await unfoldRes.json()) as { ok: boolean; path?: string };
       expect(unfoldData.ok).toBe(true);
       expect(unfoldData.path).toBeDefined();
+      // 6b. POST /api/candidate (speculative fold candidate actions)
+      const candNotFoundRes = await fetch(`${baseUrl}/api/candidate`, {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ id: "c999", action: "accept" }),
+      });
+      expect(candNotFoundRes.status).toBe(404);
+      // Seed stale candidate (refs already folded in step 6)
+      runtime.candidates.pending = {
+        id: "c-stale",
+        spec: { range: "m00001..m00002", topic: "Caching layer", summary: "Summary of caching" },
+        refs: ["m00001", "m00002"],
+        sourceDigest: "dummy",
+        createdTurn: 1,
+        tokensBefore: 2000,
+        tokensAfter: 200,
+      };
+
+      const candStaleRes = await fetch(`${baseUrl}/api/candidate`, {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ id: "c-stale", action: "reject" }),
+      });
+      expect(candStaleRes.status).toBe(409);
+
+      // Seed valid fresh candidate covering unfolded ref m00003
+      runtime.candidates.pending = {
+        id: "c1",
+        spec: { range: "m00003..m00003", topic: "Next step", summary: "Summary of next step" },
+        refs: ["m00003"],
+        sourceDigest: digestRefs(runtime.engine, ["m00003"]),
+        createdTurn: 1,
+        tokensBefore: 500,
+        tokensAfter: 50,
+      };
+
+      const candRejectRes = await fetch(`${baseUrl}/api/candidate`, {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ id: "c1", action: "reject" }),
+      });
+      expect(candRejectRes.status).toBe(200);
+      const candRejectData = (await candRejectRes.json()) as { ok: boolean; action: string };
+      expect(candRejectData.ok).toBe(true);
+      expect(candRejectData.action).toBe("reject");
+      expect(runtime.candidates.pending).toBeNull();
 
       // 7. GET /api/events -> SSE connection test
       const eventsRes = await fetch(`${baseUrl}/api/events?token=${dashboard.token}`);

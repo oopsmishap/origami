@@ -6,6 +6,7 @@ import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import type { BlockManifest } from "../kernel/manifest.ts";
 import type { LedgerRecord } from "../kernel/types.ts";
 import { ledgerSemanticKey } from "../kernel/ledger.ts";
+import { candidateStale } from "../candidates.ts";
  const TOKEN_HEADER = "X-Origami-Token";
 
 function randomToken(): string {
@@ -175,7 +176,7 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
             if (!constantTimeEqual(suppliedToken, token)) return jsonError(401, "unauthorized");
           }
 
-          if ((path === "/api/unfold" || path === "/api/fold") && req.method === "POST") {
+          if ((path === "/api/unfold" || path === "/api/fold" || path === "/api/candidate") && req.method === "POST") {
             if (req.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
               return jsonError(415, "content type must be application/json");
             }
@@ -468,6 +469,45 @@ export async function startDashboardServer(opts: DashboardServerOptions): Promis
             registry.emit("fold", sessionId, { res });
             return Response.json(res);
           }
+          // 9. Action: Candidate Answer
+          if (path === "/api/candidate" && req.method === "POST") {
+            if (!rt) return jsonError(409, "session is not running");
+            const body = await jsonObject();
+            if (body instanceof Response) return body;
+            const id = typeof body.id === "string" ? body.id.trim() : "";
+            const action = typeof body.action === "string" ? body.action.trim() : "";
+            if (!id) return jsonError(400, "id must be a non-empty string");
+            if (action !== "accept" && action !== "reject" && action !== "edit") {
+              return jsonError(400, "action must be accept, reject, or edit");
+            }
+            const store = rt.candidates;
+            const c = store.pending;
+            if (!c || c.id !== id) return jsonError(404, `no pending candidate ${id}`);
+            if (candidateStale(rt.engine, c)) {
+              store.pending = null;
+              return jsonError(409, `candidate ${c.id} is stale`);
+            }
+            if (action === "reject") {
+              store.pending = null;
+              store.rejectedAtGrowth = rt.engine.growthSinceFold();
+              broadcast("status", rt.engine.status());
+              return Response.json({ ok: true, action: "reject", id });
+            }
+            let spec = c.spec;
+            if (action === "edit") {
+              const topic = typeof body.topic === "string" ? body.topic.trim() : "";
+              const summary = typeof body.summary === "string" ? body.summary.trim() : "";
+              if (!topic || !summary) return jsonError(400, "edit requires topic and summary");
+              spec = { ...spec, topic, summary };
+            }
+            const result = rt.engine.executeFold({ folds: [spec], tier: 1 });
+            store.pending = null;
+            if (!result.ok) return jsonError(400, result.error);
+            registry.emit("fold", sessionId, { res: result });
+            broadcast("blocks", rt.engine.state.tree.all());
+            broadcast("status", rt.engine.status());
+            return Response.json({ ok: true, action, id, blocks: result.outcome.blocks.map((b) => b.id) });
+          }
 
           // 8. Serve Dashboard SPA
           return new Response(renderDashboardHtml(), {
@@ -700,8 +740,23 @@ function renderDashboardHtml(): string {
     }
     select.chip {
       appearance: none;
+-webkit-appearance: none;
       cursor: pointer;
       max-width: 420px;
+      padding-right: 24px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      transition: border-color var(--transition-fast), color var(--transition-fast);
+    }
+    select.chip:hover {
+      border-color: var(--accent-cyan);
+      color: var(--text-primary);
+    }
+    select.chip:focus {
+      outline: none;
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.2);
     }
     .status-dot {
       width: 7px;
@@ -1403,6 +1458,7 @@ function renderDashboardHtml(): string {
     </nav>
 
     <div class="header-meta">
+      <span class="chip" id="session-count-pill" style="display:none;color:var(--accent-cyan);border-color:rgba(6,182,212,0.3);"><span id="session-count-val">0</span> active</span>
       <select class="chip" id="session-select" title="Session (subagents are nested under their parent)" onchange="selectSession(this.value)">
         <option value="">session: —</option>
       </select>
@@ -1904,6 +1960,14 @@ function renderDashboardHtml(): string {
       select.options[0].textContent = autoLabel;
       for (let i = 0; i < flat.length; i++) select.options[i + 1].textContent = sessionLabel(flat[i]);
       select.value = pinnedSession;
+      if ($('session-count-pill')) {
+        if (flat.length > 1) {
+          $('session-count-pill').style.display = 'inline-flex';
+          $('session-count-val').textContent = String(flat.length);
+        } else {
+          $('session-count-pill').style.display = 'none';
+        }
+      }
     }
     function selectSession(id) {
       pinnedSession = id || '';
@@ -2605,12 +2669,38 @@ function renderDashboardHtml(): string {
         let candHtml = '';
         if (st.candidate) {
           const c = st.candidate;
-          candHtml += '<div class="cand-card">' +
-            '<div class="cand-header"><span class="cand-badge">Speculative Draft</span><span class="mono" style="color:var(--accent-cyan);font-size:11px;">#' + escapeHtml(c.range || '') + '</span></div>' +
-            '<div style="font-weight:600;font-size:12px;margin-bottom:4px;">' + escapeHtml(c.topic || '') + '</div>' +
-            '<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:6px;line-height:1.4;">' + escapeHtml(c.summary || '') + '</div>' +
-            '<div class="mono" style="font-size:11px;color:var(--text-muted);">' + formatK(c.tokensBefore || 0) + 't → ' + formatK(c.tokensAfter || 0) + 't (-' + formatK(Math.max(0, (c.tokensBefore || 0) - (c.tokensAfter || 0))) + 't)</div>' +
-            '</div>';
+          const saved = Math.max(0, (c.tokensBefore || 0) - (c.tokensAfter || 0));
+          const pct = c.tokensBefore > 0 ? Math.round((saved / c.tokensBefore) * 100) : 0;
+          candHtml += '<div class="cand-card" id="cand-card-' + escapeHtml(c.id) + '">' +
+            '<div class="cand-header">' +
+              '<span class="cand-badge">Speculative Draft</span>' +
+              '<span class="mono" style="color:var(--accent-cyan);font-size:11px;">#' + escapeHtml(c.id) + ' · ' + escapeHtml(c.range || '') + '</span>' +
+            '</div>' +
+            '<div id="cand-view-' + escapeHtml(c.id) + '">' +
+              '<div style="font-weight:600;font-size:12px;margin-bottom:4px;">' + escapeHtml(c.topic || '') + '</div>' +
+              '<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:6px;line-height:1.4;">' + escapeHtml(c.summary || '') + '</div>' +
+              '<div class="mono" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">' + formatK(c.tokensBefore || 0) + 't → ' + formatK(c.tokensAfter || 0) + 't (-' + formatK(saved) + 't, ' + pct + '%)</div>' +
+              '<div style="display:flex;gap:6px;">' +
+                '<button class="btn btn-sm btn-primary" onclick="answerCandidate(\\'' + escapeHtml(c.id) + '\\', \\'accept\\')">Accept &amp; Fold</button>' +
+                '<button class="btn btn-sm" onclick="toggleCandEdit(\\'' + escapeHtml(c.id) + '\\')">Edit</button>' +
+                '<button class="btn btn-sm" onclick="answerCandidate(\\'' + escapeHtml(c.id) + '\\', \\'reject\\')">Reject</button>' +
+              '</div>' +
+            '</div>' +
+            '<div id="cand-edit-' + escapeHtml(c.id) + '" style="display:none;margin-top:8px;">' +
+              '<div style="margin-bottom:6px;">' +
+                '<label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:2px;">Topic</label>' +
+                '<input type="text" id="cand-edit-topic-' + escapeHtml(c.id) + '" class="search-input" style="width:100%;font-size:12px;padding:4px 8px;" value="' + escapeHtml(c.topic || '') + '">' +
+              '</div>' +
+              '<div style="margin-bottom:8px;">' +
+                '<label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:2px;">Summary</label>' +
+                '<textarea id="cand-edit-summary-' + escapeHtml(c.id) + '" class="search-input" style="width:100%;font-size:11.5px;padding:6px 8px;height:70px;resize:vertical;font-family:var(--font-mono);">' + escapeHtml(c.summary || '') + '</textarea>' +
+              '</div>' +
+              '<div style="display:flex;gap:6px;">' +
+                '<button class="btn btn-sm btn-primary" onclick="submitCandEdit(\\'' + escapeHtml(c.id) + '\\')">Save &amp; Fold</button>' +
+                '<button class="btn btn-sm" onclick="toggleCandEdit(\\'' + escapeHtml(c.id) + '\\')">Cancel</button>' +
+              '</div>' +
+            '</div>' +
+          '</div>';
         }
         if (recs.length === 0 && !st.candidate) {
           candHtml += '<div class="card-hint">No compressible message spans above floor yet.</div>';
@@ -2878,6 +2968,53 @@ function renderDashboardHtml(): string {
         refreshData();
       } catch (e) {
         toast('Network error while unfolding ' + id, 'err');
+      }
+    }
+    function toggleCandEdit(id) {
+      const view = $('cand-view-' + id);
+      const edit = $('cand-edit-' + id);
+      if (!view || !edit) return;
+      const isEditing = edit.style.display !== 'none';
+      edit.style.display = isEditing ? 'none' : 'block';
+      view.style.display = isEditing ? 'block' : 'none';
+    }
+
+    function submitCandEdit(id) {
+      const topic = ($('cand-edit-topic-' + id)?.value || '').trim();
+      const summary = ($('cand-edit-summary-' + id)?.value || '').trim();
+      if (!topic || !summary) {
+        toast('Topic and summary are required', 'err');
+        return;
+      }
+      answerCandidate(id, 'edit', topic, summary);
+    }
+
+    async function answerCandidate(id, action, topic, summary) {
+      try {
+        const payload = { id, action };
+        if (action === 'edit') {
+          payload.topic = topic;
+          payload.summary = summary;
+        }
+        const res = await apiFetch(withSession('/api/candidate'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          toast(
+            action === 'reject'
+              ? 'Rejected candidate ' + id
+              : 'Folded candidate ' + id + ' (' + (data.blocks ? data.blocks.join(', ') : 'tier 1') + ')',
+            'ok',
+          );
+        } else {
+          toast('Candidate action failed: ' + (data.error || 'unknown error'), 'err');
+        }
+        refreshData();
+      } catch (e) {
+        toast('Network error answering candidate ' + id, 'err');
       }
     }
 
