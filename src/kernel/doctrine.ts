@@ -7,6 +7,9 @@ const KEEP_DROP_RULES = `## KEEP VERBATIM
 - Constraints discovered ("must support Node 22", "no new dependencies").
 - Exact values: versions, config keys, thresholds, magic numbers.
 - User intent: quote short user messages verbatim ONLY with their message ref (\`[#m00132]\`). The initial user instruction intentionally has no ref tag; paraphrase it without a verifiable ref. Later user and tool-result messages carry \`[#mNNNNN]\` tags; assistant messages are untagged — cite the nearest tagged ref. First-turn tool results are protected from emergency elision.
+- The user's words outrank everything else: orders, corrections, decisions, questions and their reasons, kept close to verbatim however short.
+- Credit every quote, decision and claim to its real author (user, assistant, tool output). Never present a tool's or assistant's text as something the user said.
+- State progress exactly as it was: attempted, partial, failing and untested stay so. Never make work look further along than the source shows.
 - Open objectives — if any source message names work still open, the summary MUST keep a one-line \`Open objectives:\` entry naming each with its ref. Drop completed or resolved objectives so finished work is never re-executed.
 - Time sensitivity — file paths, line numbers, and code snippets are snapshots taken at fold time that drift over subsequent edits; always re-read live files before anchoring edits.
 
