@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.2 — 2026-10-30
 
 ### Fixes
 - **Hydration and recall match intent, not tool output**: matching now looks only at what the user and the assistant wrote plus path-typed arguments (`path`, `file`, `paths`, …) of non-Origami tool calls. Tool results (file contents, command output) and free-form arguments (shell commands, script bodies) no longer trigger notes. Symbols must be distinctive identifiers (camelCase, digits, `_`, `$` or `.`); plain words such as `false`, `balanced` or `constraint` are no longer recorded or matched, including in existing manifests. Replay of this project's sessions: blocks surfaced 71 → 58, surfacings matched only by tool results 24 → 5, note tokens −18%, far-recall probes unchanged.
