@@ -99,7 +99,7 @@ describe("projectUnit", () => {
   it("reports the split count when a range cuts through an in-flight turn", () => {
     const r = projectUnit({ bound: makeBound(), ranges: [{ start: "m00014", end: "m00014" }], ...base });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toBe("range splits 1 turn(s)");
+    if (!r.ok) expect(r.error).toBe("range splits 1 turn(s); end at m00012 or earlier (turn 5 is in flight)");
   });
 
   it("counts multiple cut turns in the split literal", () => {
@@ -109,7 +109,7 @@ describe("projectUnit", () => {
       ...base,
     });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toBe("range splits 2 turn(s)");
+    if (!r.ok) expect(r.error).toBe("range splits 2 turn(s); start at m00004 or later; end at m00012 or earlier (turn 5 is in flight)");
   });
 
   it("keeps a live gap between disjoint ranges", () => {

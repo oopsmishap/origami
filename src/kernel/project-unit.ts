@@ -101,6 +101,7 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
 
   const selected = new Set<number>();
   let splits = 0;
+  const boundaryHints: string[] = [];
   let headHit = false;
   let turnHit = false;
   let tailHit = false;
@@ -119,6 +120,16 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
         else tailHit = true;
       } else {
         splits++;
+        // The span cuts into a turn that must stay whole: point at the nearest edge outside it.
+        const firstIdx = Math.min(...members);
+        const lastIdx = Math.max(...members);
+        if (hasHead) {
+          const after = bound.slice(lastIdx + 1).find((m) => !m.ephemeral);
+          if (after) boundaryHints.push(`start at ${after.ref} or later`);
+        } else {
+          const before = bound.slice(0, firstIdx).reverse().find((m) => !m.ephemeral);
+          if (before) boundaryHints.push(`end at ${before.ref} or earlier (turn ${turn} is ${isInFlight ? "in flight" : "in the protected tail"})`);
+        }
       }
       continue;
     }
@@ -126,7 +137,10 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
     for (const i of members) selected.add(i);
   }
 
-  if (splits > 0) return { ok: false, error: `range splits ${splits} turn(s)` };
+  if (splits > 0) {
+    const hint = boundaryHints.length > 0 ? `; ${[...new Set(boundaryHints)].join("; ")}` : "";
+    return { ok: false, error: `range splits ${splits} turn(s)${hint}` };
+  }
   if (headHit) return { ok: false, error: "range inside protected head" };
   if (turnHit) return { ok: false, error: "range includes current in-flight turn" };
   if (tailHit) return { ok: false, error: `range includes protected recent tail (turn ${protectedFromTurn} onward)` };
