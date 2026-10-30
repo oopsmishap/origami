@@ -8,7 +8,7 @@
  * rendered through the real engine and scored against an uncompressed baseline.
  *
  *   bun run bench [--turns 400] [--seed 7] [--window 200000] [--preset balanced]
- *                 [--fact-keep 0.85] [--promotion mass|growth] [--assert] [--json out.json]
+ *                 [--fact-keep 0.85] [--promotion mass|growth] [--tier2-mass N] [--assert] [--json out.json]
  *
  * `--promotion growth` replaces the preset's merge-mass floors with triggers tied
  * to the growth step (tier 2 at 1.5x, tier 3 at 2.25x), the billion-context rule.
@@ -27,12 +27,14 @@ interface Options {
   preset: Preset;
   factKeep: number;
   promotion: "mass" | "growth";
+  /** Overrides the tier-2 merge floor (tier 3 at 1.5x), to exercise promotion on short runs. */
+  tier2Mass: number | null;
   json: string | null;
   assert: boolean;
 }
 
 function parseArgs(argv: readonly string[]): Options {
-  const opts: Options = { turns: 400, seed: 7, window: 200_000, preset: "balanced", factKeep: 0.85, promotion: "mass", json: null, assert: false };
+  const opts: Options = { turns: 400, seed: 7, window: 200_000, preset: "balanced", factKeep: 0.85, promotion: "mass", tier2Mass: null, json: null, assert: false };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     if (key === "--assert") {
@@ -51,6 +53,11 @@ function parseArgs(argv: readonly string[]): Options {
       if (value !== "mass" && value !== "growth") throw new Error(`--promotion must be mass or growth, got ${value}`);
       opts.promotion = value;
     }
+    else if (key === "--tier2-mass") {
+      const mass = Number(value);
+      if (!Number.isSafeInteger(mass) || mass <= 0) throw new Error(`--tier2-mass must be a positive integer, got ${value}`);
+      opts.tier2Mass = mass;
+    }
     else if (key === "--json") opts.json = value;
     else throw new Error(`unknown option ${key}`);
   }
@@ -59,6 +66,7 @@ function parseArgs(argv: readonly string[]): Options {
 
 function benchConfig(options: Options) {
   const config = configFromPreset(options.preset);
+  if (options.tier2Mass !== null) return { ...config, tier2MassTokens: options.tier2Mass, tier3MassTokens: Math.round(options.tier2Mass * 1.5) };
   if (options.promotion === "mass") return config;
   return { ...config, tier2MassTokens: Math.round(config.growthStep * 1.5), tier3MassTokens: Math.round(config.growthStep * 2.25) };
 }
@@ -249,7 +257,7 @@ export function runMarathon(options: Options): MarathonResult {
     result.nudges[decision.kind]++;
     if (decision.kind === "promotion" && decision.promotion) {
       const fromTier = decision.promotion.fromTier;
-      const blocks = engine.state.tree.live().filter((b) => b.tier === fromTier);
+      const blocks = decision.promotion.blockIds.map((id) => engine.state.tree.get(id)).filter((b): b is NonNullable<typeof b> => b !== undefined);
       const lines = keepLines(blocks.map((b) => b.summary), (fromTier + 1) as 2 | 3);
       foldAll([{ range: blocks.map((b) => b.id).join(","), topic: `merged ${blocks[0]!.id}..${blocks.at(-1)!.id}`, summary: lines.join("\n") || "- routine work" }], (fromTier + 1) as 2 | 3);
     } else {

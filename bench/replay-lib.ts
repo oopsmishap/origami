@@ -229,7 +229,7 @@ export function replaySession(entries: readonly JournalEntry[], o: ReplayOptions
     const decision = decideReplayPolicy(o.policy, engine, policyState);
     if (decision.kind === "promotion" && decision.promotion) {
       const fromTier = decision.promotion.fromTier;
-      const blocks = engine.state.tree.live().filter((b) => b.tier === fromTier);
+      const blocks = decision.promotion.blockIds.map((id) => engine.state.tree.get(id)).filter((b): b is NonNullable<typeof b> => b !== undefined);
       if (blocks.length < 2) return 0;
       const range = blocks.map((b) => b.id).join(",");
       const spec = summarySpec((fromTier + 1) as 2 | 3, range, blocks.map((b) => b.id), blocks.map((b) => engine.renderBlock(b)).join("\n\n"), `replay merge ${blocks[0]!.id}..${blocks.at(-1)!.id}`, `- ${blocks.map((b) => b.topic).join("\n- ")}`);

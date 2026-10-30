@@ -268,13 +268,13 @@ describe("nudge policy", () => {
 
   it("promotes tier-1 blocks once their mass crosses the tier-2 threshold", () => {
     const quiet = { ...base, growthSinceFoldTokens: 0 };
-    const promo = [{ fromTier: 1 as const, blockIds: ["b1", "b2", "b4"], tokens: 320 }];
+    const promo = [{ fromTier: 1 as const, blockIds: ["b1", "b2", "b4"], tokens: 200, totalTokens: 320 }];
     const d = decideNudge(quiet, [], promo, cfg);
     expect(d.kind).toBe("promotion");
     expect(d.text).toContain('"b1,b2,b4"');
-    expect(decideNudge(quiet, [], [{ ...promo[0]!, tokens: 299 }], cfg).kind).toBeNull();
-    expect(decideNudge({ ...quiet, lastPromotionAtMass: { 1: 320, 2: null } }, [], [{ ...promo[0]!, tokens: 400 }], cfg).kind).toBeNull();
-    expect(decideNudge(quiet, [], [{ fromTier: 1, blockIds: ["b1"], tokens: 900 }], cfg).kind).toBeNull();
+    expect(decideNudge(quiet, [], [{ ...promo[0]!, totalTokens: 299 }], cfg).kind).toBeNull();
+    expect(decideNudge({ ...quiet, lastPromotionAtMass: { 1: 320, 2: null } }, [], [{ ...promo[0]!, totalTokens: 400 }], cfg).kind).toBeNull();
+    expect(decideNudge(quiet, [], [{ fromTier: 1, blockIds: ["b1"], tokens: 100, totalTokens: 900 }], cfg).kind).toBeNull();
   });
 });
 

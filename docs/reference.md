@@ -7,6 +7,7 @@ Origami replaces destructive full-window compaction with incremental, reversible
 - Tier 1 summarizes raw message ranges.
 - Tier 2 merges two or more Tier 1 blocks.
 - Tier 3 condenses lower-tier blocks across long sessions.
+- Tier-2/3 promotion is age-proportional: eligible blocks are ranked by `due = (newest ref - block's last ref) / refs covered`. A promotion merges the most-due blocks until they hold at least half of that tier's summary mass (minimum two), preserving finer detail in recent blocks and keeping old summary prefixes stable longer.
 - Newest messages, the latest user turn, the initial prompt, and first-turn tool results stay protected.
 - Efficiency nudges are advisory; emergency nudges are mandatory. After two ignored emergency turn transitions, Origami may execute validated emergency folds automatically; it otherwise elides safe later tool results or blocks an oversized request.
 - Advisory folds pass a timing gate: context above the fill floor (`minFoldFillPct` of the window, capped by `minFoldFillCapTokens`), a task boundary (a fresh user turn, turn end, an idle cold cache, or twice the growth step of unfolded work), and, once cache telemetry exists, break-even within `paybackHorizonTurns`. `fold_status` prints the current `Fold gate:` line. Emergency folds ignore the gate.

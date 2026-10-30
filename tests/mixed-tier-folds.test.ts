@@ -159,13 +159,13 @@ describe("Compound & Backlog-Aware Nudges", () => {
     };
 
     const promo: PromotionCandidate[] = [
-      { fromTier: 1, blockIds: ["b1", "b2", "b3"], tokens: 25_000 },
+      { fromTier: 1, blockIds: ["b1", "b2", "b3"], tokens: 25_000, totalTokens: 25_000 },
     ];
 
     const decision = decideNudge(state, ranges, promo, cfg);
     expect(decision.kind).toBe("efficiency");
     expect(decision.text).toContain("Candidate ranges");
-    expect(decision.text).toContain("Additionally, 3 tier-1 blocks hold 25.0K tokens of summaries");
+    expect(decision.text).toContain("Additionally, 3 due tier-1 blocks hold 25.0K tokens of summaries");
     expect(decision.text).toContain("Wrap up candidate tier-1 ranges first to reclaim prompt space");
   });
 
@@ -184,7 +184,7 @@ describe("Compound & Backlog-Aware Nudges", () => {
     };
 
     const promo: PromotionCandidate[] = [
-      { fromTier: 1, blockIds: ["b1", "b2", "b3"], tokens: 25_000 },
+      { fromTier: 1, blockIds: ["b1", "b2", "b3"], tokens: 25_000, totalTokens: 25_000 },
     ];
 
     const decision = decideNudge(state, ranges, promo, cfg);

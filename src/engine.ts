@@ -291,7 +291,7 @@ export class OrigamiEngine {
         promotionAllowed: timing.blockedBy === null || timing.blockedBy === "cost",
       },
       ranges,
-      promotionCandidates(this.state.tree.live(), this.state.tree.foldAges(), this.config.blockMatureFolds),
+      promotionCandidates(this.state.tree.live(), this.state.tree.foldAges(), this.config.blockMatureFolds, this.newestRefNumber()),
       {
         ...this.config,
         minFoldBenefit: this.minFoldBenefit(),
@@ -722,6 +722,11 @@ export class OrigamiEngine {
       best = Math.max(best, parseRef(m.ref));
     }
     return best > 0 ? formatRef(best) : null;
+  }
+
+  private newestRefNumber(): number {
+    const ref = this.newestRef();
+    return ref === null ? 0 : parseRef(ref);
   }
 
   private nextBlockOrdinal(): number {

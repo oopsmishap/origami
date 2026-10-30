@@ -285,7 +285,7 @@ class BenchmarkCoordinator {
         const decision = decideReplayPolicy("current", engine, policyState);
         if (decision.kind === "promotion" && decision.promotion) {
           const fromTier = decision.promotion.fromTier;
-          const blocks = engine.state.tree.live().filter((b) => b.tier === fromTier);
+          const blocks = decision.promotion.blockIds.map((id) => engine.state.tree.get(id)).filter((b): b is NonNullable<typeof b> => b !== undefined);
           if (blocks.length < 2) return 0;
           const range = blocks.map((b) => b.id).join(",");
           const spec = {

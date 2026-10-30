@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **Summary fidelity doctrine**: user words now explicitly outrank other source material; summaries must credit quotes and claims to their real author and preserve attempted, partial, failing and untested status exactly.
+- **Due-ordered tier promotion**: tier-2/3 nudges select the oldest age-proportional half of a tier (`(newest ref - last ref) / refs covered`) rather than merging every eligible block, retaining finer detail in recent summaries. The promotion decision now carries the selected block IDs end to end.
+
+### Bench
+- `bench/marathon.ts --tier2-mass N` exercises promotion in bounded runs. At a forced 3K tier-2 floor over 1,000 turns, due ordering retained 0 lost facts and 100% constraints while costing 0.6–0.9 percentage points more input than all-block promotion (lean 11.9% vs 11.3%; balanced 17.5% vs 16.6%).
+
 ## 0.5.2 — 2026-10-30
 
 ### Fixes

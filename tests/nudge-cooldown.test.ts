@@ -157,7 +157,7 @@ describe("Nudge Self-Amplification Prevention (#5058)", () => {
     };
 
     const promo: PromotionCandidate[] = [
-      { fromTier: 1, blockIds: ["b1", "b2"], tokens: 25_000 },
+      { fromTier: 1, blockIds: ["b1", "b2"], tokens: 25_000, totalTokens: 25_000 },
     ];
 
     const decision = decideNudge(stateInCooldown, sampleRanges, promo, baseConfig);

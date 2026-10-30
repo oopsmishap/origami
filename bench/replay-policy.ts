@@ -45,7 +45,7 @@ export function decideReplayPolicy(policy: ReplayPolicy, engine: ReplayPolicyEng
     const floor = last === null ? mass : last + Math.ceil(mass / 2);
     if (blocks.length < 2 || tokens < floor) continue;
     state.lastPromotionAtMass[fromTier] = tokens;
-    return { kind: "promotion", text: "legacy promotion", promotion: { fromTier, tokens } };
+    return { kind: "promotion", text: "legacy promotion", promotion: { fromTier, tokens, blockIds: blocks.map((block) => block.id) } };
   }
   return { kind: null, text: null };
 }

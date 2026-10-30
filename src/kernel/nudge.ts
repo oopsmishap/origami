@@ -12,9 +12,12 @@ export interface NudgeRange {
 /** Active blocks of one tier the model could merge into the next tier. */
 export interface PromotionCandidate {
   fromTier: 1 | 2;
+  /** Blocks selected by due order for this merge. */
   blockIds: string[];
-  /** Summed rendered size (tokensAfter) of those blocks. */
+  /** Rendered summary mass of the selected blocks. */
   tokens: number;
+  /** Rendered summary mass of every active block at this tier; drives the trigger/backoff. */
+  totalTokens: number;
 }
 
 export interface NudgeState {
@@ -37,8 +40,8 @@ export type NudgeKind = "efficiency" | "emergency" | "promotion";
 export interface NudgeDecision {
   kind: NudgeKind | null;
   text: string | null;
-  /** Source tier of a promotion nudge, and the mass it fired at (for backoff). */
-  promotion?: { fromTier: 1 | 2; tokens: number };
+  /** Source tier, trigger mass (for backoff), and due-ordered blocks selected for this merge. */
+  promotion?: { fromTier: 1 | 2; tokens: number; blockIds: string[] };
 }
 
 export interface NudgeConfig {
@@ -116,7 +119,7 @@ export function decideNudge(
     const mass = p.fromTier === 1 ? cfg.tier2MassTokens : cfg.tier3MassTokens;
     const last = state.lastPromotionAtMass[p.fromTier];
     const floor = last === null ? mass : last + Math.ceil(mass / 2);
-    if (p.blockIds.length < 2 || p.tokens < floor) continue;
+    if (p.blockIds.length < 2 || p.totalTokens < floor) continue;
     activePromotion = { p, toTier: (p.fromTier + 1) as 2 | 3 };
     break;
   }
@@ -131,7 +134,7 @@ export function decideNudge(
         `${formatTokens(state.compressibleTokens)} are foldable.\n` +
         `Candidate ranges (largest first, ~${formatTokens(total)} tokens total):\n` +
         `${formatRanges(ranges)}\n` +
-        `Additionally, ${p.blockIds.length} tier-${p.fromTier} blocks hold ${formatTokens(p.tokens)} tokens of summaries (${p.blockIds.join(", ")}) and are eligible for tier-${toTier} distillation.\n` +
+        `Additionally, ${p.blockIds.length} due tier-${p.fromTier} blocks hold ${formatTokens(p.tokens)} tokens of summaries (${p.blockIds.join(", ")}); the tier holds ${formatTokens(p.totalTokens)} and is eligible for tier-${toTier} distillation.\n` +
         `Wrap up candidate tier-1 ranges first to reclaim prompt space (or fold both in the same call).`,
     };
   }
@@ -159,9 +162,9 @@ export function decideNudge(
       : "";
     return {
       kind: "promotion",
-      promotion: { fromTier: p.fromTier, tokens: p.tokens },
+      promotion: { fromTier: p.fromTier, tokens: p.totalTokens, blockIds: p.blockIds },
       text:
-        `[origami] ${p.blockIds.length} tier-${p.fromTier} blocks hold ${formatTokens(p.tokens)} tokens of summaries: ${p.blockIds.join(", ")}.\n` +
+        `[origami] ${p.blockIds.length} due tier-${p.fromTier} blocks hold ${formatTokens(p.tokens)} tokens of summaries (${formatTokens(p.totalTokens)} across the tier): ${p.blockIds.join(", ")}.\n` +
         `Consider merging related ones with \`fold\` tier ${toTier} (range \`"${p.blockIds.join(",")}"\` or a related subset of at least 2).` +
         pendingNote +
         ` Defer if they cover unrelated threads you still need apart.`,
@@ -304,19 +307,45 @@ export function recommendRanges(input: {
 }
 
 /**
- * Per source tier, the active blocks of that tier old enough to merge (oldest first) and their
- * summed size. Young blocks (fewer than `matureFolds` later fold events) keep their detail.
+ * Per source tier, the active blocks to merge into the next tier, and the tier's total summary
+ * mass (what the promotion trigger compares against its floor).
+ *
+ * Which blocks: the most *due* first, where due = (newest ref − block's last ref) / refs the block
+ * covers — how long ago the block ended, measured in its own size (Taelin's rollback-push order).
+ * Blocks are taken in that order until they hold at least half the tier's mass (minimum 2), so
+ * old history coarsens while recent blocks keep their detail, and summaries that were merged
+ * least recently stay put longest. Young blocks (fewer than `matureFolds` later fold events)
+ * are never selected.
  */
 export function promotionCandidates(
-  live: readonly { id: string; tier: 1 | 2 | 3; tokensAfter: number }[],
+  live: readonly { id: string; tier: 1 | 2 | 3; tokensAfter: number; ranges: readonly { start: string; end: string }[] }[],
   ages: ReadonlyMap<string, number>,
   matureFolds: number,
+  newestRef: number,
 ): PromotionCandidate[] {
   const out: PromotionCandidate[] = [];
+  const refNo = (ref: string): number => Number.parseInt(ref.slice(1), 10);
   for (const fromTier of [1, 2] as const) {
-    const blocks = live.filter((b) => b.tier === fromTier && (ages.get(b.id) ?? 0) >= matureFolds);
-    if (blocks.length === 0) continue;
-    out.push({ fromTier, blockIds: blocks.map((b) => b.id), tokens: blocks.reduce((s, b) => s + b.tokensAfter, 0) });
+    const tier = live.filter((b) => b.tier === fromTier);
+    const mature = tier.filter((b) => (ages.get(b.id) ?? 0) >= matureFolds && b.ranges.length > 0);
+    if (mature.length === 0) continue;
+    const mass = tier.reduce((s, b) => s + b.tokensAfter, 0);
+    const due = (b: (typeof mature)[number]): number => {
+      const covered = b.ranges.reduce((s, r) => s + refNo(r.end) - refNo(r.start) + 1, 0);
+      const last = Math.max(...b.ranges.map((r) => refNo(r.end)));
+      return (newestRef - last) / Math.max(1, covered);
+    };
+    const first = (b: (typeof mature)[number]): number => Math.min(...b.ranges.map((r) => refNo(r.start)));
+    const byDue = [...mature].sort((a, b) => due(b) - due(a) || first(a) - first(b));
+    const selected: typeof mature = [];
+    let taken = 0;
+    for (const b of byDue) {
+      if (selected.length >= 2 && taken * 2 >= mass) break;
+      selected.push(b);
+      taken += b.tokensAfter;
+    }
+    selected.sort((a, b) => first(a) - first(b));
+    out.push({ fromTier, blockIds: selected.map((b) => b.id), tokens: taken, totalTokens: mass });
   }
   return out;
 }
