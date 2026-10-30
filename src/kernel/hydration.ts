@@ -10,7 +10,7 @@
  * Zero manual search turns required. Zero KV-cache invalidation of the stable prefix.
  */
 import type { Block, LedgerRecord } from "./types.ts";
-import { pathMentioned } from "./manifest.ts";
+import { isDistinctiveSymbol, pathMentioned } from "./manifest.ts";
 
 export interface HydrationMatch {
   blockId: string;
@@ -78,7 +78,7 @@ export function matchHydration(options: HydrationOptions): HydrationMatch[] {
       }
     }
     for (const s of m.symbols) {
-      if (new RegExp(`(?<![\\w$])${escapeRegExp(s)}(?![\\w$])`).test(options.probe)) {
+      if (isDistinctiveSymbol(s) && new RegExp(`(?<![\\w$])${escapeRegExp(s)}(?![\\w$])`).test(options.probe)) {
         matched.push(s);
         score += 8;
       }

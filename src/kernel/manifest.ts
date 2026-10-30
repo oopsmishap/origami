@@ -85,7 +85,7 @@ export function extractManifest(messages: readonly Pick<KernelMessage, "role" | 
   const pathSet = new Set(paths);
   return {
     paths: sortedUnique(paths, CAPS.paths),
-    symbols: sortedUnique(symbols.filter((s) => s.length >= 3 && s.length <= 80 && !pathSet.has(s) && pathsIn(s).join("") !== s), CAPS.symbols),
+    symbols: sortedUnique(symbols.filter((s) => s.length <= 80 && isDistinctiveSymbol(s) && !pathSet.has(s) && pathsIn(s).join("") !== s), CAPS.symbols),
     errors: firstSeenUnique(errors.filter(Boolean), CAPS.errors),
     commits: firstSeenUnique(commits, CAPS.commits),
     tools: sortedUnique(tools, CAPS.tools),
@@ -130,6 +130,15 @@ export function manifestTerms(m: BlockManifest): string[] {
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Whether a backticked identifier is specific enough to match on: it must carry structure
+ * (camelCase, a digit, `_`, `$` or `.`). Plain lowercase words such as `false`, `balanced`
+ * or `constraint` occur everywhere and only produce false matches.
+ */
+export function isDistinctiveSymbol(s: string): boolean {
+  return s.length >= 3 && /[A-Z0-9_$.]/.test(s);
 }
 
 /**

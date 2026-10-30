@@ -4,7 +4,7 @@
  * trusting it to remember that the work was folded.
  */
 import type { Block } from "./types.ts";
-import { pathMentioned } from "./manifest.ts";
+import { isDistinctiveSymbol, pathMentioned } from "./manifest.ts";
 
 export interface RecallHint {
   blockId: string;
@@ -32,7 +32,7 @@ export function matchRecallHints(i: { blocks: readonly Block[]; probe: string; e
     const matched: string[] = [];
     for (const p of m.paths) if (pathMatches(i.probe, p)) matched.push(p);
     for (const s of m.symbols) {
-      if (new RegExp(`(?<![\\w$])${escapeRegExp(s)}(?![\\w$])`).test(i.probe)) matched.push(s);
+      if (isDistinctiveSymbol(s) && new RegExp(`(?<![\\w$])${escapeRegExp(s)}(?![\\w$])`).test(i.probe)) matched.push(s);
     }
     for (const e of m.errors) if (i.probe.includes(e.slice(0, 40))) matched.push(e);
     for (const c of m.commits) if (i.probe.includes(c.slice(0, 7))) matched.push(c);

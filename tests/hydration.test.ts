@@ -256,4 +256,47 @@ describe("engine reactive hydration integration", () => {
     sync();
     expect(engine.hydrationText()).toBeNull();
   });
+
+  it("matches only what the user and assistant wrote or passed to tools, never tool output or plain words", () => {
+    const entries: { type: string; id: string; customType?: string; data?: unknown; message?: Record<string, unknown> }[] = [];
+    const push = (message: Record<string, unknown>) => entries.push({ type: "message", id: `e${entries.length}`, message });
+    for (let t = 0; t < 4; t++) {
+      push({ role: "user", content: `turn ${t} tunes src/kernel/nudge.ts, \`decideNudge\` and \`false\` ${"detail ".repeat(200)}` });
+      push({ role: "assistant", content: `done ${t} ${"reply ".repeat(200)}` });
+    }
+    const engine = new OrigamiEngine({
+      host: {
+        sessionId: () => "hydration-provenance",
+        appendEvent: (op) => entries.push({ type: "custom", id: `j${entries.length}`, customType: JOURNAL_ENTRY_TYPE, data: op }),
+        saveArtifact: async () => "/tmp/x",
+        windowTokens: () => 100_000,
+        projectedTokens: () => 10_000,
+      },
+      entries,
+      modelId: "test",
+      config: { ...configFromPreset("balanced"), protectedTailMessages: 0, protectedTailTokens: 0, minFoldBenefitTokens: 0, minFoldBenefitWindowPct: 0, hydration: true },
+    });
+    const sync = () => {
+      engine.refresh(entries);
+      engine.ingest(entries.map((e) => (e.message ? messageFacts(e.message) : null)).filter((f): f is KernelMessage => f !== null));
+    };
+    sync();
+    const refs = engine.bound.map((m) => m.ref);
+    expect(engine.executeFold({ folds: [{ range: `${refs[2]}..${refs[5]}`, topic: "Nudge", summary: "Tuned src/kernel/nudge.ts decideNudge." }] }).ok).toBe(true);
+    expect(engine.state.tree.live()[0]!.manifest!.symbols).toEqual(["decideNudge"]);
+    push({ role: "assistant", content: "done" });
+
+    // A command whose output mentions the folded file and the word false is not work on it.
+    push({ role: "user", content: "run the suite" });
+    push({ role: "assistant", content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "bun test" } }] });
+    push({ role: "toolResult", toolCallId: "c1", toolName: "bash", content: [{ type: "text", text: "src/kernel/nudge.ts: decideNudge returned false" }] });
+    sync();
+    expect(engine.hydrationText()).toBeNull();
+    expect(engine.recallHintText()).toBeNull();
+
+    // Passing the file to a tool is.
+    push({ role: "assistant", content: [{ type: "toolCall", id: "c2", name: "read", arguments: { path: "src/kernel/nudge.ts" } }] });
+    sync();
+    expect(engine.hydrationText()).toContain("matches: src/kernel/nudge.ts");
+  });
 });

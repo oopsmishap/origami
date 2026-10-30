@@ -37,23 +37,20 @@ export function searchMessages(context: Readonly<EngineContext>, query: string, 
 }
 
 /**
- * Text of the active turn that recall hints and hydration match against. Origami's own
- * tool traffic (fold calls listing paths, fold results echoing "Also covered") is excluded:
- * otherwise every fold immediately re-surfaces the block it just created.
+ * Text of the active turn that recall hints and hydration match against: what the user and
+ * the assistant wrote, plus the arguments of non-Origami tool calls. Tool results are
+ * excluded — file contents and command output mention paths and words (imports, `false`)
+ * that say nothing about the work at hand. Origami's own calls are excluded too: otherwise
+ * every fold immediately re-surfaces the block it just created.
  */
 function activeTurnProbe(context: Readonly<EngineContext>): string {
-  const turn = context.state.bound.filter((message) => !message.ephemeral && message.turn === context.activeTurn);
-  const origamiCalls = new Set<string>();
-  for (const m of turn) for (const call of m.toolCalls ?? []) if (ORIGAMI_TOOLS.has(call.name)) origamiCalls.add(call.id);
   const parts: string[] = [];
-  for (const m of turn) {
-    if (m.role === "toolResult") {
-      if (!m.toolCallId || !origamiCalls.has(m.toolCallId)) parts.push(m.text);
-    } else if (m.role === "assistant" && m.toolCalls?.some((call) => ORIGAMI_TOOLS.has(call.name))) {
+  for (const m of context.state.bound) {
+    if (m.ephemeral || m.turn !== context.activeTurn) continue;
+    if (m.role === "user") parts.push(m.text);
+    else if (m.role === "assistant") {
       parts.push(m.prose);
-      for (const call of m.toolCalls) if (!ORIGAMI_TOOLS.has(call.name)) parts.push(JSON.stringify(call.arguments ?? null));
-    } else {
-      parts.push(m.text);
+      for (const call of m.toolCalls ?? []) if (!ORIGAMI_TOOLS.has(call.name)) parts.push(JSON.stringify(call.arguments ?? null));
     }
   }
   return parts.join("\n");

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- **Hydration and recall match intent, not tool output**: matching now looks only at what the user and the assistant wrote plus the arguments of non-Origami tool calls. Tool results (file contents, command output) no longer trigger notes. Symbols must be distinctive identifiers (camelCase, digits, `_`, `$` or `.`); plain words such as `false`, `balanced` or `constraint` are no longer recorded or matched, including in existing manifests. Replay of this project's sessions: surfacings matched only by tool results 24 → 7, note tokens −13%, far-recall probes unchanged.
+
+### Bench
+- `bench/replay.ts` reports tail notes as production sends them (hydration, else recall hint): requests carrying a note, note tokens, distinct surfacings, and where their matched terms came from (prose / tool-call args / tool results only).
+
 ## 0.5.1 — 2026-10-30
 
 ### Fixes
