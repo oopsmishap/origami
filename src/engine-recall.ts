@@ -4,6 +4,7 @@ import { expandRefRange } from "./kernel/render.ts";
 import { extractPlanTerms, rerankHitsWithPlan } from "./kernel/plan-search.ts";
 import { formatRecallHints, matchRecallHints, type RecallHint } from "./kernel/recall-hints.ts";
 import { formatHydration, matchHydration, type HydrationMatch } from "./kernel/hydration.ts";
+import { pathArguments } from "./kernel/manifest.ts";
 
 /** Origami's own tools: their calls and results describe folded work, not the task at hand. */
 const ORIGAMI_TOOLS: ReadonlySet<string> = new Set(["fold", "fold_candidate", "fold_recall", "fold_search", "fold_status", "fold_cache"]);
@@ -38,10 +39,10 @@ export function searchMessages(context: Readonly<EngineContext>, query: string, 
 
 /**
  * Text of the active turn that recall hints and hydration match against: what the user and
- * the assistant wrote, plus the arguments of non-Origami tool calls. Tool results are
- * excluded — file contents and command output mention paths and words (imports, `false`)
- * that say nothing about the work at hand. Origami's own calls are excluded too: otherwise
- * every fold immediately re-surfaces the block it just created.
+ * the assistant wrote, plus path-typed arguments (`path`, `file`, …) of non-Origami tool
+ * calls. Tool results and free-form arguments (shell commands, script bodies) are excluded:
+ * they mention paths and words (imports, `false`) that say nothing about the work at hand.
+ * Origami's own calls are excluded too, or every fold would re-surface the block it created.
  */
 function activeTurnProbe(context: Readonly<EngineContext>): string {
   const parts: string[] = [];
@@ -50,7 +51,7 @@ function activeTurnProbe(context: Readonly<EngineContext>): string {
     if (m.role === "user") parts.push(m.text);
     else if (m.role === "assistant") {
       parts.push(m.prose);
-      for (const call of m.toolCalls ?? []) if (!ORIGAMI_TOOLS.has(call.name)) parts.push(JSON.stringify(call.arguments ?? null));
+      for (const call of m.toolCalls ?? []) if (!ORIGAMI_TOOLS.has(call.name)) parts.push(...pathArguments(call.arguments));
     }
   }
   return parts.join("\n");

@@ -286,15 +286,15 @@ describe("engine reactive hydration integration", () => {
     expect(engine.state.tree.live()[0]!.manifest!.symbols).toEqual(["decideNudge"]);
     push({ role: "assistant", content: "done" });
 
-    // A command whose output mentions the folded file and the word false is not work on it.
+    // A command naming the folded file, and output mentioning it and the word false, is not work on it.
     push({ role: "user", content: "run the suite" });
-    push({ role: "assistant", content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "bun test" } }] });
+    push({ role: "assistant", content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "bun test && grep -n x src/kernel/nudge.ts" } }] });
     push({ role: "toolResult", toolCallId: "c1", toolName: "bash", content: [{ type: "text", text: "src/kernel/nudge.ts: decideNudge returned false" }] });
     sync();
     expect(engine.hydrationText()).toBeNull();
     expect(engine.recallHintText()).toBeNull();
 
-    // Passing the file to a tool is.
+    // Passing the file as a path argument is.
     push({ role: "assistant", content: [{ type: "toolCall", id: "c2", name: "read", arguments: { path: "src/kernel/nudge.ts" } }] });
     sync();
     expect(engine.hydrationText()).toContain("matches: src/kernel/nudge.ts");

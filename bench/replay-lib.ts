@@ -11,7 +11,7 @@
 import type { OrigamiConfig } from "../src/config.ts";
 import { OrigamiEngine } from "../src/engine.ts";
 import { entryMessage } from "../src/kernel/registry.ts";
-import { extractManifest } from "../src/kernel/manifest.ts";
+import { extractManifest, pathArguments } from "../src/kernel/manifest.ts";
 import { matchRecallHints } from "../src/kernel/recall-hints.ts";
 import type { SessionEntryLike } from "../src/kernel/state.ts";
 import { parseRef } from "../src/kernel/types.ts";
@@ -103,7 +103,7 @@ function turnProvenance(working: readonly JournalEntry[]): { prose: string; args
       else if (Array.isArray(c)) {
         for (const b of c) {
           if (b?.type === "text" && typeof b.text === "string") prose.push(b.text);
-          else if (b?.type === "toolCall") args.push(JSON.stringify(b.arguments ?? null));
+          else if (b?.type === "toolCall") args.push(...pathArguments(b.arguments));
         }
       }
     }

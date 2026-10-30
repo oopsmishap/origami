@@ -141,6 +141,29 @@ export function isDistinctiveSymbol(s: string): boolean {
   return s.length >= 3 && /[A-Z0-9_$.]/.test(s);
 }
 
+/** Argument keys that name files a tool call works on (read/edit/write/grep targets). */
+const PATH_ARG_KEY = /^(?:path|paths|file|files|file_?path|filename|target_?file|source|destination)$/i;
+
+/**
+ * File-path values of a tool call's arguments, searched recursively. Only path-typed keys
+ * count: free-form arguments such as shell commands or script bodies mention paths they do
+ * not work on (imports, heredocs), so they never feed recall matching.
+ */
+export function pathArguments(args: unknown): string[] {
+  const out: string[] = [];
+  const visit = (v: unknown, pathKey: boolean): void => {
+    if (typeof v === "string") {
+      if (pathKey) out.push(v);
+    } else if (Array.isArray(v)) {
+      for (const x of v) visit(x, pathKey);
+    } else if (v && typeof v === "object") {
+      for (const [k, x] of Object.entries(v)) visit(x, PATH_ARG_KEY.test(k));
+    }
+  };
+  visit(args, false);
+  return out;
+}
+
 /**
  * Whether `probe` mentions the manifest path `path` (whole path, or its last two segments).
  * Parent-relative handles never count: `../src/config.ts` in a file's imports is not work on
