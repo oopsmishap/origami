@@ -1,5 +1,4 @@
 import { buildToolPairPartnerMap } from "./tool-pairs.ts";
-import { sliceRunBySemanticSeams } from "./semantic-boundary.ts";
 export interface NudgeRange {
   start: string;
   end: string;
@@ -190,7 +189,6 @@ export function recommendRanges(input: {
   protectedFromTurn: number;
   pinnedHeadRef?: string | null;
   maxRanges?: number;
-  minSliceTokens?: number;
 }): NudgeRange[] {
   const { bound, foldedRefs, protectedFromTurn, pinnedHeadRef } = input;
   const pinnedTurn = pinnedHeadRef ? bound.find((m) => m.ref === pinnedHeadRef)?.turn ?? -1 : -1;
@@ -234,16 +232,10 @@ export function recommendRanges(input: {
     pushRun(currentStart, bound.length - 1);
   }
 
-  const candidateRuns: { startIdx: number; endIdx: number }[] = [];
-  for (const rawRun of rawRuns) {
-    const slices = sliceRunBySemanticSeams(rawRun, bound, input.minSliceTokens ?? 8000);
-    candidateRuns.push(...slices);
-  }
-
   const cleanRuns: NudgeRange[] = [];
   const seenRanges = new Set<string>();
 
-  for (const { startIdx: origStart, endIdx: origEnd } of candidateRuns) {
+  for (const { startIdx: origStart, endIdx: origEnd } of rawRuns) {
     let start = origStart;
     let end = origEnd;
     let changed = true;
