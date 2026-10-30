@@ -57,8 +57,59 @@ export interface ReplayResult {
   billedUnits: number;
   baselineBilledUnits: number;
   hintsEmitted: number;
+  /** Tail notes (hydration, else recall hint) as production sends them. */
+  notes: NoteStats;
   probes: { total: number; inContext: number; viaHint: number; lost: number; minInContextPct: number };
   recordedUsage: { input: number; cacheRead: number; cacheWrite: number };
+}
+
+export interface NoteStats {
+  /** Requests that carried a note. */
+  requests: number;
+  /** Note tokens summed over all requests (resends included). */
+  tokens: number;
+  /** Distinct (turn, block) surfacings. */
+  blocks: number;
+  /** Surfacings whose matched terms appear in the turn's user text or assistant prose. */
+  grounded: number;
+  /** ...else in the turn's tool-call arguments. */
+  args: number;
+  /** ...else only in tool results. */
+  toolOnly: number;
+}
+
+const NOTE_LINE = /^- (b\d+) .* — matches: (.+)$/;
+
+/** Block ids and matched terms of a hydration/recall note. */
+export function parseNote(text: string): { blockId: string; terms: string[] }[] {
+  const out: { blockId: string; terms: string[] }[] = [];
+  for (const line of text.split("\n")) {
+    const m = NOTE_LINE.exec(line);
+    if (m) out.push({ blockId: m[1]!, terms: m[2]!.split(", ").map((t) => t.trim()).filter(Boolean) });
+  }
+  return out;
+}
+
+/** The current turn (since the last user message): user text + assistant prose, and tool-call arguments. */
+function turnProvenance(working: readonly JournalEntry[]): { prose: string; args: string } {
+  const prose: string[] = [];
+  const args: string[] = [];
+  for (let i = working.length - 1; i >= 0; i--) {
+    const m = working[i]!.type === "message" ? (working[i]!.message as { role?: string; content?: unknown }) : undefined;
+    if (!m) continue;
+    if (m.role === "user" || m.role === "assistant") {
+      const c = m.content;
+      if (typeof c === "string") prose.push(c);
+      else if (Array.isArray(c)) {
+        for (const b of c) {
+          if (b?.type === "text" && typeof b.text === "string") prose.push(b.text);
+          else if (b?.type === "toolCall") args.push(JSON.stringify(b.arguments ?? null));
+        }
+      }
+    }
+    if (m.role === "user") break;
+  }
+  return { prose: prose.join("\n").toLowerCase(), args: args.join("\n").toLowerCase() };
 }
 
 export const countTokens = (text: string): number => Math.ceil(text.length / 4);
@@ -145,6 +196,7 @@ export function replaySession(entries: readonly JournalEntry[], o: ReplayOptions
     billedUnits: 0,
     baselineBilledUnits: 0,
     hintsEmitted: 0,
+    notes: { requests: 0, tokens: 0, blocks: 0, grounded: 0, args: 0, toolOnly: 0 },
     probes: { total: 0, inContext: 0, viaHint: 0, lost: 0, minInContextPct: 100 },
     recordedUsage: { input: 0, cacheRead: 0, cacheWrite: 0 },
   };
@@ -237,6 +289,8 @@ export function replaySession(entries: readonly JournalEntry[], o: ReplayOptions
   let totalContext = 0;
   let totalCached = 0;
   let lastMessageRole: string | undefined;
+  let turnNo = 0;
+  const surfaced = new Set<string>();
 
   for (const entry of branch) {
     if (entry.type === "compaction") result.hostCompactions++;
@@ -253,7 +307,10 @@ export function replaySession(entries: readonly JournalEntry[], o: ReplayOptions
     now = Number.isFinite(ts) ? ts : (prevNow ?? 0) + 1000;
     engine.refresh(working as SessionEntryLike[]);
     engine.ingest(kernelMessagesFromEntries(working as SessionEntryLike[]));
-    if (lastMessageRole === "user") engine.onTurnStart();
+    if (lastMessageRole === "user") {
+      engine.onTurnStart();
+      turnNo++;
+    }
     let foldSigma = 0;
     if (o.mode === "simulated") {
       foldSigma = simulateFold();
@@ -278,10 +335,24 @@ export function replaySession(entries: readonly JournalEntry[], o: ReplayOptions
     const nudge = o.mode === "simulated" ? engine.nudgeText : (engine.decideNudge().text ?? engine.nudgeText);
     if (nudge) strings.push(`developer:${nudge}`);
     if (o.hints) {
-      const hint = engine.recallHintText();
-      if (hint) {
-        strings.push(`developer:${hint}`);
-        result.hintsEmitted++;
+      const hydration = engine.hydrationText();
+      const note = hydration ?? engine.recallHintText();
+      if (note) {
+        strings.push(`developer:${note}`);
+        if (!hydration) result.hintsEmitted++;
+        result.notes.requests++;
+        result.notes.tokens += countTokens(note);
+        const turn = turnProvenance(working);
+        for (const n of parseNote(note)) {
+          const key = `${turnNo}:${n.blockId}`;
+          if (surfaced.has(key)) continue;
+          surfaced.add(key);
+          result.notes.blocks++;
+          const terms = n.terms.map((t) => t.toLowerCase());
+          if (terms.some((t) => turn.prose.includes(t))) result.notes.grounded++;
+          else if (terms.some((t) => turn.args.includes(t))) result.notes.args++;
+          else result.notes.toolOnly++;
+        }
       }
     }
     let total = strings.reduce((s, x) => s + countTokens(x), 0);

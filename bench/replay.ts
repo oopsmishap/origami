@@ -104,7 +104,8 @@ const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(Math.
 
 function row(name: string, r: ReplayResult): string {
   const p = r.probes;
-  return `| ${name} | ${r.requests} | ${r.folds[1]}/${r.folds[2]}/${r.folds[3]} | ${k(r.meanContextTokens)} | ${k(r.peakContextTokens)} | ${r.simulatedHitPct}% | ${k(r.billedUnits)} | ${k(r.baselineBilledUnits)} | ${r.hintsEmitted} | ${p.total} | ${p.inContext}/${p.viaHint}/${p.lost} | ${p.minInContextPct.toFixed(0)}% | ${r.hostCompactions} | ${r.malformedLines} |`;
+  const n = r.notes;
+  return `| ${name} | ${r.requests} | ${r.folds[1]}/${r.folds[2]}/${r.folds[3]} | ${k(r.meanContextTokens)} | ${k(r.peakContextTokens)} | ${r.simulatedHitPct}% | ${k(r.billedUnits)} | ${k(r.baselineBilledUnits)} | ${n.requests} | ${k(n.tokens)} | ${n.blocks} | ${n.grounded}/${n.args}/${n.toolOnly} | ${p.total} | ${p.inContext}/${p.viaHint}/${p.lost} | ${p.minInContextPct.toFixed(0)}% | ${r.hostCompactions} | ${r.malformedLines} |`;
 }
 
 function main(): void {
@@ -115,8 +116,8 @@ function main(): void {
   const summaryCache = o.summaryCache ? loadReplaySummaryCache(o.summaryCache) : undefined;
   const misses = new Map();
   console.log(`origami replay · mode ${o.mode} · policy ${o.policy} · preset ${o.preset} · window ${o.window} · hints ${o.hints ? "on" : "off"} · summaries ${o.summarySource}${o.summaryCache ? ` (${o.summaryCache})` : ""}\n`);
-  console.log("| session | requests | folds t1/t2/t3 | mean ctx | peak ctx | hit | billed | baseline | hints | probes | in/hint/lost | min in-ctx | host compactions | malformed |");
-  console.log("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+  console.log("| session | requests | folds t1/t2/t3 | mean ctx | peak ctx | hit | billed | baseline | note reqs | note tokens | surfacings | prose/args/results | probes | in/hint/lost | min in-ctx | host compactions | malformed |");
+  console.log("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const path of o.sessions) {
     let text: string;
     try {
@@ -153,6 +154,14 @@ function main(): void {
       billedUnits: sum((r) => r.billedUnits),
       baselineBilledUnits: sum((r) => r.baselineBilledUnits),
       hintsEmitted: sum((r) => r.hintsEmitted),
+      notes: {
+        requests: sum((r) => r.notes.requests),
+        tokens: sum((r) => r.notes.tokens),
+        blocks: sum((r) => r.notes.blocks),
+        grounded: sum((r) => r.notes.grounded),
+        args: sum((r) => r.notes.args),
+        toolOnly: sum((r) => r.notes.toolOnly),
+      },
       probes: {
         total: sum((r) => r.probes.total),
         inContext: sum((r) => r.probes.inContext),
