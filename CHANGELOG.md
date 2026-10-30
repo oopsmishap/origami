@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.1 — 2026-10-30
+
+### Fixes
+- **Folded summaries no longer re-injected into the conversation**: hydration and recall hints matched the active turn's own `fold` call and result (which echo the block's paths), so every fold immediately pushed the just-folded summary back in as a tail message (which providers merge into the user's message). Origami tool traffic is now excluded from matching, and a block is never surfaced in the turn that folded it.
+- **Notes stay for the whole turn**: a hydration/recall note surfaced during a turn is resent unchanged on every tool step of that turn (tail notes are not persisted) and dropped when the turn ends; a block is not surfaced again for 5 turns.
+- **Import-path noise**: manifests no longer record parent-relative handles (`../engine.ts`) lifted from file contents, and path matching ignores them (including in existing manifests).
+- **Stuck after a fold**: the outbound estimate derived overhead from the host's projected tokens, which still include history folded since the last provider round; the first request after a large fold could exceed the window and be aborted with empty messages, repeatedly. Reclaim since the last round is now subtracted, and a request is blocked at the limit at most once per unchanged estimate, so the session can always send again.
+- **Nudge ranges are whole runs again**: v0.4.1 semantic slicing advertised overlapping ranges from the same start (and summed them into an inflated total), which could not be folded in one call. Slicing is removed; nudges list disjoint runs.
+
+### Changed
+- **Macro-compaction defaults to `review` in every preset** (was `auto` in `balanced` and `lean`). Drafts run only after the agent loop settles (`agent_end`), never after a mid-task tool step where a merge rewrites the cached prefix, and a failed or rejected draft is not retried until another fold changes the block tree. Set `macroCompaction: auto` to apply drafts without review.
+
 ## 0.5.0 — 2026-10-30
 
 ### Features & Improvements
