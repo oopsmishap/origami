@@ -55,6 +55,11 @@ export class CandidateStore {
   nextId = 1;
   /** Set when the host cannot run tool-less side turns; speculative folds stay off for the session. */
   disabled = false;
+  /**
+   * Block count when the last consolidation failed or was rejected. Consolidation is not retried
+   * until another fold changes the block tree, so a failing draft never loops.
+   */
+  consolidationBlockedAt: number | null = null;
 }
 
 export function candidatePrompt(ranges: readonly NudgeRange[]): string {
@@ -185,6 +190,7 @@ export function candidateConsolidation(engine: CandidateEngineView, store: Candi
   if (store.disabled || store.inFlight || store.pending) return null;
   const cfg = engine.config;
   if (cfg.macroCompaction === "off") return null;
+  if (store.consolidationBlockedAt === engine.state.tree.all().length) return null;
 
   const minBlocks = cfg.macroCompactionMinBlocks ?? 3;
   const live = engine.state.tree.live();
@@ -233,11 +239,15 @@ export type CandidateWork =
   | { kind: "tier1"; ranges: readonly NudgeRange[]; prompt: string }
   | { kind: "consolidation"; consolidation: ConsolidationCandidate; prompt: string };
 
-export function candidateWork(engine: CandidateEngineView, store: CandidateStore): CandidateWork | null {
+/**
+ * Side-turn work for the current moment. `"turn"`: a tool step just ended (opt-in tier-1 drafts
+ * only). `"settled"`: the agent loop finished and waits for the user; only then may a tier-2/3
+ * consolidation run, so it never rewrites the cached prefix in the middle of a task.
+ */
+export function candidateWork(engine: CandidateEngineView, store: CandidateStore, phase: "turn" | "settled"): CandidateWork | null {
   if (store.disabled || store.inFlight || store.pending) return null;
 
-  // Priority 1: Uncompressed raw history ready for tier-1 fold (if speculativeFolds is enabled)
-  if (engine.config.speculativeFolds) {
+  if (phase === "turn" && engine.config.speculativeFolds) {
     const ranges = engine.recommendedRanges(4);
     const timing = ranges.length > 0 ? engine.foldTiming(ranges) : null;
     const tier1Eligible =
@@ -250,8 +260,7 @@ export function candidateWork(engine: CandidateEngineView, store: CandidateStore
     }
   }
 
-  // Priority 2: Mature blocks eligible for macro-compaction consolidation
-  if (engine.config.macroCompaction !== "off") {
+  if (phase === "settled" && engine.config.macroCompaction !== "off") {
     const consolidation = candidateConsolidation(engine, store);
     if (consolidation) {
       return { kind: "consolidation", consolidation, prompt: consolidationPrompt(consolidation) };
@@ -298,6 +307,10 @@ export async function generateCandidate(
       ? work
       : { kind: "tier1", ranges: work, prompt: candidatePrompt(work) };
 
+  const fail = (error: string) => {
+    if (candidateJob.kind === "consolidation") store.consolidationBlockedAt = engine.state.tree.all().length;
+    onFailure(error);
+  };
   const controller = new AbortController();
   store.inFlight = controller;
   try {
@@ -311,7 +324,7 @@ export async function generateCandidate(
     beforeBuild();
     const built = buildCandidate(engine, store, replyText);
     if ("error" in built) {
-      onFailure(built.error);
+      fail(built.error);
       return;
     }
 
@@ -327,7 +340,7 @@ export async function generateCandidate(
         onAutoApplied?.(result.outcome, built);
         return;
       }
-      onFailure(`autonomous macro-compaction fold failed: ${result.error}`);
+      fail(`autonomous macro-compaction fold failed: ${result.error}`);
       return;
     }
 
@@ -336,7 +349,7 @@ export async function generateCandidate(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/tool/i.test(message)) store.disabled = true;
-    onFailure(message);
+    fail(message);
   } finally {
     store.inFlight = null;
   }

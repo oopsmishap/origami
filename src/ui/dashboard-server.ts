@@ -3297,7 +3297,7 @@ function renderDashboardHtml(): string {
       if ($('cfg-refTags')) $('cfg-refTags').checked = Boolean(cfg.refTags);
       if ($('cfg-paybackHorizonTurns')) $('cfg-paybackHorizonTurns').value = cfg.paybackHorizonTurns != null ? cfg.paybackHorizonTurns : 6;
       if ($('cfg-language')) $('cfg-language').value = cfg.language || 'preserve';
-      if ($('cfg-macroCompaction')) $('cfg-macroCompaction').value = cfg.macroCompaction || 'auto';
+      if ($('cfg-macroCompaction')) $('cfg-macroCompaction').value = cfg.macroCompaction || 'review';
       if ($('cfg-macroCompactionMinBlocks')) $('cfg-macroCompactionMinBlocks').value = cfg.macroCompactionMinBlocks != null ? cfg.macroCompactionMinBlocks : 3;
     }
 
@@ -3312,13 +3312,13 @@ function renderDashboardHtml(): string {
         if ($('cfg-growthStep')) { $('cfg-growthStep').value = 50000; $('cfg-val-growthStep').textContent = '50,000'; }
         if ($('cfg-compressibleFloor')) { $('cfg-compressibleFloor').value = 22500; $('cfg-val-compressibleFloor').textContent = '22,500'; }
         if ($('cfg-emergencyFillPct')) { $('cfg-emergencyFillPct').value = 85; $('cfg-val-emergencyFillPct').textContent = '85%'; }
-        if ($('cfg-macroCompaction')) $('cfg-macroCompaction').value = 'auto';
+        if ($('cfg-macroCompaction')) $('cfg-macroCompaction').value = 'review';
         if ($('cfg-macroCompactionMinBlocks')) $('cfg-macroCompactionMinBlocks').value = 3;
       } else if (preset === 'lean') {
         if ($('cfg-growthStep')) { $('cfg-growthStep').value = 25000; $('cfg-val-growthStep').textContent = '25,000'; }
         if ($('cfg-compressibleFloor')) { $('cfg-compressibleFloor').value = 15000; $('cfg-val-compressibleFloor').textContent = '15,000'; }
         if ($('cfg-emergencyFillPct')) { $('cfg-emergencyFillPct').value = 75; $('cfg-val-emergencyFillPct').textContent = '75%'; }
-        if ($('cfg-macroCompaction')) $('cfg-macroCompaction').value = 'auto';
+        if ($('cfg-macroCompaction')) $('cfg-macroCompaction').value = 'review';
         if ($('cfg-macroCompactionMinBlocks')) $('cfg-macroCompactionMinBlocks').value = 2;
       } else if (preset === 'relaxed') {
         if ($('cfg-growthStep')) { $('cfg-growthStep').value = 80000; $('cfg-val-growthStep').textContent = '80,000'; }
@@ -3341,7 +3341,7 @@ function renderDashboardHtml(): string {
         const hydrationMaxBlocks = Number($('cfg-hydrationMaxBlocks')?.value || 2);
         const refTags = Boolean($('cfg-refTags')?.checked);
         const cooldownTurns = Number($('cfg-cooldownTurns')?.value || 2);
-        const macroCompaction = $('cfg-macroCompaction')?.value || 'auto';
+        const macroCompaction = $('cfg-macroCompaction')?.value || 'review';
         const macroCompactionMinBlocks = Number($('cfg-macroCompactionMinBlocks')?.value || 3);
 
         const payload = {

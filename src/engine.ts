@@ -29,7 +29,16 @@ import { buildCacheReport, foldEventsFromBlocks, resolveEconomicsPrice, type Cac
 import { formatCoverage, mergeRanges, parseBlockRangeList, parseRangeList, rangesFromRefs } from "./engine-ranges.ts";
 import { renderOutbound } from "./engine-render.ts";
 import { foldTiming as buildFoldTiming, recommendedRanges as buildRecommendedRanges } from "./engine-timing.ts";
-import { hydrationText as buildHydrationText, recall as recallMessages, recallHintText as buildRecallHintText, searchBlocks, searchMessages as searchArchivedMessages, unfoldArtifact as buildUnfoldArtifact } from "./engine-recall.ts";
+import {
+  emptyTurnNotes,
+  hydrationText as buildHydrationText,
+  recall as recallMessages,
+  recallHintText as buildRecallHintText,
+  searchBlocks,
+  searchMessages as searchArchivedMessages,
+  unfoldArtifact as buildUnfoldArtifact,
+  type TurnNotes,
+} from "./engine-recall.ts";
 import { archiveDigest as buildArchiveDigest } from "./engine-folds.ts";
 import type { CacheRound, EngineContext, FoldCreatedBlock, FoldError, FoldMessageHit, FoldParams, FoldResult, FoldSearchHit, FoldSpec, HostPort, MessageRow, PlannedFold, StatusReport, StatusVaultReport, StatusZoneRow } from "./engine-types.ts";
 export type { CacheRound, EngineContext, FoldCreatedBlock, FoldError, FoldKeep, FoldMessageHit, FoldOutcome, FoldParams, FoldResult, FoldSearchHit, FoldSpec, HostPort, MessageRow, PlannedFold, StatusBlockRow, StatusReport, StatusVaultReport, StatusZoneRow } from "./engine-types.ts";
@@ -93,6 +102,12 @@ export class OrigamiEngine {
   private hintedAt = new Map<string, number>();
   /** Turn at which each block was last reactively hydrated. */
   private hydratedAt = new Map<string, number>();
+  /** Recall/hydration notes surfaced this turn, resent on every step until the turn ends. */
+  private turnNotes: TurnNotes = emptyTurnNotes();
+  /** Tokens reclaimed by folds since the last provider round (still inside the host's projected anchor). */
+  private reclaimedSinceRound = 0;
+  /** Turn in which each block was folded; a block is never recalled into its own folding turn. */
+  private foldedInTurn = new Map<string, number>();
   private pendingHostRewrite = false;
   /** Content hash per ref as last sent, to detect host-side rewrites of history. */
   private seenHashes = new Map<string, string>();
@@ -182,12 +197,30 @@ export class OrigamiEngine {
     return this.emergencyWarningsIgnored >= 2;
   }
 
+  /** Outbound estimate of the last request blocked at the context limit; null when none is pending. */
+  private abortedAtEstimate: number | null = null;
+
+  /**
+   * Whether to block a request whose estimate is at or over the window. A request is blocked at
+   * most once per estimate: if nothing shrank since the last block, the next attempt goes through,
+   * so an over-estimate can never leave the session unable to send anything (including a fold).
+   */
+  shouldAbortAtLimit(estimateTokens: number): boolean {
+    if (this.abortedAtEstimate !== null && estimateTokens >= this.abortedAtEstimate) return false;
+    this.abortedAtEstimate = estimateTokens;
+    return true;
+  }
+
+  clearContextAbort(): void {
+    this.abortedAtEstimate = null;
+  }
+
   get ignoredEmergencyWarnings(): number {
     return this.emergencyWarningsIgnored;
   }
 
   outboundEstimateTokens(messages: readonly unknown[]): OutboundEstimate {
-    return estimateOutboundTokens(messages, this.context());
+    return estimateOutboundTokens(messages, this.context(), this.reclaimedSinceRound);
   }
 
   private context(): EngineContext {
@@ -322,12 +355,12 @@ export class OrigamiEngine {
 
   /** Tail note naming folded blocks whose manifest matches the current turn. */
   recallHintText(): string | null {
-    return buildRecallHintText(this.context(), this.hintedAt, RECALL_HINT_QUIET_TURNS);
+    return buildRecallHintText(this.context(), this.hintedAt, RECALL_HINT_QUIET_TURNS, this.foldedInTurn, this.turnNotes);
   }
 
   /** Tail note reactively hydrating key decisions and constraints from matching folded history. */
   hydrationText(): string | null {
-    return buildHydrationText(this.context(), this.hydratedAt, RECALL_HINT_QUIET_TURNS);
+    return buildHydrationText(this.context(), this.hydratedAt, RECALL_HINT_QUIET_TURNS, this.foldedInTurn, this.turnNotes);
   }
   project(spec: string, tier: 1 | 2 | 3): ProjectUnitResult {
     if (tier === 1) {
@@ -603,6 +636,11 @@ export class OrigamiEngine {
       reclaimed += Math.max(0, replaced - p.block.tokensAfter);
     }
     this.persistFoldBatch(planned);
+    // A block just folded must not be "recalled" into the turn that folded it.
+    for (const c of created) {
+      this.foldedInTurn.set(c.id, this.activeTurn);
+    }
+    this.reclaimedSinceRound += reclaimed;
 
     this.pendingFoldAttribution = created[created.length - 1]!.id;
     this.activeNudge = null;
@@ -1102,6 +1140,8 @@ export class OrigamiEngine {
     this.lastRoundAt = round.ts;
     this.roundsLoaded = true;
     this.lastCacheRound = round;
+    // The host's projected-token anchor now reflects the folded context.
+    this.reclaimedSinceRound = 0;
     const hostRewrite = round.hostRewrite || this.pendingHostRewrite;
     if (!this.db) {
       this.pendingHostRewrite = false;

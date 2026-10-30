@@ -194,4 +194,66 @@ describe("engine reactive hydration integration", () => {
     engine.config = { ...engine.config, hydration: false };
     expect(engine.hydrationText()).toBeNull();
   });
+
+  it("never re-injects a block into the turn that folded it, ignores import paths, and keeps a note for the rest of its turn", () => {
+    const entries: { type: string; id: string; customType?: string; data?: unknown; message?: Record<string, unknown> }[] = [];
+    const push = (message: Record<string, unknown>) => entries.push({ type: "message", id: `e${entries.length}`, message });
+    for (let t = 0; t < 4; t++) {
+      push({ role: "user", content: `turn ${t} edits src/config.ts ${"detail ".repeat(200)}` });
+      push({ role: "assistant", content: `done ${t} ${"reply ".repeat(200)}` });
+    }
+    const engine = new OrigamiEngine({
+      host: {
+        sessionId: () => "hydration-fold-turn",
+        appendEvent: (op) => entries.push({ type: "custom", id: `j${entries.length}`, customType: JOURNAL_ENTRY_TYPE, data: op }),
+        saveArtifact: async () => "/tmp/x",
+        windowTokens: () => 100_000,
+        projectedTokens: () => 10_000,
+      },
+      entries,
+      modelId: "test",
+      config: { ...configFromPreset("balanced"), protectedTailMessages: 0, protectedTailTokens: 0, minFoldBenefitTokens: 0, minFoldBenefitWindowPct: 0, hydration: true },
+    });
+    const sync = () => {
+      engine.refresh(entries);
+      engine.ingest(entries.map((e) => (e.message ? messageFacts(e.message) : null)).filter((f): f is KernelMessage => f !== null));
+    };
+    sync();
+    const refs = engine.bound.map((m) => m.ref);
+
+    // The folding turn: the fold call names the range and its result echoes the block's paths.
+    push({ role: "user", content: "wrap up the config work" });
+    push({ role: "assistant", content: [{ type: "toolCall", id: "f1", name: "fold", arguments: { range: `${refs[2]}..${refs[5]}`, topic: "Config", summary: "src/config.ts presets" } }] });
+    sync();
+    const res = engine.executeFold({ folds: [{ range: `${refs[2]}..${refs[5]}`, topic: "Config", summary: "Presets in src/config.ts." }] });
+    expect(res.ok).toBe(true);
+    push({ role: "toolResult", toolCallId: "f1", toolName: "fold", content: [{ type: "text", text: "b1 (tier 1) · Config · src/config.ts" }] });
+    sync();
+    expect(engine.hydrationText()).toBeNull();
+    expect(engine.recallHintText()).toBeNull();
+
+    // A later turn that only reads a file importing "../src/config.ts" is not a match.
+    push({ role: "assistant", content: "done" });
+    push({ role: "user", content: "look at the loader" });
+    push({ role: "assistant", content: [{ type: "toolCall", id: "r1", name: "read", arguments: { path: "lib/loader.ts" } }] });
+    push({ role: "toolResult", toolCallId: "r1", toolName: "read", content: [{ type: "text", text: 'import { x } from "../src/config.ts";' }] });
+    sync();
+    expect(engine.hydrationText()).toBeNull();
+
+    // Real work on the folded file hydrates; later tool steps of the same turn resend the identical
+    // note (tail notes are not persisted), and the next unrelated turn drops it.
+    push({ role: "assistant", content: "ok" });
+    push({ role: "user", content: "check src/config.ts again" });
+    sync();
+    const note = engine.hydrationText();
+    expect(note).toContain("[origami hydration]");
+    push({ role: "assistant", content: [{ type: "toolCall", id: "r2", name: "read", arguments: { path: "src/config.ts" } }] });
+    push({ role: "toolResult", toolCallId: "r2", toolName: "read", content: [{ type: "text", text: "export const PRESETS = {}" }] });
+    sync();
+    expect(engine.hydrationText()).toBe(note);
+    push({ role: "assistant", content: "done" });
+    push({ role: "user", content: "now something unrelated" });
+    sync();
+    expect(engine.hydrationText()).toBeNull();
+  });
 });

@@ -254,6 +254,7 @@ export function registerTools(
       if (params.action === "reject") {
         store.pending = null;
         store.rejectedAtGrowth = rt.engine.growthSinceFold();
+        if ((c.spec.tier ?? 1) > 1) store.consolidationBlockedAt = rt.engine.state.tree.all().length;
         return report(`rejected ${c.id}`, true, `rejected ${c.id}`);
       }
       let spec = c.spec;

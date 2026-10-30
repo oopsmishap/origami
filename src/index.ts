@@ -298,7 +298,10 @@ export default function origamiExtension(api: ExtensionAPI): void {
     let rendered = compose();
     let estimate = rt.engine.outboundEstimateTokens(rendered);
     const window = rt.engine.windowTokens;
-    if (window <= 0 || estimate.total < window) return { messages: rendered as never };
+    if (window <= 0 || estimate.total < window) {
+      rt.engine.clearContextAbort();
+      return { messages: rendered as never };
+    }
 
     if (rt.engine.shouldAutoFoldEmergency()) {
       const ranges = rt.engine.recommendedRanges();
@@ -317,16 +320,25 @@ export default function origamiExtension(api: ExtensionAPI): void {
         rt.sync();
         rendered = compose();
         estimate = rt.engine.outboundEstimateTokens(rendered);
-        if (estimate.total < window) return { messages: rendered as never };
+        if (estimate.total < window) {
+          rt.engine.clearContextAbort();
+          return { messages: rendered as never };
+        }
       }
     }
 
     rendered = compose(estimate.total);
     estimate = rt.engine.outboundEstimateTokens(rendered);
     if (estimate.total >= window) {
-      ctx.abort();
-      if (ctx.hasUI) ctx.ui.notify("origami: request blocked at context limit; fold or start a new session.", "warning");
-      return { messages: [] as never };
+      // Block once. If the very same estimate comes back (the user retried or asked the model to
+      // fold, and nothing shrank), let the request through: the estimate may be high, and a real
+      // provider overflow error is recoverable where a silent repeated abort leaves the session stuck.
+      if (rt.engine.shouldAbortAtLimit(estimate.total)) {
+        ctx.abort();
+        if (ctx.hasUI) ctx.ui.notify("origami: request blocked at context limit; fold or start a new session. Retrying sends it anyway.", "warning");
+        return { messages: [] as never };
+      }
+      if (ctx.hasUI) ctx.ui.notify("origami: context estimate still over the limit; sending the request unblocked.", "warning");
     }
     return { messages: rendered as never };
   });
@@ -376,11 +388,10 @@ export default function origamiExtension(api: ExtensionAPI): void {
     return handleRecallToolResult(event, sessionId, record.runtime);
   });
 
-  // Speculative folds & Autonomous Macro-Compaction: draft or consolidate in a side turn once a turn ends.
-  api.on("turn_end", (_event, ctx) => {
+  // Side turns: opt-in tier-1 drafts after each tool step; tier-2/3 consolidation only once the
+  // agent loop has settled (never mid-task, where it would rewrite the cached prefix).
+  const launchCandidateWork = (ctx: Parameters<Parameters<typeof api.on>[1]>[1], phase: "turn" | "settled") => {
     const { record, rt } = getOrInitRuntime(ctx);
-    rt.sync();
-    rt.engine.onTurnEnd();
     const canRun = Boolean(
       ctx.runEphemeralTurn &&
       (record.config.speculativeFolds || record.config.macroCompaction !== "off") &&
@@ -390,7 +401,7 @@ export default function origamiExtension(api: ExtensionAPI): void {
     if (!canRun) return;
     const run = ctx.runEphemeralTurn!.bind(ctx);
     if (rt.candidates.inFlight || rt.candidates.pending) return;
-    const work = candidateWork(rt.engine, rt.candidates);
+    const work = candidateWork(rt.engine, rt.candidates, phase);
     if (!work) return;
     const t0 = performance.now();
     void generateCandidate(
@@ -426,6 +437,19 @@ export default function origamiExtension(api: ExtensionAPI): void {
         beforeBuild: () => rt.sync(),
       },
     );
+  };
+
+  api.on("turn_end", (_event, ctx) => {
+    const { rt } = getOrInitRuntime(ctx);
+    rt.sync();
+    rt.engine.onTurnEnd();
+    launchCandidateWork(ctx, "turn");
+  });
+
+  api.on("agent_end", (event, ctx) => {
+    if (event.willContinue) return;
+    getOrInitRuntime(ctx).rt.sync();
+    launchCandidateWork(ctx, "settled");
   });
 
   api.on("session_shutdown", (_event, ctx) => {

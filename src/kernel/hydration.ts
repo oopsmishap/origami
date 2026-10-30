@@ -10,6 +10,7 @@
  * Zero manual search turns required. Zero KV-cache invalidation of the stable prefix.
  */
 import type { Block, LedgerRecord } from "./types.ts";
+import { pathMentioned } from "./manifest.ts";
 
 export interface HydrationMatch {
   blockId: string;
@@ -45,17 +46,7 @@ function normalizePath(p: string): string {
 }
 
 function pathMatches(probe: string, path: string): boolean {
-  if (probe.includes(path)) return true;
-  const norm = normalizePath(path);
-  if (probe.includes(norm)) return true;
-  const segments = norm.split("/").filter(Boolean);
-  if (segments.length >= 2 && probe.includes(segments.slice(-2).join("/"))) return true;
-  if (segments.length >= 1) {
-    const filename = segments[segments.length - 1]!;
-    // Only match standalone filename if it looks like a distinct code file (> 4 chars)
-    if (filename.length >= 5 && probe.includes(filename)) return true;
-  }
-  return false;
+  return pathMentioned(probe, path);
 }
 
 export function matchHydration(options: HydrationOptions): HydrationMatch[] {

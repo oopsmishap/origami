@@ -165,7 +165,9 @@ describe("autonomous macro-compaction", () => {
       tier: 1,
     });
 
-    const work = candidateWork(engine, store);
+    // Never mid-task: a finished tool step does not start a consolidation.
+    expect(candidateWork(engine, store, "turn")).toBeNull();
+    const work = candidateWork(engine, store, "settled");
     expect(work).not.toBeNull();
     expect(work!.kind).toBe("consolidation");
 
@@ -228,7 +230,7 @@ describe("autonomous macro-compaction", () => {
     engine.ingest(entries.slice(0, 16).map((e) => messageFacts(e.message)).filter((f): f is KernelMessage => f !== null));
     engine.executeFold({ folds: [{ range: "m00011..m00014", topic: "B3", summary: "Summary of b3" }], tier: 1 });
 
-    const work = candidateWork(engine, store);
+    const work = candidateWork(engine, store, "settled");
     expect(work).not.toBeNull();
     expect(work!.kind).toBe("consolidation");
 
@@ -251,5 +253,28 @@ describe("autonomous macro-compaction", () => {
     // Staleness check: if b1 is unfolded, candidate becomes stale
     engine.executeUnfold("b1");
     expect(candidateStale(engine, store.pending!)).toBe(true);
+  });
+
+  it("does not retry a failed consolidation until another fold changes the block tree", async () => {
+    const { engine, entries } = makeEngine({ macroCompaction: "auto", macroCompactionMinBlocks: 2, blockMatureFolds: 1 });
+    const store = new CandidateStore();
+    const ingest = (n: number) => engine.ingest(entries.slice(0, n).map((e) => messageFacts(e.message)).filter((f): f is KernelMessage => f !== null));
+    ingest(8);
+    engine.executeFold({ folds: [{ range: "m00003..m00006", topic: "B1", summary: "Summary of b1" }], tier: 1 });
+    ingest(12);
+    engine.executeFold({ folds: [{ range: "m00007..m00010", topic: "B2", summary: "Summary of b2" }], tier: 1 });
+    ingest(16);
+    engine.executeFold({ folds: [{ range: "m00011..m00014", topic: "B3", summary: "Summary of b3" }], tier: 1 });
+
+    const work = candidateWork(engine, store, "settled");
+    expect(work?.kind).toBe("consolidation");
+    const failures: string[] = [];
+    await generateCandidate(engine, store, async () => ({ replyText: "not json" }), work!, { onFailure: (e) => failures.push(e) });
+    expect(failures.length).toBe(1);
+    expect(candidateWork(engine, store, "settled")).toBeNull();
+
+    ingest(20);
+    engine.executeFold({ folds: [{ range: "m00015..m00018", topic: "B4", summary: "Summary of b4" }], tier: 1 });
+    expect(candidateWork(engine, store, "settled")?.kind).toBe("consolidation");
   });
 });

@@ -37,8 +37,9 @@ function firstSeenUnique(values: Iterable<string>, cap: number): string[] {
   return [...new Set(values)].slice(0, cap);
 }
 
+/** Parent-relative handles (`../engine.ts`) are import specifiers inside file contents, not paths the work touched. */
 function pathsIn(text: string): string[] {
-  return [...text.matchAll(PATH_RE)].map((m) => m[1]!);
+  return [...text.matchAll(PATH_RE)].map((m) => m[1]!).filter((p) => !p.startsWith("../"));
 }
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
@@ -125,4 +126,23 @@ export function parseManifest(v: unknown): BlockManifest | undefined {
 /** Searchable terms (tools excluded: they are too generic to identify a block). */
 export function manifestTerms(m: BlockManifest): string[] {
   return [...m.paths, ...m.symbols, ...m.errors, ...m.commits];
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Whether `probe` mentions the manifest path `path` (whole path, or its last two segments).
+ * Parent-relative handles never count: `../src/config.ts` in a file's imports is not work on
+ * `src/config.ts`, and such handles are noise when they appear in old manifests.
+ */
+export function pathMentioned(probe: string, path: string): boolean {
+  if (path.startsWith("../")) return false;
+  const norm = path.replace(/^(\.\/)+/, "");
+  const segments = norm.split("/").filter(Boolean);
+  if (segments.length < 2) return false;
+  const needles = [norm];
+  if (segments.length > 2) needles.push(segments.slice(-2).join("/"));
+  return needles.some((needle) => new RegExp(`(?<![\\w.-])(?<!\\.\\.\\/)${escapeRegExp(needle)}(?![\\w-])`).test(probe));
 }

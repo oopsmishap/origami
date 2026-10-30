@@ -4,6 +4,7 @@
  * trusting it to remember that the work was folded.
  */
 import type { Block } from "./types.ts";
+import { pathMentioned } from "./manifest.ts";
 
 export interface RecallHint {
   blockId: string;
@@ -19,9 +20,7 @@ function escapeRegExp(s: string): string {
 }
 
 function pathMatches(probe: string, path: string): boolean {
-  if (probe.includes(path)) return true;
-  const segments = path.split("/").filter(Boolean);
-  return segments.length >= 2 && probe.includes(segments.slice(-2).join("/"));
+  return pathMentioned(probe, path);
 }
 
 export function matchRecallHints(i: { blocks: readonly Block[]; probe: string; exclude: ReadonlySet<string>; max: number }): RecallHint[] {

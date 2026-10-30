@@ -92,7 +92,7 @@ export const PRESETS: Record<Preset, Pick<OrigamiConfig, PresetKeys>> = {
     blockMatureFolds: 2,
     minFoldFillPct: 0.45,
     minFoldFillCapTokens: 160000,
-    macroCompaction: "auto",
+    macroCompaction: "review",
     macroCompactionMinBlocks: 3,
   },
   lean: {
@@ -109,7 +109,7 @@ export const PRESETS: Record<Preset, Pick<OrigamiConfig, PresetKeys>> = {
     blockMatureFolds: 1,
     minFoldFillPct: 0.3,
     minFoldFillCapTokens: 100000,
-    macroCompaction: "auto",
+    macroCompaction: "review",
     macroCompactionMinBlocks: 2,
   },
   relaxed: {
