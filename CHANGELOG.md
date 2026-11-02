@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.5.4 — 2026-11-02
+
+### Changed
+- Added `results/` and `conversations/` to `.gitignore`.
+
+
 ## 0.5.3 — 2026-11-02
 
 ### Fixed
