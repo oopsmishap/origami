@@ -77,9 +77,9 @@ function quietBlocks(
 }
 
 /**
- * Notes surfaced during the active turn. Tail notes are not persisted, so a note shown on one
- * tool step would vanish on the next; instead the turn's notes are resent verbatim on every
- * step (new matches append), and dropped once their block is folded away or the turn ends.
+ * Notes are discovered and emitted only on the first request of a user turn. They are not
+ * persisted or resent through the tool loop: a tail developer message after a tool result is
+ * represented by some providers as a new/empty user turn and interrupts the active task.
  */
 export interface TurnNotes {
   turn: number;
@@ -110,10 +110,11 @@ export function recallHintText(
   quietTurns: number,
   foldedInTurn: ReadonlyMap<string, number>,
   notes: TurnNotes,
+  allowDiscovery: boolean,
 ): string | null {
   const max = context.config.recallHintMax;
-  if (max <= 0) return null;
   const turn = turnNotesFor(context, notes, foldedInTurn);
+  if (!allowDiscovery || max <= 0) return null;
   const room = max - turn.hints.length;
   if (room > 0) {
     const probe = activeTurnProbe(context);
@@ -132,11 +133,12 @@ export function hydrationText(
   quietTurns: number,
   foldedInTurn: ReadonlyMap<string, number>,
   notes: TurnNotes,
+  allowDiscovery: boolean,
 ): string | null {
   if (!context.config.hydration) return null;
   const maxBlocks = context.config.hydrationMaxBlocks;
-  if (maxBlocks <= 0) return null;
   const turn = turnNotesFor(context, notes, foldedInTurn);
+  if (!allowDiscovery || maxBlocks <= 0) return null;
   const room = maxBlocks - turn.hydration.length;
   const probe = room > 0 ? activeTurnProbe(context) : "";
   if (room > 0 && probe.trim().length > 0) {

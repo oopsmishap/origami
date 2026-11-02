@@ -353,14 +353,14 @@ export class OrigamiEngine {
     return this.state.growthSinceFold(this.activeTurn, this.bookkeepingRefs);
   }
 
-  /** Tail note naming folded blocks whose manifest matches the current turn. */
+  /** Tail note naming folded blocks whose manifest matched at the user boundary. */
   recallHintText(): string | null {
-    return buildRecallHintText(this.context(), this.hintedAt, RECALL_HINT_QUIET_TURNS, this.foldedInTurn, this.turnNotes);
+    return buildRecallHintText(this.context(), this.hintedAt, RECALL_HINT_QUIET_TURNS, this.foldedInTurn, this.turnNotes, this.atUserBoundary);
   }
 
-  /** Tail note reactively hydrating key decisions and constraints from matching folded history. */
+  /** Key decisions and constraints matched at the user boundary; stable through the tool loop. */
   hydrationText(): string | null {
-    return buildHydrationText(this.context(), this.hydratedAt, RECALL_HINT_QUIET_TURNS, this.foldedInTurn, this.turnNotes);
+    return buildHydrationText(this.context(), this.hydratedAt, RECALL_HINT_QUIET_TURNS, this.foldedInTurn, this.turnNotes, this.atUserBoundary);
   }
   project(spec: string, tier: 1 | 2 | 3): ProjectUnitResult {
     if (tier === 1) {

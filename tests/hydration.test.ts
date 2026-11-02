@@ -240,8 +240,8 @@ describe("engine reactive hydration integration", () => {
     sync();
     expect(engine.hydrationText()).toBeNull();
 
-    // Real work on the folded file hydrates; later tool steps of the same turn resend the identical
-    // note (tail notes are not persisted), and the next unrelated turn drops it.
+    // Real work named by the user hydrates only on the first request. Once the assistant/tool
+    // loop starts, no developer tail note is resent (providers can interpret it as a new user turn).
     push({ role: "assistant", content: "ok" });
     push({ role: "user", content: "check src/config.ts again" });
     sync();
@@ -250,7 +250,8 @@ describe("engine reactive hydration integration", () => {
     push({ role: "assistant", content: [{ type: "toolCall", id: "r2", name: "read", arguments: { path: "src/config.ts" } }] });
     push({ role: "toolResult", toolCallId: "r2", toolName: "read", content: [{ type: "text", text: "export const PRESETS = {}" }] });
     sync();
-    expect(engine.hydrationText()).toBe(note);
+    expect(engine.hydrationText()).toBeNull();
+    expect(engine.recallHintText()).toBeNull();
     push({ role: "assistant", content: "done" });
     push({ role: "user", content: "now something unrelated" });
     sync();
@@ -294,8 +295,15 @@ describe("engine reactive hydration integration", () => {
     expect(engine.hydrationText()).toBeNull();
     expect(engine.recallHintText()).toBeNull();
 
-    // Passing the file as a path argument is.
+    // Passing the file as a path argument mid-turn does not introduce a new tail note.
     push({ role: "assistant", content: [{ type: "toolCall", id: "c2", name: "read", arguments: { path: "src/kernel/nudge.ts" } }] });
+    sync();
+    expect(engine.hydrationText()).toBeNull();
+    expect(engine.recallHintText()).toBeNull();
+
+    // A subsequent user boundary that explicitly names the file can hydrate it.
+    push({ role: "assistant", content: "done" });
+    push({ role: "user", content: "now inspect src/kernel/nudge.ts" });
     sync();
     expect(engine.hydrationText()).toContain("matches: src/kernel/nudge.ts");
   });

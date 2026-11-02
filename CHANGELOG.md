@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- **Hydration no longer interrupts active work**: hydration and recall notes are discovered and emitted only on the first request of a user turn. They are never introduced or resent after an assistant message, tool call, or tool result; providers can represent a tail developer message there as a new empty user turn, which previously cut off the task and made the model act on hydration instead.
+
 ### Changed
 - **Summary fidelity doctrine**: user words now explicitly outrank other source material; summaries must credit quotes and claims to their real author and preserve attempted, partial, failing and untested status exactly.
 - **Due-ordered tier promotion**: tier-2/3 nudges select the oldest age-proportional half of a tier (`(newest ref - last ref) / refs covered`) rather than merging every eligible block, retaining finer detail in recent summaries. The promotion decision now carries the selected block IDs end to end.
