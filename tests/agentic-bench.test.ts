@@ -45,6 +45,8 @@ describe("Agentic Benchmark Suite", () => {
       expect(() => sandbox.resolvePath("../escape.txt")).toThrow(SandboxEscapeError);
       expect(() => sandbox.resolvePath("/etc/passwd")).toThrow(SandboxEscapeError);
       expect(() => sandbox.resolvePath("C:\\Windows\\System32\\cmd.exe")).toThrow(SandboxEscapeError);
+      expect(() => sandbox.resolvePath("C:Windows\\System32\\cmd.exe")).toThrow(SandboxEscapeError);
+      expect(() => sandbox.resolvePath("\\\\server\\share\\file.txt")).toThrow(SandboxEscapeError);
     } finally {
       try {
         rmSync(tmp, { recursive: true, force: true });

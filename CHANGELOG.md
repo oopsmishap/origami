@@ -2,8 +2,11 @@
 
 ## Unreleased
 
+## 0.5.3 — 2026-11-02
+
 ### Fixed
 - **Hydration no longer interrupts active work**: hydration and recall notes are discovered and emitted only on the first request of a user turn. They are never introduced or resent after an assistant message, tool call, or tool result; providers can represent a tail developer message there as a new empty user turn, which previously cut off the task and made the model act on hydration instead.
+- **Agentic benchmark sandbox rejects foreign absolute paths**: Windows drive-qualified, drive-relative, and UNC paths are rejected on every host OS, restoring the CI boundary test on Linux.
 
 ### Changed
 - **Summary fidelity doctrine**: user words now explicitly outrank other source material; summaries must credit quotes and claims to their real author and preserve attempted, partial, failing and untested status exactly.

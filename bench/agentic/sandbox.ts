@@ -8,7 +8,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 
 export class SandboxEscapeError extends Error {
   constructor(path: string) {
@@ -51,6 +51,9 @@ export class Sandbox {
     const raw = (p ?? "").trim();
     if (raw.length === 0) throw new SandboxIoError("path must not be empty");
     if (raw.includes("\0")) throw new SandboxIoError("path contains NUL byte");
+    // `node:path` follows the host OS. On Linux, Windows absolute paths would otherwise be
+    // treated as harmless relative filenames beneath the sandbox root.
+    if (win32.isAbsolute(raw) || /^[A-Za-z]:/.test(raw)) throw new SandboxEscapeError(raw);
 
     const target = isAbsolute(raw) ? resolve(raw) : resolve(this.root, raw);
     const rel = relative(this.root, target);
