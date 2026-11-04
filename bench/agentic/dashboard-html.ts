@@ -14,8 +14,7 @@
  *
  * Visual language:
  * - MODE owns color: programming=blue, research=rose, general=emerald, memory=violet.
- * - STRATEGY owns stroke dash: origami=solid(glow), soft=dashed, handover=dotted,
- *   shake=dash-dot, sliding-window=sparse dot.
+ * - STRATEGY owns stroke dash: origami=solid(glow), soft=dashed, handover=dotted.
  * - Track cards grouped into per-mode swimlanes with live mode-level KPIs.
  * - Live states: THINKING (model in flight), TOOL (executing), RUNNING, DONE.
  */
@@ -53,8 +52,6 @@ export function getDashboardHtml(port: number): string {
       --strat-origami: #38bdf8;
       --strat-soft: #a855f7;
       --strat-handover: #fbbf24;
-      --strat-shake: #34d399;
-      --strat-sliding: #94a3b8;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -171,8 +168,6 @@ export function getDashboardHtml(port: number): string {
     .strat-origami { background: rgba(56,189,248,.15); color: #38bdf8; border: 1px solid rgba(56,189,248,.4); }
     .strat-soft { background: rgba(168,85,247,.15); color: #a855f7; border: 1px solid rgba(168,85,247,.4); }
     .strat-handover { background: rgba(251,191,36,.15); color: #fbbf24; border: 1px solid rgba(251,191,36,.4); }
-    .strat-shake { background: rgba(52,211,153,.15); color: #34d399; border: 1px solid rgba(52,211,153,.4); }
-    .strat-sliding-window { background: rgba(148,163,184,.15); color: #94a3b8; border: 1px solid rgba(148,163,184,.4); }
     .state-chip {
       font-family: 'JetBrains Mono', monospace; font-size: 9.5px; font-weight: 700;
       letter-spacing: .5px; padding: 2px 8px; border-radius: 4px; white-space: nowrap;
@@ -732,8 +727,8 @@ export function getDashboardHtml(port: number): string {
     var MODE_COLORS = { programming: '#38bdf8', research: '#fb7185', general: '#34d399', memory: '#c084fc' };
     var MODE_ICONS = { programming: '\\uD83C\\uDFAE', research: '\\uD83D\\uDD2C', general: '\\uD83D\\uDCD0', memory: '\\uD83E\\uDDE0' };
     var MODE_ORDER = ['programming', 'research', 'general', 'memory'];
-    var STRAT_DASH = { 'origami': '', 'soft': '7,4', 'handover': '3,3', 'shake': '8,3,2,3', 'sliding-window': '2,3' };
-    var STRAT_ORDER = ['origami', 'soft', 'handover', 'shake', 'sliding-window'];
+    var STRAT_DASH = { 'origami': '', 'soft': '7,4', 'handover': '3,3' };
+    var STRAT_ORDER = ['origami', 'soft', 'handover'];
 
     var tracks = {};        // runId -> track state
     var seriesByRun = {};   // runId -> [{turn, contextTokens, cacheHit, isProbe, probePassed, maintenance}]

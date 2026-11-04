@@ -4,11 +4,9 @@
  * Implements the primary context management strategies used across production
  * coding agents and research architectures:
  *
- * 1. "sliding-window" / "baseline": Naive FIFO sliding window (drops oldest turns at ceiling).
- * 2. "soft": Monolithic model summarization + recent uncompressed tail (omp /compact soft, Claude Code, OpenAI).
- * 3. "handover" / "handoff": Structured task state transfer document (omp /handoff, Devin, SWE-agent).
- * 4. "shake" / "tool-pruning": Observation elision / tool output truncation (omp /shake, OpenClaw, SWE-Pruner).
- * 5. "origami": Hierarchical pagoda folding + bounded ledger + JIT reactive hydration.
+ * 1. "soft": Monolithic model summarization + recent uncompressed tail (omp /compact soft, Claude Code, OpenAI).
+ * 2. "handover" / "handoff": Structured task state transfer document (omp /handoff, Devin, SWE-agent).
+ * 3. "origami": Hierarchical pagoda folding + bounded ledger + JIT reactive hydration.
  */
 
 import { OrigamiEngine } from "../src/engine.ts";
@@ -20,7 +18,7 @@ import { kernelMessagesFromEntries } from "../src/runtime.ts";
 import { countTokens, type JournalEntry } from "./replay-lib.ts";
 import { createReplayPolicyState, decideReplayPolicy } from "./replay-policy.ts";
 
-export type CompactionStrategyName = "origami" | "soft" | "handover" | "shake" | "sliding-window";
+export type CompactionStrategyName = "origami" | "soft" | "handover";
 
 export interface StrategyRenderResult {
   strategy: CompactionStrategyName;
@@ -67,55 +65,7 @@ export function entryToLlmMessage(entry: JournalEntry): { role: string; content:
 }
 
 // ============================================================================
-// 1. Sliding Window Truncation (Baseline)
-// ============================================================================
-
-export class SlidingWindowStrategy implements CompactionStrategyTracker {
-  readonly name: CompactionStrategyName = "sliding-window";
-  private messages: Array<{ role: string; content: string }> = [];
-
-  ingest(entry: JournalEntry): void {
-    const m = entryToLlmMessage(entry);
-    if (m) this.messages.push({ role: m.role, content: m.content });
-  }
-
-  render(windowTokens: number): StrategyRenderResult {
-    const system = {
-      role: "system",
-      content: "You are an expert software engineer reviewing a long-running coding session transcript. Answer accurately based on the session's facts, constraints, and decisions."
-    };
-
-    const maxTokens = Math.max(10000, windowTokens - 10000);
-    let currentTokens = countTokens(system.content);
-    const selected: Array<{ role: string; content: string }> = [];
-
-    for (let i = this.messages.length - 1; i >= 0; i--) {
-      const msg = this.messages[i]!;
-      const tok = countTokens(msg.content);
-      if (currentTokens + tok > maxTokens) break;
-      currentTokens += tok;
-      selected.push(msg);
-    }
-    selected.reverse();
-
-    const finalMessages = [system, ...selected];
-    const totalTokens = finalMessages.reduce((s, m) => s + countTokens(m.content), 0);
-
-    return {
-      strategy: this.name,
-      messages: finalMessages,
-      tokens: totalTokens,
-      metadata: { retainedTurns: selected.length, totalTurns: this.messages.length }
-    };
-  }
-
-  reset(): void {
-    this.messages = [];
-  }
-}
-
-// ============================================================================
-// 2. Soft Compaction (Model Summarization + Recent Tail)
+// 1. Soft Compaction (Model Summarization + Recent Tail)
 // ============================================================================
 
 export class SoftCompactionStrategy implements CompactionStrategyTracker {
@@ -354,85 +304,7 @@ export class HandoverStrategy implements CompactionStrategyTracker {
 }
 
 // ============================================================================
-// 4. Shake / Tool Pruning Strategy (Observation Elision)
-// ============================================================================
-
-export class ShakeStrategy implements CompactionStrategyTracker {
-  readonly name: CompactionStrategyName = "shake";
-  private messages: Array<{ role: string; content: string; toolName?: string; tokens: number; pruned: boolean }> = [];
-  private readonly protectRecentTurns: number;
-  private readonly pruneThresholdChars: number;
-
-  constructor(options: { protectRecentTurns?: number; pruneThresholdChars?: number } = {}) {
-    this.protectRecentTurns = options.protectRecentTurns ?? 6;
-    this.pruneThresholdChars = options.pruneThresholdChars ?? 500;
-  }
-
-  ingest(entry: JournalEntry): void {
-    const m = entryToLlmMessage(entry);
-    if (!m) return;
-    const tokens = countTokens(m.content);
-    this.messages.push({
-      role: m.role,
-      content: m.content,
-      toolName: m.toolName,
-      tokens,
-      pruned: false
-    });
-
-    this.applyPruning();
-  }
-
-  private applyPruning(): void {
-    // Keep the most recent protectRecentTurns unpruned
-    const pruneBoundary = Math.max(0, this.messages.length - this.protectRecentTurns);
-
-    for (let i = 0; i < pruneBoundary; i++) {
-      const msg = this.messages[i]!;
-      if (msg.pruned) continue;
-
-      // Identify bulky tool result outputs or file contents
-      const isToolOutput = msg.toolName !== undefined || msg.content.includes("[Tool Call:") || msg.content.length > this.pruneThresholdChars;
-      if (isToolOutput && msg.content.length > this.pruneThresholdChars) {
-        const originalTokens = msg.tokens;
-        // Keep header/preview and truncate body
-        const preview = msg.content.slice(0, 150).trim();
-        msg.content = `${preview}\n\n[Output truncated - ${originalTokens} tokens]`;
-        msg.tokens = countTokens(msg.content);
-        msg.pruned = true;
-      }
-    }
-  }
-
-  render(windowTokens: number): StrategyRenderResult {
-    const system = {
-      role: "system",
-      content: "You are an expert software engineer reviewing a session transcript with observation pruning. Answer accurately based on the session's facts, constraints, and decisions."
-    };
-
-    const out: Array<{ role: string; content: string }> = [system];
-    for (const m of this.messages) {
-      out.push({ role: m.role, content: m.content });
-    }
-
-    const totalTokens = out.reduce((s, m) => s + countTokens(m.content), 0);
-    const prunedCount = this.messages.filter((m) => m.pruned).length;
-
-    return {
-      strategy: this.name,
-      messages: out,
-      tokens: totalTokens,
-      metadata: { prunedObservations: prunedCount, totalMessages: this.messages.length }
-    };
-  }
-
-  reset(): void {
-    this.messages = [];
-  }
-}
-
-// ============================================================================
-// 5. Origami Strategy (Hierarchical Pagoda Folding + JIT Reactive Hydration)
+// 2. Origami Strategy (Hierarchical Pagoda Folding + JIT Reactive Hydration)
 // ============================================================================
 
 export class OrigamiStrategy implements CompactionStrategyTracker {
@@ -588,14 +460,10 @@ export class OrigamiStrategy implements CompactionStrategyTracker {
 
 export function createStrategyTracker(name: CompactionStrategyName, options?: { preset?: Preset; windowTokens?: number }): CompactionStrategyTracker {
   switch (name) {
-    case "sliding-window":
-      return new SlidingWindowStrategy();
     case "soft":
       return new SoftCompactionStrategy();
     case "handover":
       return new HandoverStrategy();
-    case "shake":
-      return new ShakeStrategy();
     case "origami":
       return new OrigamiStrategy(options);
     default:

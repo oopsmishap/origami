@@ -502,7 +502,7 @@ export class AgentRunner {
         // Compaction runs once per turn (turn start + turn end) on the persistent
         // `messages` array rather than on a throwaway copy rebuilt per tool step. The old
         // per-step `maintainAtLimit(stepHistory)` mutated only its copy, so the base never
-        // shrank and Soft/Sliding re-compacted the identical span once per tool step (Soft
+        // shrank and Soft re-compacted the identical span once per tool step (Soft
         // logged 6 duplicate notes on one turn). createTurnMaintainer's per-turn note dedup
         // then guarantees at most one note per distinct compaction. Mid-turn growth stays
         // bounded by prepareOutbound, so no request can overflow the window.

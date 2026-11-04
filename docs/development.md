@@ -43,7 +43,7 @@ bun bench/real-world.ts --model nvidia/nemotron-3.5-super-vl:free --preset balan
 
 ## Multi-strategy agentic benchmark
 
-`bun run bench:agentic` evaluates real-world compaction strategies (`origami`, `soft`, `handover`, `shake`, `sliding-window`) across 4 task modes (`programming`, `research`, `general`, `memory`) and 4 context intensity scales (`low`: 20 turns, `medium`: 60 turns, `high`: 150 turns, `insane`: 300 turns).
+`bun run bench:agentic` evaluates real-world compaction strategies (`origami`, `soft`, `handover`) across 4 task modes (`programming`, `research`, `general`, `memory`) and 4 context intensity scales (`low`: 20 turns, `medium`: 60 turns, `high`: 150 turns, `insane`: 300 turns).
 
 All runs execute inside a sandboxed workspace with boundary enforcement and egress locks pinned to the configured LLM endpoint.
 

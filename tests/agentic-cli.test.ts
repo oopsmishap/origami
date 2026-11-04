@@ -20,9 +20,7 @@ describe("Agentic Benchmark CLI & Orchestrator Suite", () => {
       expect(args.strategies).toEqual([
         "origami",
         "soft",
-        "handover",
-        "shake",
-        "sliding-window"
+        "handover"
       ]);
       expect(args.model).toBe("gemma4:latest");
       expect(args.pricingModel).toBe("gpt-5.6-sol");
@@ -97,15 +95,13 @@ describe("Agentic Benchmark CLI & Orchestrator Suite", () => {
       expect(args.strategies).toEqual([
         "origami",
         "soft",
-        "handover",
-        "shake",
-        "sliding-window"
+        "handover"
       ]);
     });
 
     it("parses comma-separated strategy lists", () => {
-      const args = parseCliArgs(["--strategy", "origami,shake"]);
-      expect(args.strategies).toEqual(["origami", "shake"]);
+      const args = parseCliArgs(["--strategy", "origami,handover"]);
+      expect(args.strategies).toEqual(["origami", "handover"]);
     });
   });
 

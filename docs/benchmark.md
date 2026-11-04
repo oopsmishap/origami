@@ -123,8 +123,6 @@ The agentic benchmark harness (`bench/agentic/runner.ts`) evaluates context comp
 1. **Origami (`origami`)**: Hierarchical pagoda folding with monotonic prefix retention, bounded pinned ledgers, and just-in-time reactive tail hydration.
 2. **Soft Compaction (`soft`)**: Periodic full-history summarization replacing older turns with a synthesized Markdown brief (`omp /compact soft`, Claude Code).
 3. **Handover (`handover`)**: Structured state transfer document capturing decisions, files, and next actions while clearing prior conversation history (`omp /handoff`, Devin, SWE-agent).
-4. **Shake (`shake`)**: Observation elision replacing bulky file contents and tool outputs with truncation markers while leaving user/assistant dialog intact (`omp /shake`, SWE-Pruner).
-5. **Sliding Window (`sliding-window`)**: Standard FIFO truncation dropping oldest turns when approaching the context boundary.
 
 ### Evaluation Modes
 
@@ -177,7 +175,7 @@ The default model is `gemma4:latest` (E4B), with a 131,072-token context window 
 
 LFM3 defaults to a 220,000-token effective window (below its 262,144-token Ollama ceiling). Gemma 4 and LFM3 have no benchmark-imposed output cap; other models default to 4,096 tokens. Use `--max-tokens <tokens>` to set Ollama's `num_predict` and `--window <tokens>` to override the effective context window.
 
-At 80% of the configured window, the runner requests strategy-specific maintenance before model requests and after turns, using the estimated outbound history and the latest provider-reported prompt count. Origami folds eligible completed ranges; soft and handover summarize or hand off; shake prunes eligible observations; sliding-window truncates older history. Maintenance cannot always reclaim space, for example when all history is protected or there are no eligible tool outputs. `--compact-every <n>` additionally requests maintenance every N turns.
+At 80% of the configured window, the runner requests strategy-specific maintenance before model requests and after turns, using the estimated outbound history and the latest provider-reported prompt count. Origami folds eligible completed ranges; soft and handover summarize or hand off. Maintenance cannot always reclaim space, for example when all history is protected. `--compact-every <n>` additionally requests maintenance every N turns.
 
 Each strategy also uses a `max(10,000, window - 8,000)` estimated-token outbound guard. Counts are character-based estimates, not model tokenization; the guard can retain an oversized indivisible message, so it is not a guaranteed provider limit. Tool-call/result pairs are sanitized when history is trimmed. Ollama's reported prompt count is recorded separately.
 

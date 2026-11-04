@@ -132,9 +132,7 @@ export function generateReportHtml(
   const STRAT_COLORS: Record<string, string> = {
     origami: "#38bdf8",
     soft: "#a855f7",
-    handover: "#fbbf24",
-    shake: "#34d399",
-    "sliding-window": "#94a3b8"
+    handover: "#fbbf24"
   };
 
   const MODE_COLORS: Record<string, string> = {
@@ -162,9 +160,7 @@ export function generateReportHtml(
   const STRAT_DASH_ARRAYS: Record<string, number[]> = {
     origami: [],
     soft: [7, 4],
-    handover: [3, 3],
-    shake: [8, 3, 2, 3],
-    "sliding-window": [2, 3]
+    handover: [3, 3]
   };
 
   let maxTurn = 10;
@@ -283,7 +279,7 @@ export function generateReportHtml(
       const modeTitle = MODE_TITLES[mode] || mode;
 
       const origamiRun = modeRuns.find((r) => r.strategy === "origami");
-      const slidingRun = modeRuns.find((r) => r.strategy === "sliding-window");
+      const handoverRun = modeRuns.find((r) => r.strategy === "handover");
       const softRun = modeRuns.find((r) => r.strategy === "soft");
 
       const bestScoreVal = Math.max(
@@ -320,8 +316,8 @@ export function generateReportHtml(
             <div class="mini-val" style="color: var(--success);">${origamiRun ? Math.round(origamiRun.probeScore * 100) + "%" : "-"}</div>
           </div>
           <div class="mode-mini-stat">
-            <div class="mini-label">Sliding Recall</div>
-            <div class="mini-val" style="color: var(--danger);">${slidingRun ? Math.round(slidingRun.probeScore * 100) + "%" : "-"}</div>
+            <div class="mini-label">Handover Recall</div>
+            <div class="mini-val" style="color: var(--danger);">${handoverRun ? Math.round(handoverRun.probeScore * 100) + "%" : "-"}</div>
           </div>
           <div class="mode-mini-stat">
             <div class="mini-label">Cache Hit (Origami)</div>
@@ -330,7 +326,7 @@ export function generateReportHtml(
         </div>
 
         <div class="mode-summary-text">
-          ${getModeEditorial(mode, origamiRun, slidingRun, softRun)}
+          ${getModeEditorial(mode, origamiRun, handoverRun, softRun)}
         </div>
       </div>`;
     })
@@ -361,8 +357,6 @@ export function generateReportHtml(
       --strat-origami: #38bdf8;
       --strat-soft: #a855f7;
       --strat-handover: #fbbf24;
-      --strat-shake: #34d399;
-      --strat-sliding: #94a3b8;
       --mode-programming: #38bdf8;
       --mode-research: #f43f5e;
       --mode-general: #10b981;
@@ -657,8 +651,6 @@ export function generateReportHtml(
     .strat-origami { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); }
     .strat-soft { background: rgba(168, 85, 247, 0.15); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.4); }
     .strat-handover { background: rgba(251, 191, 36, 0.15); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.4); }
-    .strat-shake { background: rgba(52, 211, 153, 0.15); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.4); }
-    .strat-sliding-window { background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.4); }
 
     .mode-pill {
       font-family: 'JetBrains Mono', monospace;
@@ -781,8 +773,6 @@ export function generateReportHtml(
         <div class="legend-item" data-strat="origami" onclick="filterSeries('origami')"><span class="legend-line" style="background: var(--strat-origami); height: 3px;"></span> <strong>Origami</strong> (Pagoda Folding + JIT Hydration)</div>
         <div class="legend-item" data-strat="soft" onclick="filterSeries('soft')"><span class="legend-line" style="background: var(--strat-soft); border-top: 2px dashed var(--strat-soft);"></span> <strong>Soft Compaction</strong> (Hierarchical Summaries)</div>
         <div class="legend-item" data-strat="handover" onclick="filterSeries('handover')"><span class="legend-line" style="background: var(--strat-handover); border-top: 2px dotted var(--strat-handover);"></span> <strong>Handover</strong> (Sub-agent Compaction)</div>
-        <div class="legend-item" data-strat="shake" onclick="filterSeries('shake')"><span class="legend-line" style="background: var(--strat-shake); border-top: 2px dashed var(--strat-shake);"></span> <strong>Context Shake</strong> (Dynamic Eviction)</div>
-        <div class="legend-item" data-strat="sliding-window" onclick="filterSeries('sliding-window')"><span class="legend-line" style="background: var(--strat-sliding); border-top: 2px dotted var(--strat-sliding);"></span> <strong>Sliding Window</strong> (Fixed FIFO Window)</div>
       </div>
     </div>
   </div>
@@ -968,9 +958,7 @@ function buildStrategyAnalysisHtml(results: AgenticRunResult[]): string {
   const descriptions: Record<CompactionStrategyName, string> = {
     origami: "Maintains folded summary blocks in a monotonic prefix, pins head/user directives in bounded ledgers, indexes archived messages in SQLite FTS5 (`fold_search` / `fold_recall`), and injects JIT hydration only when folded symbols match active work.",
     soft: "Rewrites older history into a periodic summary block. Reclaims substantial context tokens per cycle, at the cost of invalidating the KV cache prefix on each rewrite and condensing fine-grained historical details.",
-    handover: "Resets conversation state into a structured handoff document. Keeps active context small when triggered sparingly, but permanently drops earlier details not copied into the handoff note.",
-    shake: "Truncates bulky tool outputs in place while leaving conversational dialogue untouched. Preserves chat verbatim until dialogue mass itself reaches the outbound context guard.",
-    "sliding-window": "Drops oldest turns FIFO once context crosses the ceiling. Zero summarization overhead, but suffers permanent amnesia as soon as early directives or completed tasks slide past the horizon."
+    handover: "Resets conversation state into a structured handoff document. Keeps active context small when triggered sparingly, but permanently drops earlier details not copied into the handoff note."
   };
 
   const seen = Array.from(new Set(results.map((r) => r.strategy)));
@@ -988,7 +976,7 @@ function buildStrategyAnalysisHtml(results: AgenticRunResult[]): string {
       const extra = strat === "origami"
         ? ` (${hydrations} JIT hydration event${hydrations === 1 ? "" : "s"})`
         : "";
-      const cssVar = strat === "sliding-window" ? "var(--strat-sliding)" : `var(--strat-${strat})`;
+      const cssVar = `var(--strat-${strat})`;
       return `
       <div class="analysis-item" style="border-left: 3px solid ${cssVar};">
         <h4><span class="strat-pill strat-${strat}">${strat}</span> Measured Telemetry</h4>
@@ -1001,7 +989,7 @@ function buildStrategyAnalysisHtml(results: AgenticRunResult[]): string {
 function getModeEditorial(
   mode: ScenarioMode,
   origami?: AgenticRunResult,
-  sliding?: AgenticRunResult,
+  handover?: AgenticRunResult,
   _soft?: AgenticRunResult
 ): string {
   switch (mode) {
@@ -1015,13 +1003,13 @@ function getModeEditorial(
       return `Production TypeScript numerical, linear-algebra, and data-structures library with progressive modules, TypedArray adapters, unit tests, and RFCs.`;
     case "memory": {
       const origamiProbeText = origami && origami.probeScore != null ? Math.round(origami.probeScore * 100) + "%" : "n/a";
-      const slidingProbeText = sliding && sliding.probeScore != null ? Math.round(sliding.probeScore * 100) + "%" : "n/a";
+      const handoverProbeText = handover && handover.probeScore != null ? Math.round(handover.probeScore * 100) + "%" : "n/a";
       const d = origami?.strategyTelemetry?.details ?? {};
       const hydrations = typeof d.hydrationCount === "number" ? d.hydrationCount : d.hydrationInjected ? 1 : 0;
       const mechanism = hydrations > 0
         ? `pinned ledger + ${hydrations} JIT hydration(s) & archive search`
         : `pinned ledger & SQLite FTS archive`;
-      return `Plants session-only needles (never written to disk) followed by unique platform engineering tasks. <strong>Origami</strong> scored ${origamiProbeText} recall (${mechanism}); sliding-window scored ${slidingProbeText}.`;
+      return `Plants session-only needles (never written to disk) followed by unique platform engineering tasks. <strong>Origami</strong> scored ${origamiProbeText} recall (${mechanism}); handover scored ${handoverProbeText}.`;
     }
     default:
       return `Multi-disciplinary agentic challenge evaluating long-horizon consistency and token economics.`;

@@ -244,9 +244,9 @@ describe("Agentic Benchmark Tokenizer", () => {
   });
 
   describe("Strategy Runtime & llm.ts Integration", () => {
-    it("passes run-specific tokenizer into SlidingWindowRuntime", () => {
+    it("passes run-specific tokenizer into SoftCompactionRuntime", () => {
       const tokenizer = createSyntheticTokenizer("gemma4:latest", "gemma4", SYNTHETIC_TOKENIZER_SPEC);
-      const runtime = createCompactionRuntime("sliding-window", {
+      const runtime = createCompactionRuntime("soft", {
         windowTokens: 10_000,
         tokenizer
       });

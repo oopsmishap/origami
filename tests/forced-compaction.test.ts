@@ -9,9 +9,7 @@ describe("Forced Periodic Compaction (every 10 turns)", () => {
     const strategies: CompactionStrategyName[] = [
       "origami",
       "soft",
-      "handover",
-      "shake",
-      "sliding-window"
+      "handover"
     ];
 
     for (const strategy of strategies) {
@@ -112,21 +110,6 @@ describe("Forced Periodic Compaction (every 10 turns)", () => {
     expect(turn10?.maintenanceNote).toContain("Auto-handed off");
   }, 30_000);
 
-  test("AgentRunner forces shake on turn 10", async () => {
-    const result = await AgentRunner.run({
-      scenario: SCENARIO_REGISTRY.memory,
-      scale: "low",
-      strategy: "shake",
-      model: "mock-model",
-      mock: true,
-      compactEvery: 10,
-      cleanupWorkspace: true
-    });
-
-    const turn10 = result.trajectory.find((t) => t.turnIndex === 10);
-    expect(turn10?.maintenanceNote).toBeDefined();
-    expect(turn10?.maintenanceNote).toContain("Auto-shook");
-  }, 30_000);
   test("Origami compacts at 80% and retains messages appended after a fold", () => {
     const windowTokens = 100_000;
     const runtime = createCompactionRuntime("origami", { windowTokens });
@@ -153,7 +136,7 @@ describe("Forced Periodic Compaction (every 10 turns)", () => {
   });
 
   test("hard-bounds outbound history for every strategy and keeps tool pairs valid", () => {
-    const strategies: CompactionStrategyName[] = ["origami", "soft", "handover", "shake", "sliding-window"];
+    const strategies: CompactionStrategyName[] = ["origami", "soft", "handover"];
     const messages: LlmMessage[] = [{ role: "system", content: "system" }];
     for (let i = 0; i < 20; i++) {
       messages.push({ role: "user", content: `Turn ${i}: ${"requirements ".repeat(120)}` });

@@ -2,7 +2,7 @@
  * Base sandbox tool layer for agentic benchmark runs.
  *
  * These are real, working tools backed by the per-run Sandbox. Compaction tools
- * (fold / compact / handoff / shake) are layered on top by strategy runtimes.
+ * (fold / compact / handoff) are layered on top by strategy runtimes.
  * Nothing here reaches the network.
  */
 

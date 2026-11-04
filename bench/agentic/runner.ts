@@ -5,8 +5,6 @@
  * - origami (Pagoda folding + Bounded Ledger + JIT Hydration)
  * - soft (Hierarchical model summarization / omp compact soft / Claude Code)
  * - handover (Structured task handoff document / omp handoff / Devin)
- * - shake (Observation elision / tool output pruning / SWE-Pruner)
- * - sliding-window (Baseline FIFO context truncation)
  *
  * Across 4 agentic modes:
  * - programming (Build a feature-rich Pac-Man game)
@@ -61,9 +59,7 @@ export interface RunnerCliArgs {
 export const ALL_STRATEGIES: CompactionStrategyName[] = [
   "origami",
   "soft",
-  "handover",
-  "shake",
-  "sliding-window"
+  "handover"
 ];
 
 export const ALL_MODES: ScenarioMode[] = ["programming", "research", "general", "memory"];
@@ -71,7 +67,7 @@ export const ALL_MODES: ScenarioMode[] = ["programming", "research", "general", 
 export const RunnerCliArgsSchema = z.object({
   modes: z.array(z.enum(["programming", "research", "general", "memory"])).min(1),
   scales: z.array(z.enum(["low", "medium", "high", "insane", "marathon"])).min(1),
-  strategies: z.array(z.enum(["origami", "soft", "handover", "shake", "sliding-window"])).min(1),
+  strategies: z.array(z.enum(["origami", "soft", "handover"])).min(1),
   model: z.string().min(1),
   pricingModel: z.literal(GPT_5_6_SOL_PRICING.id),
   mock: z.boolean(),
@@ -212,7 +208,7 @@ export function createCliCommand(): Command {
     .allowUnknownOption(false)
     .option("-m, --mode <mode>", "Scenario mode: programming | research | general | memory | all")
     .option("-s, --scale <scale>", "Context intensity scale: low (20) | medium (60) | high (150) | insane (300) | marathon (1500)")
-    .option("--strategy <strat>", "Compaction strategy: origami | soft | handover | shake | sliding-window | all")
+    .option("--strategy <strat>", "Compaction strategy: origami | soft | handover | all")
     .option("-p, --parallel", "Execute benchmark runs concurrently in parallel", false)
     .option("-c, --concurrency <n>", "Max concurrent runs when running in parallel (default: all active runs)", (val) => parsePositiveInt(val, "--concurrency"))
     .option("-t, --turns <n>", "Override turn count for the benchmark run", (val) => parsePositiveInt(val, "--turns"))
@@ -348,7 +344,7 @@ Usage:
 Options:
   --mode, -m <mode>        Scenario mode: programming | research | general | memory | all (default: programming)
   --scale, -s <scale>      Context intensity scale: low (20) | medium (60) | high (150) | insane (300) | marathon (1500) (default: low)
-  --strategy <strat>       Compaction strategy: origami | soft | handover | shake | sliding-window | all (default: all)
+  --strategy <strat>       Compaction strategy: origami | soft | handover | all (default: all)
   --parallel, -p           Execute benchmark runs concurrently in parallel
   --concurrency, -c <n>    Max concurrent runs when running in parallel (default: all active runs)
   --turns, -t <n>          Override turn count for the benchmark run

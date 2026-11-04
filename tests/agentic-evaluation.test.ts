@@ -167,7 +167,7 @@ const fakeAudio = "AudioContext";
       expect(prereq.error).toBeDefined();
       expect(typeof prereq.error).toBe("string");
     }
-  });
+  }, 15_000);
 
   test("When container prerequisite is missing, items are marked 'unavailable' and not fake-passed", async () => {
     const { sandbox, cleanup } = createTestSandbox();

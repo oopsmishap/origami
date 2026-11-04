@@ -217,13 +217,11 @@ describe("Agentic Benchmark Suite", () => {
   });
 
 
-  test("Compaction strategy factory instantiates all 5 strategies", () => {
+  test("Compaction strategy factory instantiates all 3 strategies", () => {
     const strategies: CompactionStrategyName[] = [
       "origami",
       "soft",
-      "handover",
-      "shake",
-      "sliding-window"
+      "handover"
     ];
 
     for (const s of strategies) {
@@ -542,14 +540,14 @@ describe("Agentic Benchmark Suite", () => {
     const r2 = await AgentRunner.run({
       scenario: SCENARIO_REGISTRY.memory,
       scale: "low",
-      strategy: "shake",
+      strategy: "handover",
       model: "mock-model",
       mock: true,
       cleanupWorkspace: true
     });
     const html = generateReportHtml([r1, r2], { model: "gemma4:latest", scales: ["low"] });
     expect(html).toContain('<div class="meta-bar">');
-    expect(html).toContain("ORIGAMI · SHAKE (TIE)");
+    expect(html).toContain("ORIGAMI · HANDOVER (TIE)");
     expect(html).not.toContain("achieved 100% needle recall via JIT reactive hydration");
   }, 30_000);
 });

@@ -1,10 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import {
   createStrategyTracker,
-  SlidingWindowStrategy,
   SoftCompactionStrategy,
   HandoverStrategy,
-  ShakeStrategy,
   OrigamiStrategy,
   type CompactionStrategyName
 } from "../bench/compaction-strategies.ts";
@@ -24,23 +22,11 @@ function createMockEntry(role: "user" | "assistant", content: string, index: num
 
 describe("Compaction Strategies", () => {
   it("factory instantiates all strategy trackers correctly", () => {
-    const names: CompactionStrategyName[] = ["sliding-window", "soft", "handover", "shake", "origami"];
+    const names: CompactionStrategyName[] = ["soft", "handover", "origami"];
     for (const name of names) {
       const tracker = createStrategyTracker(name);
       expect(tracker.name).toBe(name);
     }
-  });
-
-  it("SlidingWindowStrategy preserves newest messages up to window ceiling", () => {
-    const tracker = new SlidingWindowStrategy();
-    for (let i = 0; i < 20; i++) {
-      tracker.ingest(createMockEntry(i % 2 === 0 ? "user" : "assistant", `Message turn ${i} with padding text.`, i));
-    }
-    const res = tracker.render(100000);
-    expect(res.strategy).toBe("sliding-window");
-    expect(res.messages.length).toBeGreaterThan(1);
-    expect(res.messages[0]!.role).toBe("system");
-    expect(res.tokens).toBeGreaterThan(0);
   });
 
   it("SoftCompactionStrategy triggers summarization when exceeding threshold", () => {
@@ -69,22 +55,6 @@ describe("Compaction Strategies", () => {
     expect(res.strategy).toBe("handover");
     expect(res.metadata.hasHandoff).toBe(true);
     expect(res.messages.some((m) => m.content.includes("<handoff-context>"))).toBe(true);
-  });
-
-  it("ShakeStrategy prunes bulky older observations while preserving recent ones", () => {
-    const tracker = new ShakeStrategy({ protectRecentTurns: 4, pruneThresholdChars: 100 });
-    for (let i = 0; i < 15; i++) {
-      const bulkyContent = `Turn ${i}: [Tool Call: read {"path":"src/test.ts"}] Detailed output: ${"data ".repeat(100)}`;
-      tracker.ingest(createMockEntry(i % 2 === 0 ? "user" : "assistant", bulkyContent, i));
-    }
-
-    const res = tracker.render(100000);
-    expect(res.strategy).toBe("shake");
-    expect(res.metadata.prunedObservations as number).toBeGreaterThan(0);
-    expect(res.messages.some((m) => m.content.includes("[Output truncated"))).toBe(true);
-    // Recent messages should not be truncated
-    const lastMsg = res.messages.at(-1)!;
-    expect(lastMsg.content.includes("[Output truncated")).toBe(false);
   });
 
   it("OrigamiStrategy renders hierarchical folds with active tail and hydration", () => {

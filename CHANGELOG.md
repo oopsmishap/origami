@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Removed
+- **Dropped `shake` and `sliding-window` benchmark strategies**: both were unrealistic standalone comparators (shake's observation pruning starves on tool-heavy code-authoring workloads where tokens live in `tool_calls` arguments, not tool results; sliding-window's FIFO truncation is a strawman once deep-horizon probes enforce ≥45% plant→probe lag) and neither models how real agents manage context. The benchmark now runs `origami`, `soft`, and `handover` (`--strategy all` = 3 runs). The replay-tracker library (`bench/compaction-strategies.ts`) drops the same two trackers; unnamed FIFO baselines used for compression-ratio comparisons in `real-world.ts`/`web-server.ts` are unchanged. Reports rename the "Sliding Recall" tile to "Handover Recall".
+
 ## 0.5.5 — 2026-11-04
 
 ### Fixed

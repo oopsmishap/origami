@@ -2,7 +2,7 @@
  * Strategy-specific compaction runtimes for the agentic benchmark.
  *
  * Each strategy provides:
- * 1. Compaction tools exposed to the agent (fold, compact, handoff, shake).
+ * 1. Compaction tools exposed to the agent (fold, compact, handoff).
  * 2. System prompt instructions explaining how the agent should manage its context.
  * 3. `autoMaintain`: automatic threshold-triggered maintenance between turns.
  * 4. `prepareOutbound`: outbound message filtering / truncation before calling the model.
@@ -24,7 +24,7 @@ import type { SessionEntryLike } from "../../src/kernel/state.ts";
 import { type JournalEntry } from "../replay-lib.ts";
 import { createReplayPolicyState, decideReplayPolicy } from "../replay-policy.ts";
 
-export type CompactionStrategyName = "origami" | "soft" | "handover" | "shake" | "sliding-window";
+export type CompactionStrategyName = "origami" | "soft" | "handover";
 export const AUTO_COMPACTION_FILL = 0.80;
 
 export interface StrategyTelemetry {
@@ -46,7 +46,7 @@ export interface CompactionRuntime {
   handleTool(name: string, args: Record<string, unknown>, messages: LlmMessage[]): string;
   /** Automatic maintenance hook called after an agent turn ends. */
   autoMaintain(messages: LlmMessage[], windowTokens: number, force?: boolean): { acted: boolean; note?: string };
-  /** Prepares outbound messages for the LLM call (e.g. host-side sliding window). */
+  /** Prepares outbound messages for the LLM call (e.g. bounded recent window). */
   prepareOutbound(messages: LlmMessage[], windowTokens: number): LlmMessage[];
   /** Metrics snapshot. */
   telemetry(): StrategyTelemetry;
@@ -100,58 +100,7 @@ function boundedOutbound(messages: LlmMessage[], windowTokens: number, tokenizer
 }
 
 // ============================================================================
-// 1. Sliding Window Strategy (Baseline)
-// ============================================================================
-
-export class SlidingWindowRuntime implements CompactionRuntime {
-  readonly strategy: CompactionStrategyName = "sliding-window";
-  private droppedTurns = 0;
-  private readonly tokenizer: BenchmarkTokenizer;
-
-  constructor(opts: { tokenizer?: BenchmarkTokenizer } = {}) {
-    this.tokenizer = opts.tokenizer ?? getDefaultTokenizer();
-  }
-
-  toolSpecs(): LlmToolSpec[] {
-    return [];
-  }
-
-  systemInstructions(): string {
-    return "Context management: Older conversation history is truncated automatically when approaching the context ceiling.";
-  }
-
-  handleTool(): string {
-    return "sliding-window has no compaction tools; truncation is host-side.";
-  }
-
-  autoMaintain(messages: LlmMessage[], windowTokens: number, force = false): { acted: boolean; note?: string } {
-    const before = messages.reduce((sum, message) => sum + countLlmMessageTokens(message, this.tokenizer), 0);
-    if (!force && before < Math.ceil(windowTokens * AUTO_COMPACTION_FILL)) return { acted: false };
-    const kept = boundedOutbound(messages, Math.floor(windowTokens * 0.7) + 8_000, this.tokenizer);
-    const after = kept.reduce((sum, message) => sum + countLlmMessageTokens(message, this.tokenizer), 0);
-    if (after >= before) return { acted: false };
-    messages.splice(0, messages.length, ...kept);
-    this.droppedTurns++;
-    return { acted: true, note: `Sliding-window dropped ${before - after} estimated tokens` };
-  }
-
-  prepareOutbound(messages: LlmMessage[], windowTokens: number): LlmMessage[] {
-    return boundedOutbound(messages, windowTokens, this.tokenizer);
-  }
-
-  telemetry(): StrategyTelemetry {
-    return {
-      strategy: this.strategy,
-      compactionEvents: this.droppedTurns,
-      toolInvocations: 0,
-      tokensReclaimed: 0,
-      details: { droppedTurns: this.droppedTurns }
-    };
-  }
-}
-
-// ============================================================================
-// 2. Soft Compaction Strategy (omp /compact soft, Claude Code)
+// 1. Soft Compaction Strategy (omp /compact soft, Claude Code)
 // ============================================================================
 
 export class SoftCompactionRuntime implements CompactionRuntime {
@@ -418,102 +367,7 @@ export class HandoverRuntime implements CompactionRuntime {
 }
 
 // ============================================================================
-// 4. Shake / Tool Pruning Strategy (omp /shake, OpenClaw, SWE-Pruner)
-// ============================================================================
-
-export class ShakeRuntime implements CompactionRuntime {
-  readonly strategy: CompactionStrategyName = "shake";
-  private shakes = 0;
-  private toolCalls = 0;
-  private tokensReclaimed = 0;
-  private prunedMessages = 0;
-  private readonly protectRecentTurns: number;
-  private readonly tokenizer: BenchmarkTokenizer;
-
-  constructor(opts: { protectRecentTurns?: number; tokenizer?: BenchmarkTokenizer } = {}) {
-    this.protectRecentTurns = opts.protectRecentTurns ?? 6;
-    this.tokenizer = opts.tokenizer ?? getDefaultTokenizer();
-  }
-  toolSpecs(): LlmToolSpec[] {
-    return [
-      {
-        type: "function",
-        function: {
-          name: "shake",
-          description: "Elide older bulky tool outputs (file reads, command outputs) without summarizing conversation text.",
-          parameters: { type: "object", properties: {} }
-        }
-      }
-    ];
-  }
-
-  systemInstructions(): string {
-    return "Context management: Use the `shake` tool to prune older heavy tool results while keeping conversation dialog intact.";
-  }
-
-  handleTool(name: string, _args: Record<string, unknown>, messages: LlmMessage[]): string {
-    if (name !== "shake") return `unknown tool: ${name}`;
-    this.toolCalls++;
-    const res = this.applyShake(messages);
-    return `Shook context: pruned ${res.pruned} heavy observations, reclaiming ~${res.reclaimed} tokens.`;
-  }
-
-  autoMaintain(messages: LlmMessage[], windowTokens: number, force = false): { acted: boolean; note?: string } {
-    const totalTokens = messages.reduce((sum, message) => sum + countLlmMessageTokens(message, this.tokenizer), 0);
-    const trigger = Math.round(windowTokens * AUTO_COMPACTION_FILL);
-    if (force || totalTokens >= trigger) {
-      const res = this.applyShake(messages);
-      if (res.pruned > 0) {
-        return { acted: true, note: `Auto-shook ${res.pruned} tool results (${res.reclaimed.toLocaleString()} tokens reclaimed)` };
-      }
-    }
-    return { acted: false };
-  }
-
-  private applyShake(messages: LlmMessage[]): { pruned: number; reclaimed: number } {
-    let pruned = 0;
-    let reclaimed = 0;
-    const boundary = Math.max(0, messages.length - this.protectRecentTurns);
-
-    for (let i = 0; i < boundary; i++) {
-      const m = messages[i]!;
-      if (m.role === "tool" || m.content.includes("lines ") || m.content.includes("read_file") || m.content.length > 800) {
-        if (!m.content.includes("[Output truncated")) {
-          const originalTokens = this.tokenizer.countText(m.content);
-          const preview = m.content.slice(0, 180).trim();
-          m.content = `${preview}\n\n[Output truncated - ${originalTokens} tokens elided]`;
-          const newTokens = this.tokenizer.countText(m.content);
-          reclaimed += Math.max(0, originalTokens - newTokens);
-          pruned++;
-        }
-      }
-    }
-
-    if (pruned > 0) {
-      this.shakes++;
-      this.prunedMessages += pruned;
-      this.tokensReclaimed += reclaimed;
-    }
-    return { pruned, reclaimed };
-  }
-
-  prepareOutbound(messages: LlmMessage[], windowTokens: number): LlmMessage[] {
-    return boundedOutbound(messages, windowTokens, this.tokenizer);
-  }
-
-  telemetry(): StrategyTelemetry {
-    return {
-      strategy: this.strategy,
-      compactionEvents: this.shakes,
-      toolInvocations: this.toolCalls,
-      tokensReclaimed: this.tokensReclaimed,
-      details: { prunedObservations: this.prunedMessages }
-    };
-  }
-}
-
-// ============================================================================
-// 5. Origami Strategy (Pagoda Folding + Bounded Ledger + JIT Hydration)
+// 3. Origami Strategy (Pagoda Folding + Bounded Ledger + JIT Hydration)
 // ============================================================================
 
 export class OrigamiRuntime implements CompactionRuntime {
@@ -972,14 +826,10 @@ export function createCompactionRuntime(
   opts?: { preset?: Preset; windowTokens?: number; forceThresholds?: boolean; tokenizer?: BenchmarkTokenizer }
 ): CompactionRuntime {
   switch (strategy) {
-    case "sliding-window":
-      return new SlidingWindowRuntime(opts);
     case "soft":
       return new SoftCompactionRuntime(opts);
     case "handover":
       return new HandoverRuntime(opts);
-    case "shake":
-      return new ShakeRuntime(opts);
     case "origami":
       return new OrigamiRuntime(opts);
     default:
