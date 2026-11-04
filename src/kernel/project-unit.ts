@@ -23,6 +23,8 @@ export interface ProjectUnitOk {
   projected: ProjectedSpan;
   widened: boolean;
   turnCount: number;
+  /** Set when the request reached protected turns and was snapped to whole foldable turns. */
+  snapped?: string[];
 }
 
 export interface ProjectUnitErr {
@@ -105,6 +107,8 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
   let headHit = false;
   let turnHit = false;
   let tailHit = false;
+  /** Turns the request reached but that must stay whole; drives boundary snapping. */
+  const protectedTouchByRange = ranges.map(() => new Set<number>());
 
   for (const turn of touchedTurns) {
     const members = membersByTurn.get(turn) ?? [];
@@ -131,20 +135,26 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
           if (before) boundaryHints.push(`end at ${before.ref} or earlier (turn ${turn} is ${isInFlight ? "in flight" : "in the protected tail"})`);
         }
       }
+      for (let r = 0; r < ranges.length; r++) {
+        if (members.some((i) => spanHits(bound[i]!.ref, [ranges[r]!]))) protectedTouchByRange[r]!.add(turn);
+      }
       continue;
     }
 
     for (const i of members) selected.add(i);
   }
 
-  if (splits > 0) {
-    const hint = boundaryHints.length > 0 ? `; ${[...new Set(boundaryHints)].join("; ")}` : "";
-    return { ok: false, error: `range splits ${splits} turn(s)${hint}` };
+  if (selected.size === 0) {
+    // Nothing foldable inside the request: keep the actionable rejections.
+    if (splits > 0) {
+      const hint = boundaryHints.length > 0 ? `; ${[...new Set(boundaryHints)].join("; ")}` : "";
+      return { ok: false, error: `range splits ${splits} turn(s)${hint}` };
+    }
+    if (headHit) return { ok: false, error: "range inside protected head" };
+    if (turnHit) return { ok: false, error: "range includes current in-flight turn" };
+    if (tailHit) return { ok: false, error: `range includes protected recent tail (turn ${protectedFromTurn} onward)` };
+    return { ok: false, error: "range matches no messages" };
   }
-  if (headHit) return { ok: false, error: "range inside protected head" };
-  if (turnHit) return { ok: false, error: "range includes current in-flight turn" };
-  if (tailHit) return { ok: false, error: `range includes protected recent tail (turn ${protectedFromTurn} onward)` };
-  if (selected.size === 0) return { ok: false, error: "range matches no messages" };
 
   const headTurn = pinnedHeadRef !== null ? pinnedHeadTurn(bound, pinnedHeadRef) : -1;
   const isEligible = (idx: number) => {
@@ -173,6 +183,24 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
     if (!foldedRefs.has(m.ref) && spanHits(m.ref, ranges)) foldable.add(i);
   }
 
+  // Report boundary snapping: ranges that touched protected turns and were trimmed to
+  // their foldable interior (or dropped entirely). Ordinary whole-turn widening stays silent.
+  const snapped: string[] = [];
+  for (let r = 0; r < ranges.length; r++) {
+    if (protectedTouchByRange[r]!.size === 0) continue;
+    const req = ranges[r]!;
+    const inner = indices.filter((i) => spanHits(bound[i]!.ref, [req]));
+    if (inner.length === 0) {
+      snapped.push(`${req.start}..${req.end} → dropped (protected turn)`);
+      continue;
+    }
+    const first = bound[inner[0]!]!.ref;
+    const last = bound[inner[inner.length - 1]!]!.ref;
+    if (first !== req.start || last !== req.end) {
+      snapped.push(`${req.start}..${req.end} → ${first}..${last}`);
+    }
+  }
+
   return {
     ok: true,
     projected: {
@@ -183,6 +211,7 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
     },
     widened: selected.size > foldable.size || toolPairOutcome.widened,
     turnCount: touchedTurns.size,
+    ...(snapped.length > 0 ? { snapped } : {}),
   };
 }
 

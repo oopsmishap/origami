@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.5.5 — 2026-11-04
+
+### Fixed
+- **Fold boundary snapping** (`src/kernel/project-unit.ts`): a model-authored `fold` whose range clips the pinned head, the in-flight turn, or the protected tail now snaps inward to its whole foldable interior instead of being rejected. Previously every such call failed (`range splits 1 turn(s); start at m00006 or later …`) and Origami fell back to ceiling auto-folds at 80% window fill; a live 150-turn run showed 18/18 voluntary `fold` calls rejected. The applied range is reported (`range snapped to whole turns: m00004..m00460 → m00006..m00453`); the legacy rejection strings remain when nothing foldable is left.
+- **Duplicate read-tool suppression** (`bench/agentic/ai-tools.ts`, `bench/agentic/agent.ts`): identical read-only tool calls within one turn (`fold_search`, `fold_recall`, `read_file`, `list_files`, `grep`, `fold_status`) are served from a per-turn memo with a "synthesize your final response" prompt. Stops the observed `fold_recall(m00396)` ×7 identical-call loop on a single turn; mutators are never deduped and the memo resets each turn.
+- **Single-pass turn maintenance** (`bench/agentic/agent.ts`): compaction now runs on the persistent message array at turn boundaries (`createTurnMaintainer`, with per-turn note dedup) instead of re-compacting a throwaway copy on every tool step inside `prepareStep`. Soft/Sliding previously logged 2–6 duplicate compaction notes per turn, inflating `compactionEvents`/`tokensReclaimed`.
+- **Harness timeout hardening**: `gemma4`/`lfm3` default `num_predict` capped at 8192, Bun's 300s `fetch` socket kill disabled for Ollama calls, `think:true` step timeout auto-retries with `think:false`, per-step/total AI SDK timeouts separated, and turn-level `TimeoutError` recovery keeps multi-hour runs alive.
+
+### Changed
+- **Memory Task Rubric split** (`bench/agentic/evaluation.ts`): `memory`/`all` Task Rubric now scores shipped workspace deliverables (platform modules, unit tests, domain barrel exports, operational runbooks — scale-aware, unscheduled kinds report `unavailable`) plus a zero-leaked-secrets scan, instead of duplicating needle recall. Probe Recall remains needle-only. A leaked session-only value now fails the rubric even when all probes pass.
+- **Stratified deep-horizon & override needles** (`bench/agentic/scenarios.ts`): sub-linear counts (4/8/14/20/32), zero Turn-1 placements, ≥45% plant→probe lag, and ~25% superseded policy-override needles with stale/hedge-aware probe scoring.
+
+### Bench
+- Verified `bun test` 360 pass / 0 fail (2,778 assertions) and a live `gemma4:latest` 20-turn run exercising fold snapping and override recall.
+
 ## 0.5.4 — 2026-11-02
 
 ### Changed

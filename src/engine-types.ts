@@ -38,12 +38,12 @@ export interface FoldSpec {
   retire?: string[];
 }
 export interface FoldKeep { kind: "constraint" | "decision" | "objective"; text: string; ref?: string }
-export interface FoldParams { folds: FoldSpec[]; tier?: 1 | 2 | 3 }
+export interface FoldParams { folds: FoldSpec[]; tier?: 1 | 2 | 3; force?: boolean }
 export interface FoldCreatedBlock { id: string; tier: 1 | 2 | 3; refs: string[]; tokensBefore: number; tokensAfter: number; topic: string; missing: string[] }
-export interface FoldOutcome { blocks: FoldCreatedBlock[]; tokensReclaimed: number; foldCount: number }
+export interface FoldOutcome { blocks: FoldCreatedBlock[]; tokensReclaimed: number; foldCount: number; snapped?: string[] }
 export type FoldError = { ok: false; error: string; foldIndex: number };
 export type FoldResult = { ok: true; outcome: FoldOutcome } | FoldError;
-export interface PlannedFold { block: Block; refs: string[] }
+export interface PlannedFold { block: Block; refs: string[]; snapped?: string[] }
 
 export interface StatusBlockRow { id: string; tier: number; coverage: string; tokens: number; tokensBefore: number; tokensAfter: number; reclaimed: number; topic: string; summary: string; children: string[]; status: BlockStatus; consumedBy: string | null; survivedFolds: number; generation: "young" | "old"; createdAt: number }
 export interface StatusZoneRow { kind: string; start: string; end: string; tokens: number; messages: number; cachedTokens: number; cacheCoverage: "none" | "partial" | "full" }

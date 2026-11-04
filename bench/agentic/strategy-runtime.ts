@@ -9,17 +9,23 @@
  * 5. Telemetry & metrics tracking.
  */
 
-import type { LlmMessage, LlmToolSpec } from "./llm.ts";
+import { countLlmMessageTokens, type LlmMessage, type LlmToolSpec } from "./llm.ts";
+import { type BenchmarkTokenizer, getDefaultTokenizer } from "./tokenizer.ts";
 import { OrigamiEngine } from "../../src/engine.ts";
+import { parseRangeList } from "../../src/engine-ranges.ts";
 import { configFromPreset, type Preset } from "../../src/config.ts";
+import { openDb, type OrigamiDb } from "../../src/persist/db.ts";
 import { JOURNAL_ENTRY_TYPE } from "../../src/persist/journal.ts";
+import { expandRefRange } from "../../src/kernel/render.ts";
 import { entryMessage } from "../../src/kernel/registry.ts";
+import type { KernelMessage } from "../../src/kernel/types.ts";
 import { kernelMessagesFromEntries } from "../../src/runtime.ts";
 import type { SessionEntryLike } from "../../src/kernel/state.ts";
-import { countTokens, type JournalEntry } from "../replay-lib.ts";
+import { type JournalEntry } from "../replay-lib.ts";
 import { createReplayPolicyState, decideReplayPolicy } from "../replay-policy.ts";
 
 export type CompactionStrategyName = "origami" | "soft" | "handover" | "shake" | "sliding-window";
+export const AUTO_COMPACTION_FILL = 0.80;
 
 export interface StrategyTelemetry {
   strategy: CompactionStrategyName;
@@ -39,11 +45,58 @@ export interface CompactionRuntime {
   /** Execute an agent compaction tool call. Returns output string. */
   handleTool(name: string, args: Record<string, unknown>, messages: LlmMessage[]): string;
   /** Automatic maintenance hook called after an agent turn ends. */
-  autoMaintain(messages: LlmMessage[], windowTokens: number): { acted: boolean; note?: string };
+  autoMaintain(messages: LlmMessage[], windowTokens: number, force?: boolean): { acted: boolean; note?: string };
   /** Prepares outbound messages for the LLM call (e.g. host-side sliding window). */
   prepareOutbound(messages: LlmMessage[], windowTokens: number): LlmMessage[];
   /** Metrics snapshot. */
   telemetry(): StrategyTelemetry;
+}
+
+function boundedOutbound(messages: LlmMessage[], windowTokens: number, tokenizer?: BenchmarkTokenizer): LlmMessage[] {
+  if (messages.length === 0) return [];
+  const maxTokens = Math.max(10_000, windowTokens - 8_000);
+  const system = messages[0]?.role === "system" ? messages[0] : undefined;
+  const body = system ? messages.slice(1) : messages;
+  let tokens = system ? countLlmMessageTokens(system, tokenizer) : 0;
+  const kept: LlmMessage[] = [];
+
+  for (let i = body.length - 1; i >= 0; i--) {
+    const message = body[i]!;
+    const messageTokens = countLlmMessageTokens(message, tokenizer);
+    if (kept.length > 0 && tokens + messageTokens > maxTokens) break;
+    kept.push(message);
+    tokens += messageTokens;
+  }
+  kept.reverse();
+  while (kept.length > 0 && kept[0]?.role !== "user") kept.shift();
+
+  const selectedCallIds = new Set<string>();
+  for (const message of kept) {
+    if (message.role === "assistant") {
+      for (const call of message.tool_calls ?? []) selectedCallIds.add(call.id);
+    }
+  }
+
+  const result: LlmMessage[] = [];
+  for (const message of kept) {
+    if (message.role === "tool") {
+      if (message.tool_call_id && selectedCallIds.has(message.tool_call_id)) result.push(message);
+      continue;
+    }
+    if (message.role === "assistant" && message.tool_calls?.length) {
+      const toolCalls = message.tool_calls.filter((call) => kept.some(
+        (candidate) => candidate.role === "tool" && candidate.tool_call_id === call.id,
+      ));
+      result.push(toolCalls.length === message.tool_calls.length ? message : {
+        ...message,
+        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : { tool_calls: undefined })
+      });
+      continue;
+    }
+    result.push(message);
+  }
+
+  return system ? [system, ...result] : result;
 }
 
 // ============================================================================
@@ -53,6 +106,11 @@ export interface CompactionRuntime {
 export class SlidingWindowRuntime implements CompactionRuntime {
   readonly strategy: CompactionStrategyName = "sliding-window";
   private droppedTurns = 0;
+  private readonly tokenizer: BenchmarkTokenizer;
+
+  constructor(opts: { tokenizer?: BenchmarkTokenizer } = {}) {
+    this.tokenizer = opts.tokenizer ?? getDefaultTokenizer();
+  }
 
   toolSpecs(): LlmToolSpec[] {
     return [];
@@ -66,31 +124,19 @@ export class SlidingWindowRuntime implements CompactionRuntime {
     return "sliding-window has no compaction tools; truncation is host-side.";
   }
 
-  autoMaintain(): { acted: boolean } {
-    return { acted: false };
+  autoMaintain(messages: LlmMessage[], windowTokens: number, force = false): { acted: boolean; note?: string } {
+    const before = messages.reduce((sum, message) => sum + countLlmMessageTokens(message, this.tokenizer), 0);
+    if (!force && before < Math.ceil(windowTokens * AUTO_COMPACTION_FILL)) return { acted: false };
+    const kept = boundedOutbound(messages, Math.floor(windowTokens * 0.7) + 8_000, this.tokenizer);
+    const after = kept.reduce((sum, message) => sum + countLlmMessageTokens(message, this.tokenizer), 0);
+    if (after >= before) return { acted: false };
+    messages.splice(0, messages.length, ...kept);
+    this.droppedTurns++;
+    return { acted: true, note: `Sliding-window dropped ${before - after} estimated tokens` };
   }
 
   prepareOutbound(messages: LlmMessage[], windowTokens: number): LlmMessage[] {
-    if (messages.length === 0) return [];
-    const maxTokens = Math.max(10_000, windowTokens - 8_000);
-    const system = messages[0]?.role === "system" ? messages[0] : null;
-    const body = system ? messages.slice(1) : messages;
-
-    let accTokens = system ? countTokens(system.content) : 0;
-    const kept: LlmMessage[] = [];
-
-    for (let i = body.length - 1; i >= 0; i--) {
-      const m = body[i]!;
-      const tok = countTokens(m.content);
-      if (accTokens + tok > maxTokens) {
-        this.droppedTurns++;
-        break;
-      }
-      accTokens += tok;
-      kept.push(m);
-    }
-    kept.reverse();
-    return system ? [system, ...kept] : kept;
+    return boundedOutbound(messages, windowTokens, this.tokenizer);
   }
 
   telemetry(): StrategyTelemetry {
@@ -115,10 +161,12 @@ export class SoftCompactionRuntime implements CompactionRuntime {
   private tokensReclaimed = 0;
   private readonly thresholdTokens: number;
   private readonly keepRecentTokens: number;
+  private readonly tokenizer: BenchmarkTokenizer;
 
-  constructor(opts: { thresholdTokens?: number; keepRecentTokens?: number } = {}) {
+  constructor(opts: { thresholdTokens?: number; keepRecentTokens?: number; tokenizer?: BenchmarkTokenizer } = {}) {
     this.thresholdTokens = opts.thresholdTokens ?? 40_000;
     this.keepRecentTokens = opts.keepRecentTokens ?? 16_000;
+    this.tokenizer = opts.tokenizer ?? getDefaultTokenizer();
   }
 
   toolSpecs(): LlmToolSpec[] {
@@ -153,12 +201,14 @@ export class SoftCompactionRuntime implements CompactionRuntime {
     return res.summary;
   }
 
-  autoMaintain(messages: LlmMessage[], windowTokens: number): { acted: boolean; note?: string } {
-    const totalTokens = messages.reduce((s, m) => s + countTokens(m.content), 0);
-    const trigger = Math.min(this.thresholdTokens, Math.round(windowTokens * 0.75));
-    if (totalTokens > trigger) {
+  autoMaintain(messages: LlmMessage[], windowTokens: number, force = false): { acted: boolean; note?: string } {
+    const totalTokens = messages.reduce((sum, message) => sum + countLlmMessageTokens(message, this.tokenizer), 0);
+    const trigger = Math.round(windowTokens * AUTO_COMPACTION_FILL);
+    if (force || totalTokens >= trigger) {
       const res = this.performCompaction(messages);
-      return { acted: true, note: `Soft-compacted older turns (${res.reclaimed.toLocaleString()} tokens reclaimed)` };
+      if (res.reclaimed > 0) {
+        return { acted: true, note: `Soft-compacted older turns (${res.reclaimed.toLocaleString()} tokens reclaimed)` };
+      }
     }
     return { acted: false };
   }
@@ -170,7 +220,7 @@ export class SoftCompactionRuntime implements CompactionRuntime {
     let keptTokens = 0;
     let cut = body.length;
     for (let i = body.length - 1; i >= 0; i--) {
-      const tok = countTokens(body[i]!.content);
+      const tok = countLlmMessageTokens(body[i]!, this.tokenizer);
       if (keptTokens + tok > this.keepRecentTokens) {
         cut = i + 1;
         break;
@@ -181,7 +231,7 @@ export class SoftCompactionRuntime implements CompactionRuntime {
     if (cut <= 2) return { reclaimed: 0, summary: "Context is already compact; no turns to summarize." };
 
     const toSummarize = body.slice(0, cut);
-    const beforeTokens = toSummarize.reduce((s, m) => s + countTokens(m.content), 0);
+    const beforeTokens = toSummarize.reduce((sum, message) => sum + countLlmMessageTokens(message, this.tokenizer), 0);
 
     // Extract facts
     const decisions: string[] = [];
@@ -208,7 +258,7 @@ export class SoftCompactionRuntime implements CompactionRuntime {
       files.length > 0 ? Array.from(new Set(files)).slice(0, 8).map((f) => `- ${f}`).join("\n") : "- Workspace files updated."
     ].filter(Boolean).join("\n\n");
 
-    const afterTokens = countTokens(summaryText);
+    const afterTokens = this.tokenizer.countText(summaryText);
     const reclaimed = Math.max(0, beforeTokens - afterTokens);
     this.tokensReclaimed += reclaimed;
 
@@ -226,8 +276,8 @@ export class SoftCompactionRuntime implements CompactionRuntime {
     return { reclaimed, summary: `Compacted ${toSummarize.length} turns into structured summary. Reclaimed ~${reclaimed} tokens.` };
   }
 
-  prepareOutbound(messages: LlmMessage[]): LlmMessage[] {
-    return messages;
+  prepareOutbound(messages: LlmMessage[], windowTokens: number): LlmMessage[] {
+    return boundedOutbound(messages, windowTokens, this.tokenizer);
   }
 
   telemetry(): StrategyTelemetry {
@@ -251,9 +301,11 @@ export class HandoverRuntime implements CompactionRuntime {
   private toolCalls = 0;
   private tokensReclaimed = 0;
   private readonly thresholdTokens: number;
+  private readonly tokenizer: BenchmarkTokenizer;
 
-  constructor(opts: { thresholdTokens?: number } = {}) {
+  constructor(opts: { thresholdTokens?: number; tokenizer?: BenchmarkTokenizer } = {}) {
     this.thresholdTokens = opts.thresholdTokens ?? 35_000;
+    this.tokenizer = opts.tokenizer ?? getDefaultTokenizer();
   }
 
   toolSpecs(): LlmToolSpec[] {
@@ -277,35 +329,42 @@ export class HandoverRuntime implements CompactionRuntime {
 
   systemInstructions(): string {
     return [
-      "Context management: Use the `handoff` tool to transition task state into a clean session.",
-      "Handoff documents preserve architectural decisions, touched files, and the immediate next step while clearing conversational clutter."
+      "Context management: Only invoke the `handoff` tool when context grows substantially large or a major multi-phase milestone completes.",
+      "Do NOT invoke `handoff` after routine single-turn edits, because each handoff resets prior conversational history to a summary document."
     ].join(" ");
   }
 
   handleTool(name: string, args: Record<string, unknown>, messages: LlmMessage[]): string {
     if (name !== "handoff") return `unknown tool: ${name}`;
     this.toolCalls++;
-    const res = this.performHandoff(messages, String(args.goal ?? "Continue milestone tasks."));
+    const res = this.performHandoff(messages, String(args.goal ?? "Continue milestone tasks."), false);
     return res.message;
   }
 
-  autoMaintain(messages: LlmMessage[], windowTokens: number): { acted: boolean; note?: string } {
-    const totalTokens = messages.reduce((s, m) => s + countTokens(m.content), 0);
-    const trigger = Math.min(this.thresholdTokens, Math.round(windowTokens * 0.7));
-    if (totalTokens > trigger) {
-      const res = this.performHandoff(messages, "Automatic threshold handoff.");
-      return { acted: true, note: `Auto-handed off context (${res.reclaimed.toLocaleString()} tokens reclaimed)` };
+  autoMaintain(messages: LlmMessage[], windowTokens: number, force = false): { acted: boolean; note?: string } {
+    const totalTokens = messages.reduce((sum, message) => sum + countLlmMessageTokens(message, this.tokenizer), 0);
+    const trigger = Math.round(windowTokens * AUTO_COMPACTION_FILL);
+    if (force || totalTokens >= trigger) {
+      const res = this.performHandoff(messages, "Periodic 80% context boundary handoff.", true);
+      if (res.reclaimed > 0) {
+        return { acted: true, note: `Auto-handed off context (${res.reclaimed.toLocaleString()} tokens reclaimed)` };
+      }
     }
     return { acted: false };
   }
 
-  private performHandoff(messages: LlmMessage[], goal: string): { reclaimed: number; message: string } {
+  private performHandoff(messages: LlmMessage[], goal: string, forced = false): { reclaimed: number; message: string } {
     const system = messages[0]?.role === "system" ? messages[0] : null;
     const body = system ? messages.slice(1) : messages;
 
-    const beforeTokens = body.reduce((s, m) => s + countTokens(m.content), 0);
+    const beforeTokens = body.reduce((sum, message) => sum + countLlmMessageTokens(message, this.tokenizer), 0);
     if (body.length <= 3) return { reclaimed: 0, message: "Context too small to justify handoff." };
-
+    if (!forced && beforeTokens < Math.min(this.thresholdTokens, 8_000)) {
+      return {
+        reclaimed: 0,
+        message: `Context is compact (~${beforeTokens.toLocaleString()} tokens); continue in the current session without resetting history.`
+      };
+    }
     const decisions: string[] = [];
     const files: string[] = [];
 
@@ -330,7 +389,7 @@ export class HandoverRuntime implements CompactionRuntime {
       `The above is a handoff document from the prior session. Continue the work seamlessly.`
     ].join("\n");
 
-    const afterTokens = countTokens(handoffDoc);
+    const afterTokens = this.tokenizer.countText(handoffDoc);
     const reclaimed = Math.max(0, beforeTokens - afterTokens);
     this.tokensReclaimed += reclaimed;
 
@@ -343,8 +402,8 @@ export class HandoverRuntime implements CompactionRuntime {
     return { reclaimed, message: `Created handoff #${this.handoffs}. Reset history to handoff state, reclaiming ~${reclaimed} tokens.` };
   }
 
-  prepareOutbound(messages: LlmMessage[]): LlmMessage[] {
-    return messages;
+  prepareOutbound(messages: LlmMessage[], windowTokens: number): LlmMessage[] {
+    return boundedOutbound(messages, windowTokens, this.tokenizer);
   }
 
   telemetry(): StrategyTelemetry {
@@ -369,11 +428,12 @@ export class ShakeRuntime implements CompactionRuntime {
   private tokensReclaimed = 0;
   private prunedMessages = 0;
   private readonly protectRecentTurns: number;
+  private readonly tokenizer: BenchmarkTokenizer;
 
-  constructor(opts: { protectRecentTurns?: number } = {}) {
+  constructor(opts: { protectRecentTurns?: number; tokenizer?: BenchmarkTokenizer } = {}) {
     this.protectRecentTurns = opts.protectRecentTurns ?? 6;
+    this.tokenizer = opts.tokenizer ?? getDefaultTokenizer();
   }
-
   toolSpecs(): LlmToolSpec[] {
     return [
       {
@@ -398,9 +458,10 @@ export class ShakeRuntime implements CompactionRuntime {
     return `Shook context: pruned ${res.pruned} heavy observations, reclaiming ~${res.reclaimed} tokens.`;
   }
 
-  autoMaintain(messages: LlmMessage[], windowTokens: number): { acted: boolean; note?: string } {
-    const totalTokens = messages.reduce((s, m) => s + countTokens(m.content), 0);
-    if (totalTokens > windowTokens * 0.6) {
+  autoMaintain(messages: LlmMessage[], windowTokens: number, force = false): { acted: boolean; note?: string } {
+    const totalTokens = messages.reduce((sum, message) => sum + countLlmMessageTokens(message, this.tokenizer), 0);
+    const trigger = Math.round(windowTokens * AUTO_COMPACTION_FILL);
+    if (force || totalTokens >= trigger) {
       const res = this.applyShake(messages);
       if (res.pruned > 0) {
         return { acted: true, note: `Auto-shook ${res.pruned} tool results (${res.reclaimed.toLocaleString()} tokens reclaimed)` };
@@ -418,10 +479,10 @@ export class ShakeRuntime implements CompactionRuntime {
       const m = messages[i]!;
       if (m.role === "tool" || m.content.includes("lines ") || m.content.includes("read_file") || m.content.length > 800) {
         if (!m.content.includes("[Output truncated")) {
-          const originalTokens = countTokens(m.content);
+          const originalTokens = this.tokenizer.countText(m.content);
           const preview = m.content.slice(0, 180).trim();
           m.content = `${preview}\n\n[Output truncated - ${originalTokens} tokens elided]`;
-          const newTokens = countTokens(m.content);
+          const newTokens = this.tokenizer.countText(m.content);
           reclaimed += Math.max(0, originalTokens - newTokens);
           pruned++;
         }
@@ -436,8 +497,8 @@ export class ShakeRuntime implements CompactionRuntime {
     return { pruned, reclaimed };
   }
 
-  prepareOutbound(messages: LlmMessage[]): LlmMessage[] {
-    return messages;
+  prepareOutbound(messages: LlmMessage[], windowTokens: number): LlmMessage[] {
+    return boundedOutbound(messages, windowTokens, this.tokenizer);
   }
 
   telemetry(): StrategyTelemetry {
@@ -458,15 +519,29 @@ export class ShakeRuntime implements CompactionRuntime {
 export class OrigamiRuntime implements CompactionRuntime {
   readonly strategy: CompactionStrategyName = "origami";
   private toolCalls = 0;
+  private readonly db: OrigamiDb;
   private engine: OrigamiEngine;
   private working: JournalEntry[] = [];
+  private cachedKernel: KernelMessage[] = [];
+  private cachedRaw: unknown[] = [];
+  private lastRefreshedLen = -1;
   private appended = 0;
+  private syncedMessages = 0;
   private now = 0;
   private policyState = createReplayPolicyState();
-  private lastMessageRole: string | undefined;
+  private lastHydrationInjected = false;
+  private hydrationInjections = 0;
+  private nudgeInjections = 0;
+  private projectedTokens = 0;
+  private readonly tokenizer: BenchmarkTokenizer;
 
-  constructor(opts: { preset?: Preset; windowTokens?: number } = {}) {
-    const config = configFromPreset(opts.preset ?? "balanced");
+  constructor(opts: { preset?: Preset; windowTokens?: number; forceThresholds?: boolean; tokenizer?: BenchmarkTokenizer } = {}) {
+    this.tokenizer = opts.tokenizer ?? getDefaultTokenizer();
+    this.db = openDb(":memory:");
+    const baseConfig = configFromPreset(opts.preset ?? "balanced");
+    const config = opts.forceThresholds
+      ? { ...baseConfig, emergencyFillPct: AUTO_COMPACTION_FILL, protectedTailTokens: 0, minFoldBenefitTokens: 0, compressibleFloor: 0, minFoldBenefitWindowPct: 0 }
+      : { ...baseConfig, emergencyFillPct: AUTO_COMPACTION_FILL };
     this.engine = new OrigamiEngine({
       host: {
         sessionId: () => "agentic-origami",
@@ -480,14 +555,15 @@ export class OrigamiRuntime implements CompactionRuntime {
         },
         saveArtifact: async () => undefined,
         windowTokens: () => opts.windowTokens ?? 1_000_000,
-        projectedTokens: () => 0
+        projectedTokens: () => this.projectedTokens
       },
       entries: [],
       modelId: "agentic-model",
       config,
-      countFn: countTokens,
+      countFn: (input: string) => this.tokenizer.countText(input),
       now: () => this.now
     });
+    this.engine.attachDb(this.db);
   }
 
   toolSpecs(): LlmToolSpec[] {
@@ -500,9 +576,10 @@ export class OrigamiRuntime implements CompactionRuntime {
           parameters: {
             type: "object",
             properties: {
-              range: { type: "string", description: 'Range specifier, e.g. "m00010..m00030"' },
+              range: { type: "string", description: 'Range specifier: message range (e.g. "m00010..m00030") for tier 1, or block ids (e.g. "b1..b3") for tier 2/3' },
               topic: { type: "string", description: "One-line domain topic (<=60 chars)" },
-              summary: { type: "string", description: "Dense, factual summary of the folded span" }
+              summary: { type: "string", description: "Dense, factual summary of the folded span" },
+              tier: { type: "number", enum: [1, 2, 3], description: "Fold tier: 1 for raw messages, 2 or 3 for merging blocks" }
             },
             required: ["range", "topic", "summary"]
           }
@@ -525,6 +602,20 @@ export class OrigamiRuntime implements CompactionRuntime {
       {
         type: "function",
         function: {
+          name: "fold_recall",
+          description: "Read exact original archived messages by ref or range (e.g. 'm00004..m00008') without inflating persistent context.",
+          parameters: {
+            type: "object",
+            properties: {
+              refs: { type: "string", description: 'Ref or comma-separated range list, e.g. "m00004..m00008"' }
+            },
+            required: ["refs"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
           name: "fold_status",
           description: "Report active context occupancy, token split, growth since last fold, and active pagoda blocks.",
           parameters: { type: "object", properties: {} }
@@ -537,7 +628,8 @@ export class OrigamiRuntime implements CompactionRuntime {
     return [
       "Context folding (origami): This session uses Origami incremental hierarchical compression.",
       "Completed turns are folded into compact summary blocks to maintain immutable prompt-cache prefix stability.",
-      "Use `fold` to compress finished work, and `fold_search` to query archived history without expanding your prompt."
+      "Only call `fold` using exact message boundaries advertised in `[origami]` notices.",
+      "When asked a recall question about an earlier briefing or policy key (e.g. `[SYMBOL_NAME]`) not visible verbatim in active context, ALWAYS call `fold_search` (and `fold_recall` on returned message refs, honoring the highest turn number when a policy was later overridden) before answering."
     ].join(" ");
   }
 
@@ -545,23 +637,80 @@ export class OrigamiRuntime implements CompactionRuntime {
     this.toolCalls++;
     switch (name) {
       case "fold": {
+        const range = String(args.range ?? "");
+        const rawTier = Number(args.tier ?? (/^b\d+/i.test(range.trim()) ? 2 : 1));
+        const tier: 1 | 2 | 3 = rawTier === 3 ? 3 : rawTier === 2 ? 2 : 1;
         const spec = {
-          range: String(args.range ?? ""),
+          range,
+          tier,
           topic: String(args.topic ?? ""),
           summary: String(args.summary ?? "")
         };
-        const res = this.engine.executeFold({ folds: [spec], tier: 1 });
+        const res = this.engine.executeFold({ folds: [spec], tier });
         if (res.ok) {
           const b = res.outcome.blocks[0];
-          return `Folded ${spec.range} into block ${b?.id ?? "b"} (reclaimed ${res.outcome.tokensReclaimed} tokens).`;
+          const snapNote = res.outcome.snapped && res.outcome.snapped.length > 0
+            ? ` (snapped: ${res.outcome.snapped.join("; ")})`
+            : "";
+          return `Folded ${spec.range} into block ${b?.id ?? "b"} (reclaimed ${res.outcome.tokensReclaimed} tokens)${snapNote}.`;
         }
         return `Fold rejected: ${res.error}`;
       }
       case "fold_search": {
         const query = String(args.query ?? "");
-        const hits = this.engine.search(query, 5);
-        if (hits.length === 0) return `(no matches for "${query}")`;
-        return hits.map((h) => `[${h.blockId}] ${h.topic}\n${h.snippet}`).join("\n\n");
+        const blockHits = this.engine.search(query, 5);
+        const messageHits = [...this.engine.searchMessages(query, 10)].sort((a, b) => b.turn - a.turn);
+        const sections: string[] = [];
+        if (blockHits.length > 0) {
+          sections.push(
+            "Blocks:\n" +
+              blockHits.map((h) => `[${h.blockId} · tier ${h.tier}] ${h.topic}\n${h.snippet}`).join("\n\n")
+          );
+        }
+        const archivedRefSet = new Set(messageHits.map((m) => m.ref));
+        if (messageHits.length > 0) {
+          const newestTurn = messageHits[0]!.turn;
+          const recalledByRef = new Map(
+            this.engine.recall(messageHits.slice(0, 6).map((m) => m.ref))
+              .filter((r) => r.text !== null)
+              .map((r) => [r.ref, r.text!])
+          );
+          sections.push(
+            "Archived Messages (newest turn first; pass refs to fold_recall for full text):\n" +
+              messageHits.map((m) => {
+                const full = recalledByRef.get(m.ref);
+                const preview = full ? full.replace(/\s+/g, " ").trim().slice(0, 420) : m.snippet;
+                return `[#${m.ref} · turn ${m.turn}${m.turn === newestTurn && messageHits.length > 1 ? " · LATEST ARCHIVED" : ""} · ${m.role}] ${preview}`;
+              }).join("\n")
+          );
+        }
+        const terms = query.toLowerCase().split(/[^a-z0-9_-]+/).filter((t) => t.length >= 3);
+        if (terms.length > 0) {
+          const liveMatches = this.engine.state.bound
+            .filter((m) => !m.ephemeral && !archivedRefSet.has(m.ref) && terms.some((t) => m.text.toLowerCase().includes(t)))
+            .sort((a, b) => b.turn - a.turn)
+            .slice(0, 5);
+          if (liveMatches.length > 0) {
+            sections.push(
+              "Live Unfolded Context Matches (newest turn first):\n" +
+                liveMatches.map((m) => `[#${m.ref} · turn ${m.turn} · ${m.role}] ${m.text.replace(/\s+/g, " ").slice(0, 220)}`).join("\n")
+            );
+          }
+        }
+        if (sections.length === 0) return `(no matches for "${query}")`;
+        return sections.join("\n\n");
+      }
+      case "fold_recall": {
+        const rawRefs = String(args.refs ?? "");
+        const parsed = parseRangeList(rawRefs);
+        const expanded = parsed.length > 0
+          ? parsed.flatMap((r) => expandRefRange(r.start, r.end)).slice(0, 40)
+          : rawRefs.split(/[\s,]+/).map((s) => s.replace(/^#/, "").trim()).filter(Boolean).slice(0, 40);
+        if (expanded.length === 0) return "(no valid refs provided)";
+        const rows = this.engine.recall(expanded);
+        const found = rows.filter((r) => r.text !== null);
+        if (found.length === 0) return `(no messages found for refs: ${rawRefs})`;
+        return found.map((r) => `[#${r.ref} · ${r.role} · ${r.source}]\n${r.text}`).join("\n\n");
       }
       case "fold_status": {
         const live = this.engine.state.tree.live();
@@ -575,66 +724,131 @@ export class OrigamiRuntime implements CompactionRuntime {
     }
   }
 
-  autoMaintain(messages: LlmMessage[]): { acted: boolean; note?: string } {
-    // Ingest latest messages into engine
-    this.syncEngine(messages);
-
+  autoMaintain(messages: LlmMessage[], windowTokens = 1_000_000, force = false): { acted: boolean; note?: string } {
+    const active = this.prepareOutbound(messages, windowTokens + 8_000);
+    this.projectedTokens = active.reduce((sum, message) => sum + countLlmMessageTokens(message, this.tokenizer), 0);
+    if (force) this.projectedTokens = Math.max(this.projectedTokens, Math.ceil(windowTokens * AUTO_COMPACTION_FILL));
+    const thresholdForce = force || this.projectedTokens >= Math.ceil(windowTokens * AUTO_COMPACTION_FILL);
     const decision = decideReplayPolicy("current", this.engine, this.policyState);
-    if (decision.kind === "promotion" && decision.promotion) {
-      const fromTier = decision.promotion.fromTier;
-      const blocks = decision.promotion.blockIds.map((id) => this.engine.state.tree.get(id)).filter((b): b is NonNullable<typeof b> => b !== undefined);
-      if (blocks.length >= 2) {
-        const range = blocks.map((b) => b.id).join(",");
-        const spec = {
-          range,
-          tier: (fromTier + 1) as 2 | 3,
-          topic: `Consolidated ${blocks[0]!.id}..${blocks.at(-1)!.id}`,
-          summary: `- ${blocks.map((b) => b.topic).join("\n- ")}`
-        };
-        const res = this.engine.executeFold({ folds: [spec], tier: (fromTier + 1) as 2 | 3 });
-        if (res.ok) {
-          return { acted: true, note: `Origami promoted ${range} to Tier ${fromTier + 1}` };
-        }
+    const notes: string[] = [];
+
+    const tryPromote = (fromTier: 1 | 2, forcePromo: boolean): boolean => {
+      const blocks = this.engine.state.tree.live().filter((b) => b.tier === fromTier);
+      if (blocks.length < (forcePromo ? 2 : 4)) return false;
+      const batch = forcePromo ? blocks : blocks.slice(0, Math.max(2, blocks.length - 1));
+      if (batch.length < 2) return false;
+      const range = batch.map((b) => b.id).join(",");
+      const summaryLines = batch.map((b) => {
+        const firstLine = b.summary.split("\n").find((l) => l.trim().length > 0 && !l.startsWith("[…")) ?? "";
+        return `- [${b.id}] ${b.topic}${firstLine ? `: ${firstLine.slice(0, 180)}` : ""}`;
+      });
+      const spec = {
+        range,
+        tier: (fromTier + 1) as 2 | 3,
+        topic: `Consolidated ${batch[0]!.id}..${batch.at(-1)!.id}`,
+        summary: summaryLines.join("\n")
+      };
+      const res = this.engine.executeFold({ folds: [spec], tier: (fromTier + 1) as 2 | 3, force: forcePromo });
+      if (res.ok) {
+        notes.push(`Origami promoted ${range} to Tier ${fromTier + 1}`);
+        return true;
       }
-    } else if (decision.kind === "efficiency" || decision.kind === "emergency") {
-      const specs = this.engine.recommendedRanges().map((x) => ({
+      return false;
+    };
+
+    if (decision.kind === "promotion" && decision.promotion) {
+      tryPromote(decision.promotion.fromTier, true);
+    }
+
+    if (decision.kind === "efficiency" || decision.kind === "emergency" || thresholdForce) {
+      const specs = this.engine.recommendedRanges(1).map((x) => ({
         range: `${x.start}..${x.end}`,
         topic: `Phase ${x.start}..${x.end}`,
-        summary: this.engine.archiveDigest([{ start: x.start, end: x.end }])
+        summary: this.engine.archiveDigest([{ start: x.start, end: x.end }], 120, 3200)
       }));
       if (specs.length > 0) {
-        const res = this.engine.executeFold({ folds: specs, tier: 1 });
+        const res = this.engine.executeFold({ folds: specs, tier: 1, force: thresholdForce });
         if (res.ok) {
-          return { acted: true, note: `Origami folded ${specs.length} range(s) into Tier 1` };
+          notes.push(`Origami folded ${specs.length} range(s) into Tier 1`);
         }
       }
+
+      // Consolidate accumulated Tier-1 / Tier-2 blocks so summary mass never saturates the window
+      const liveT1 = this.engine.state.tree.live().filter((b) => b.tier === 1);
+      const postFoldActive = this.prepareOutbound(messages, windowTokens + 8_000);
+      const postFoldTokens = postFoldActive.reduce((sum, message) => sum + countLlmMessageTokens(message, this.tokenizer), 0);
+      const needsTierConsolidation = liveT1.length >= 4 || (thresholdForce && postFoldTokens >= Math.ceil(windowTokens * AUTO_COMPACTION_FILL * 0.85));
+      if (needsTierConsolidation) {
+        tryPromote(1, true);
+      }
+      const liveT2 = this.engine.state.tree.live().filter((b) => b.tier === 2);
+      if (liveT2.length >= 4) {
+        tryPromote(2, true);
+      }
+    }
+
+    if (notes.length > 0) {
+      return { acted: true, note: notes.join("; ") };
     }
     return { acted: false };
   }
 
   private syncEngine(messages: LlmMessage[]): void {
-    for (let i = this.working.length; i < messages.length; i++) {
-      const m = messages[i]!;
-      this.working.push({
-        type: "message",
-        id: `msg-${i + 1}`,
-        timestamp: new Date().toISOString(),
-        message: {
-          role: m.role,
-          content: m.content
-        }
-      });
+    if (messages.length < this.syncedMessages) {
+      // Rebuild cleanly if caller passed a shorter history snapshot
+      const customEntries = this.working.filter((e) => e.type === "custom");
+      this.working = [];
+      this.cachedKernel = [];
+      this.cachedRaw = [];
+      this.syncedMessages = 0;
+      this.lastRefreshedLen = -1;
+      for (let i = 0; i < messages.length; i++) {
+        this.appendWorkingMessage(messages[i]!, i);
+      }
+      this.syncedMessages = messages.length;
+      this.working.push(...customEntries);
+    } else if (messages.length > this.syncedMessages) {
+      for (let i = this.syncedMessages; i < messages.length; i++) {
+        this.appendWorkingMessage(messages[i]!, i);
+      }
+      this.syncedMessages = messages.length;
     }
 
-    this.engine.refresh(this.working as SessionEntryLike[]);
-    this.engine.ingest(kernelMessagesFromEntries(this.working as SessionEntryLike[]));
+    if (this.working.length !== this.lastRefreshedLen) {
+      this.engine.refresh(this.working as SessionEntryLike[]);
+      this.engine.ingest(this.cachedKernel);
+      this.lastRefreshedLen = this.working.length;
+    }
   }
 
-  prepareOutbound(messages: LlmMessage[]): LlmMessage[] {
-    this.syncEngine(messages);
-    const rawMessages = this.working.map((e) => entryMessage(e as SessionEntryLike)).filter(Boolean) as any[];
-    if (rawMessages.length === 0) return messages;
+  private appendWorkingMessage(m: LlmMessage, idx: number): void {
+    const role = m.role === "tool" ? "toolResult" : m.role;
+    const toolCallId = m.tool_call_id;
+    const entry: JournalEntry = {
+      type: "message",
+      id: `msg-${idx + 1}`,
+      timestamp: new Date().toISOString(),
+      message: {
+        role,
+        content: m.content,
+        reasoning: m.reasoning,
+        tool_calls: m.tool_calls,
+        toolCallId,
+        tool_call_id: toolCallId,
+        name: m.name
+      }
+    };
+    this.working.push(entry);
+    const rawMsg = entryMessage(entry as SessionEntryLike);
+    if (rawMsg) this.cachedRaw.push(rawMsg);
+    const km = kernelMessagesFromEntries([entry as SessionEntryLike]);
+    if (km.length > 0) this.cachedKernel.push(...km);
+  }
 
+  prepareOutbound(messages: LlmMessage[], windowTokens: number): LlmMessage[] {
+    this.syncEngine(messages);
+    if (this.cachedRaw.length === 0) return boundedOutbound(messages, windowTokens, this.tokenizer);
+    const rawMessages = this.cachedRaw;
     const makeFoldMessage = (text: string, blockId: string, refTag?: string) => ({
       role: "user",
       content: refTag ? `${refTag} ${text}` : text
@@ -648,35 +862,102 @@ export class OrigamiRuntime implements CompactionRuntime {
     if (system) out.push(system);
 
     for (const m of renderedRaw) {
-      const r = m.role === "assistant" ? "assistant" : m.role === "tool" ? "tool" : "user";
+      if (m.role === "system") continue;
+      const r = m.role === "assistant" ? "assistant" : (m.role === "tool" || m.role === "toolResult") ? "tool" : "user";
       const c = typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
-      out.push({ role: r, content: c });
+      const msg: LlmMessage = { role: r, content: c };
+      if (m.reasoning) msg.reasoning = m.reasoning;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      const toolCallId = m.tool_call_id || m.toolCallId;
+      if (toolCallId) msg.tool_call_id = toolCallId;
+      if (m.name) msg.name = m.name;
+      out.push(msg);
     }
 
-    // JIT reactive hydration notice
-    const hydration = this.engine.hydrationText();
-    if (hydration) {
-      out.push({ role: "user", content: hydration });
+    // At user turn boundaries, inject Origami efficiency/promotion nudges and JIT hydration/recall hints
+    // directly before the trailing user message so the prompt prefix remains monotonic and cacheable.
+    const isUserBoundary = messages.length > 0 && messages[messages.length - 1]?.role === "user";
+    this.lastHydrationInjected = false;
+    if (isUserBoundary) {
+      const ephemeralNotices: string[] = [];
+      const nudgeDecision = this.engine.decideNudge();
+      const nudgeText = nudgeDecision.text ?? this.engine.nudgeText;
+      if (nudgeText) {
+        ephemeralNotices.push(nudgeText);
+        this.nudgeInjections++;
+        if ((nudgeDecision.text ? nudgeDecision.kind : this.engine.nudgeTextKind) === "emergency") {
+          this.engine.noteEmergencySent();
+        }
+      }
+      const hydration = this.engine.hydrationText();
+      if (hydration) {
+        this.lastHydrationInjected = true;
+        this.hydrationInjections++;
+        ephemeralNotices.push(hydration);
+      } else {
+        const hint = this.engine.recallHintText();
+        if (hint) ephemeralNotices.push(hint);
+      }
+      if (ephemeralNotices.length > 0) {
+        const combinedNotice = ephemeralNotices.join("\n\n");
+        const lastUserIdx = out.findLastIndex((m) => m.role === "user");
+        if (lastUserIdx >= 0) {
+          out.splice(lastUserIdx, 0, { role: "user", content: combinedNotice });
+        } else {
+          out.push({ role: "user", content: combinedNotice });
+        }
+      }
     }
 
-    return out;
+    const availableToolResultIds = new Set<string>();
+    for (const m of out) {
+      if (m.role === "tool" && m.tool_call_id) {
+        availableToolResultIds.add(m.tool_call_id);
+      }
+    }
+
+    const availableAssistantCallIds = new Set<string>();
+    for (const m of out) {
+      if (m.role === "assistant" && m.tool_calls) {
+        m.tool_calls = m.tool_calls.filter((tc) => availableToolResultIds.has(tc.id));
+        if (m.tool_calls.length === 0) {
+          delete m.tool_calls;
+        } else {
+          for (const tc of m.tool_calls) availableAssistantCallIds.add(tc.id);
+        }
+      }
+    }
+
+    const sanitizedOut = out.filter((m) => {
+      if (m.role === "tool") {
+        return m.tool_call_id ? availableAssistantCallIds.has(m.tool_call_id) : false;
+      }
+      return true;
+    });
+
+    const bounded = boundedOutbound(sanitizedOut, windowTokens, this.tokenizer);
+    this.projectedTokens = bounded.reduce((sum, message) => sum + countLlmMessageTokens(message, this.tokenizer), 0);
+    return bounded;
   }
 
   telemetry(): StrategyTelemetry {
     const live = this.engine.state.tree.live();
+    const allBlocks = this.engine.state.tree.all();
     const t1 = live.filter((b) => b.tier === 1).length;
     const t2 = live.filter((b) => b.tier === 2).length;
     const t3 = live.filter((b) => b.tier === 3).length;
 
     return {
       strategy: this.strategy,
-      compactionEvents: live.length,
+      compactionEvents: allBlocks.length,
       toolInvocations: this.toolCalls,
       tokensReclaimed: this.engine.status().tokenSplit.foldedSavings ?? 0,
       activeBlocks: { t1, t2, t3 },
       details: {
         growthSinceFold: this.engine.growthSinceFold(),
-        hydrationInjected: Boolean(this.engine.hydrationText())
+        hydrationInjected: this.hydrationInjections > 0 || this.lastHydrationInjected,
+        hydrationCount: this.hydrationInjections,
+        nudgeCount: this.nudgeInjections
       }
     };
   }
@@ -688,17 +969,17 @@ export class OrigamiRuntime implements CompactionRuntime {
 
 export function createCompactionRuntime(
   strategy: CompactionStrategyName,
-  opts?: { preset?: Preset; windowTokens?: number }
+  opts?: { preset?: Preset; windowTokens?: number; forceThresholds?: boolean; tokenizer?: BenchmarkTokenizer }
 ): CompactionRuntime {
   switch (strategy) {
     case "sliding-window":
-      return new SlidingWindowRuntime();
+      return new SlidingWindowRuntime(opts);
     case "soft":
-      return new SoftCompactionRuntime();
+      return new SoftCompactionRuntime(opts);
     case "handover":
-      return new HandoverRuntime();
+      return new HandoverRuntime(opts);
     case "shake":
-      return new ShakeRuntime();
+      return new ShakeRuntime(opts);
     case "origami":
       return new OrigamiRuntime(opts);
     default:

@@ -60,6 +60,7 @@ GitHub plugin installation is the supported release channel; Origami is not publ
 
 No configuration is required. Work normally in `omp`; Origami prompts the agent when enough completed history is ready to fold.
 
+- Run `/fold now` to manually fold all eligible conversation history immediately.
 - Run `/fold` or press `Alt+F` for the interactive workbench.
 - Run `/fold web` for the browser dashboard.
 - Run `/fold trajectory`, `/fold blocks`, or `/fold zones` to open a specific workbench view.

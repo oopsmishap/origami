@@ -8,7 +8,7 @@ import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { countTokens, Encoding as NativeEncoding } from "@oh-my-pi/pi-natives";
 import { join } from "node:path";
 import { candidateRanges, candidateWork, formatCandidate, generateCandidate, isCandidateRequest, liveCandidate } from "./candidates.ts";
-import { recordToolTelemetry } from "./telemetry.ts";
+import { recordFoldSuccess, recordToolTelemetry } from "./telemetry.ts";
 import { handleRecallToolResult } from "./federation/recall-hook.ts";
 import { loadOrigamiConfig, saveConfigFile } from "./config-load.ts";
 import { applyOverrides, configFromPreset, validateResolved, type OrigamiConfig } from "./config.ts";
@@ -17,7 +17,7 @@ import type { StatusReport } from "./engine.ts";
 import type { OrigamiDb } from "./persist/db.ts";
 import { OrigamiRuntime, type HostBinding } from "./runtime.ts";
 import { agentInfoFrom, sessionDisplayName, sessionRegistry, type SessionRecord } from "./sessions.ts";
-import { OrigamiFoldMessageComponent, type OrigamiFoldMessageDetails } from "./tools/display.ts";
+import { formatFoldOutcome, OrigamiFoldMessageComponent, type OrigamiFoldMessageDetails } from "./tools/display.ts";
 import { registerTools } from "./tools/index.ts";
 import { startDashboardServer } from "./ui/dashboard-server.ts";
 import { formatStatusChip } from "./ui/status.ts";
@@ -303,27 +303,55 @@ export default function origamiExtension(api: ExtensionAPI): void {
       return { messages: rendered as never };
     }
 
-    if (rt.engine.shouldAutoFoldEmergency()) {
-      const ranges = rt.engine.recommendedRanges();
+    const ranges = rt.engine.recommendedRanges();
+    if (ranges.length > 0 || rt.engine.shouldAutoFoldEmergency()) {
       let specs = ranges.map((range) => ({ range: `${range.start}..${range.end}`, topic: `Emergency fold ${range.start}..${range.end}`, summary: rt.engine.archiveDigest([{ start: range.start, end: range.end }]) }));
       const selected = specs.map((spec) => spec.range);
       const started = performance.now();
-      let result = rt.engine.executeFold({ folds: specs, tier: 1 });
-      while (!result.ok && specs.length > 1) {
+      let result = specs.length > 0 ? rt.engine.executeFold({ folds: specs, tier: 1, force: true }) : null;
+      while (result && !result.ok && specs.length > 1) {
         const failedIndex = result.foldIndex;
         specs = specs.filter((_spec, index) => index !== failedIndex);
-        result = rt.engine.executeFold({ folds: specs, tier: 1 });
+        result = rt.engine.executeFold({ folds: specs, tier: 1, force: true });
       }
-      recordToolTelemetry(rt, { tool: "emergency_auto_fold", durationMs: performance.now() - started, ok: result.ok, error: result.ok ? null : result.error, inputSummary: selected.join(","), outputSummary: result.ok ? `${result.outcome.foldCount} folds` : "fold failed" });
-      if (result.ok) {
-        for (const block of result.outcome.blocks) registry.emit("fold", record.sessionId, block);
-        rt.sync();
-        rendered = compose();
-        estimate = rt.engine.outboundEstimateTokens(rendered);
-        if (estimate.total < window) {
-          rt.engine.clearContextAbort();
-          return { messages: rendered as never };
+      if (result) {
+        recordToolTelemetry(rt, { tool: "emergency_auto_fold", durationMs: performance.now() - started, ok: result.ok, error: result.ok ? null : result.error, inputSummary: selected.join(","), outputSummary: result.ok ? `${result.outcome.foldCount} folds` : "fold failed" });
+        if (result.ok) {
+          recordFoldSuccess(record.sessionId);
+          for (const block of result.outcome.blocks) registry.emit("fold", record.sessionId, block);
+          rt.sync();
+          rendered = compose();
+          estimate = rt.engine.outboundEstimateTokens(rendered);
         }
+      }
+      if (estimate.total >= window) {
+        for (const fromTier of [1, 2] as const) {
+          const liveTier = rt.engine.state.tree.live().filter((b) => b.tier === fromTier);
+          if (liveTier.length < 2) continue;
+          const promoRange = liveTier.map((b) => b.id).join(",");
+          const promoRes = rt.engine.executeFold({
+            folds: [{
+              range: promoRange,
+              tier: (fromTier + 1) as 2 | 3,
+              topic: `Consolidated ${liveTier[0]!.id}..${liveTier[liveTier.length - 1]!.id}`,
+              summary: liveTier.map((b) => `- [${b.id}] ${b.topic}: ${b.summary.split("\n")[0] ?? ""}`.slice(0, 240)).join("\n"),
+            }],
+            tier: (fromTier + 1) as 2 | 3,
+            force: true,
+          });
+          if (promoRes.ok) {
+            recordFoldSuccess(record.sessionId);
+            for (const block of promoRes.outcome.blocks) registry.emit("fold", record.sessionId, block);
+            rt.sync();
+            rendered = compose();
+            estimate = rt.engine.outboundEstimateTokens(rendered);
+            if (estimate.total < window) break;
+          }
+        }
+      }
+      if (estimate.total < window) {
+        rt.engine.clearContextAbort();
+        return { messages: rendered as never };
       }
     }
 
@@ -575,6 +603,7 @@ export default function origamiExtension(api: ExtensionAPI): void {
   }
 
   const foldSubcommands = [
+    { label: "now", value: "now", description: "Trigger an immediate manual fold of all eligible history" },
     { label: "trajectory", value: "trajectory", description: "Open the context trajectory graph" },
     { label: "blocks", value: "blocks", description: "Open the fold block browser" },
     { label: "zones", value: "zones", description: "Open the context zones view" },
@@ -584,7 +613,7 @@ export default function origamiExtension(api: ExtensionAPI): void {
   ];
 
   api.registerCommand("fold", {
-    description: "Open the Origami context workbench ('/fold trajectory' for graph, '/fold web' for browser UI, '/fold export' for JSON)",
+    description: "Fold context or open workbench ('/fold now', '/fold trajectory', '/fold web', '/fold export')",
     getArgumentCompletions(argumentPrefix) {
       if (argumentPrefix.trimStart().includes(" ")) return null;
       const normalized = argumentPrefix.trim().toLowerCase();
@@ -593,6 +622,51 @@ export default function origamiExtension(api: ExtensionAPI): void {
     },
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       const sub = args.trim().toLowerCase();
+      if (sub === "now") {
+        const { record, rt } = getOrInitRuntime(ctx);
+        rt.sync();
+        const ranges = rt.engine.recommendedRanges();
+        if (ranges.length === 0) {
+          if (ctx.hasUI) ctx.ui.notify("Origami: no foldable ranges currently available in history.", "info");
+          return;
+        }
+        let specs = ranges.map((range) => ({
+          range: `${range.start}..${range.end}`,
+          topic: `Fold ${range.start}..${range.end}`,
+          summary: rt.engine.archiveDigest([{ start: range.start, end: range.end }]),
+        }));
+        const selected = specs.map((spec) => spec.range);
+        const started = performance.now();
+        let result = rt.engine.executeFold({ folds: specs, tier: 1, force: true });
+        while (!result.ok && specs.length > 1) {
+          const failedIndex = result.foldIndex;
+          specs = specs.filter((_spec, index) => index !== failedIndex);
+          result = rt.engine.executeFold({ folds: specs, tier: 1, force: true });
+        }
+        recordToolTelemetry(rt, {
+          tool: "manual_fold",
+          durationMs: performance.now() - started,
+          ok: result.ok,
+          error: result.ok ? null : result.error,
+          inputSummary: selected.join(","),
+          outputSummary: result.ok ? `${result.outcome.foldCount} folds` : "fold failed",
+        });
+        if (!result.ok) {
+          if (ctx.hasUI) ctx.ui.notify(`Origami fold failed: ${result.error}`, "error");
+          return;
+        }
+        recordFoldSuccess(record.sessionId);
+        for (const block of result.outcome.blocks) {
+          registry.emit("fold", record.sessionId, block);
+        }
+        rt.sync();
+        refreshStatusChip(record.sessionId);
+        const outcomeMsg = formatFoldOutcome(result.outcome);
+        if (ctx.hasUI) {
+          ctx.ui.notify(`Origami: folded ${result.outcome.foldCount} block(s), reclaimed ${formatStatusTokens(result.outcome.tokensReclaimed)} tokens\n${outcomeMsg}`, "info");
+        }
+        return;
+      }
       if (sub === "web" || sub === "dashboard") {
         await openWebDashboard(ctx);
         return;

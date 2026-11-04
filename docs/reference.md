@@ -53,6 +53,7 @@ Origami tracks the long-term economics of context management:
 ## Workbench
 
 Open with `/fold` or `Alt+F`.
+- Trigger manual fold: `/fold now` immediately folds all eligible history into compressed blocks, bypassing minimum token benefit thresholds.
 - Context zones show the latest provider cache-read prefix as cached-token coverage per protected, folded, or compressible zone. The cached boundary may split one zone (`partial`); prompt overhead is subtracted before mapping cache-read tokens onto conversation zones.
 - Overview: context map, occupancy split, vault storage KPI tiles, and payback status.
 - Trajectory: 1:1 discrete round bars, cache read rates, and fold markers.

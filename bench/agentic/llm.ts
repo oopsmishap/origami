@@ -1,11 +1,15 @@
 /**
- * Egress-guarded LLM client for the agentic benchmark.
+ * Benchmark message utilities.
  *
- * Sandbox tools never touch the network. The *only* outbound request a benchmark
- * run can make is a chat completion, and even that is pinned to an allowlist of
- * hosts (OpenRouter by default, or the operator's configured LLM endpoint).
- * Any other origin throws before the request is built.
+ * Model calls and tool execution are owned by the Vercel AI SDK. This module
+ * only keeps the benchmark's strategy-facing message shape, converts native
+ * reasoning/tool parts, and models cache-prefix accounting for reports.
  */
+
+import type { ModelMessage } from "ai";
+import { countTokens } from "../replay-lib.ts";
+import { MIN_CACHEABLE_INPUT_TOKENS } from "./pricing.ts";
+import type { BenchmarkTokenizer } from "./tokenizer.ts";
 
 export interface LlmToolCall {
   id: string;
@@ -16,6 +20,7 @@ export interface LlmToolCall {
 export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  reasoning?: string;
   name?: string;
   tool_call_id?: string;
   tool_calls?: LlmToolCall[];
@@ -30,175 +35,172 @@ export interface LlmToolSpec {
   };
 }
 
-export interface LlmCompletion {
-  content: string;
-  toolCalls: LlmToolCall[];
-  promptTokens: number;
-  completionTokens: number;
-  cachedTokens: number;
-  cost: number;
-  latencyMs: number;
-  resolvedModel: string;
-  stopReason: "stop" | "tool_calls" | "length" | "error";
-  error?: string;
+export interface LlmCacheState {
+  previousMessages: string[] | null;
 }
 
-export const DEFAULT_LLM_HOSTS = ["openrouter.ai"];
-
-/** Resolve the permitted hosts: defaults plus the configured endpoint's host. */
-export function allowedLlmHosts(): Set<string> {
-  const hosts = new Set(DEFAULT_LLM_HOSTS);
-  for (const key of ["OPENROUTER_BASE_URL", "LLM_BASE_URL", "LLM_ENDPOINT"]) {
-    const raw = process.env[key];
-    if (!raw) continue;
-    try {
-      hosts.add(new URL(raw).hostname);
-    } catch {
-      /* ignore malformed env */
-    }
-  }
-  if (process.env.BENCH_ALLOW_LLM_HOSTS) {
-    for (const h of process.env.BENCH_ALLOW_LLM_HOSTS.split(",")) {
-      const t = h.trim();
-      if (t) hosts.add(t);
-    }
-  }
-  return hosts;
+export function createLlmCacheState(): LlmCacheState {
+  return { previousMessages: null };
 }
 
-export class EgressBlockedError extends Error {
-  constructor(host: string) {
-    super(`benchmark egress blocked: ${host} is not an allowed LLM endpoint`);
-    this.name = "EgressBlockedError";
-  }
-}
-
-function baseUrl(): string {
-  return (
-    process.env.OPENROUTER_BASE_URL ||
-    process.env.LLM_BASE_URL ||
-    process.env.LLM_ENDPOINT ||
-    "https://openrouter.ai/api/v1"
-  ).replace(/\/+$/, "");
-}
-
-export function resolveApiKey(): string {
-  if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
-  if (process.env.LLM_API_KEY) return process.env.LLM_API_KEY;
+function parseArguments(raw: string): Record<string, unknown> {
   try {
-    const { Database } = require("bun:sqlite");
-    const db = new Database("C:/Users/mishap/.omp/agent/agent.db", { readonly: true });
-    const row = db.query("SELECT data FROM auth_credentials WHERE provider = 'openrouter' AND disabled_cause IS NULL").get() as any;
-    if (row?.data) return JSON.parse(row.data).key;
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
   } catch {
-    /* fall through */
+    return {};
   }
-  throw new Error("LLM API key not found in OPENROUTER_API_KEY / LLM_API_KEY or agent.db");
 }
 
-export interface CallLlmOptions {
-  apiKey?: string;
-  maxTokens?: number;
-  timeoutMs?: number;
-  temperature?: number;
-  tools?: LlmToolSpec[];
+function stringifyOutput(output: unknown): string {
+  if (typeof output === "string") return output;
+  if (output && typeof output === "object") {
+    const value = output as Record<string, unknown>;
+    if (value.type === "text" || value.type === "error-text") return String(value.value ?? "");
+    if (value.type === "json" || value.type === "error-json") return JSON.stringify(value.value ?? null);
+  }
+  return JSON.stringify(output ?? "");
 }
 
-export async function callLlm(
-  model: string,
-  messages: LlmMessage[],
-  opts: CallLlmOptions = {}
-): Promise<LlmCompletion> {
-  const url = `${baseUrl()}/chat/completions`;
-  const host = new URL(url).hostname;
-  const allowed = allowedLlmHosts();
-  if (!allowed.has(host)) throw new EgressBlockedError(host);
+function textFromContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return content == null ? "" : JSON.stringify(content);
+  return content
+    .filter((part): part is Record<string, unknown> => Boolean(part) && typeof part === "object")
+    .filter((part) => part.type === "text")
+    .map((part) => String(part.text ?? ""))
+    .join("");
+}
 
-  const apiKey = opts.apiKey ?? resolveApiKey();
-  const t0 = performance.now();
+/** Convert benchmark messages to AI SDK messages, preserving native reasoning. */
+export function toModelMessages(messages: readonly LlmMessage[]): ModelMessage[] {
+  return messages.map((message): ModelMessage => {
+    if (message.role === "system") return { role: "system", content: message.content };
+    if (message.role === "user") return { role: "user", content: message.content };
 
-  const body: Record<string, unknown> = {
-    model: model.replace(/^openrouter\//, ""),
-    messages,
-    max_tokens: opts.maxTokens ?? 1024
-  };
-  if (opts.temperature !== undefined) body.temperature = opts.temperature;
-  if (opts.tools && opts.tools.length > 0) {
-    body.tools = opts.tools;
-    body.tool_choice = "auto";
-  }
-
-  let json: any;
-  try {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/oopsmishap/origami",
-        "X-Title": "Origami Agentic Context Benchmark"
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(opts.timeoutMs ?? 60_000)
-    });
-    json = await resp.json();
-    if (!resp.ok) {
+    if (message.role === "tool") {
       return {
-        content: "",
-        toolCalls: [],
-        promptTokens: 0,
-        completionTokens: 0,
-        cachedTokens: 0,
-        cost: 0,
-        latencyMs: Math.round(performance.now() - t0),
-        resolvedModel: model,
-        stopReason: "error",
-        error: `LLM API error (${resp.status}): ${JSON.stringify(json?.error ?? json).slice(0, 300)}`
-      };
+        role: "tool",
+        content: [{
+          type: "tool-result",
+          toolCallId: message.tool_call_id ?? "unknown-tool-call",
+          toolName: message.name ?? "unknown",
+          output: { type: "text", value: message.content }
+        }]
+      } as ModelMessage;
     }
-  } catch (err: any) {
-    return {
-      content: "",
-      toolCalls: [],
-      promptTokens: 0,
-      completionTokens: 0,
-      cachedTokens: 0,
-      cost: 0,
-      latencyMs: Math.round(performance.now() - t0),
-      resolvedModel: model,
-      stopReason: "error",
-      error: err?.message ?? String(err)
-    };
+
+    const parts: Array<Record<string, unknown>> = [];
+    if (message.reasoning) parts.push({ type: "reasoning", text: message.reasoning });
+    if (message.content) parts.push({ type: "text", text: message.content });
+    for (const call of message.tool_calls ?? []) {
+      parts.push({
+        type: "tool-call",
+        toolCallId: call.id,
+        toolName: call.function.name,
+        input: parseArguments(call.function.arguments)
+      });
+    }
+    return { role: "assistant", content: parts } as ModelMessage;
+  });
+}
+
+/** Convert AI SDK response/model messages to the strategy-facing shape. */
+export function fromModelMessages(messages: readonly ModelMessage[]): LlmMessage[] {
+  return messages.flatMap((message): LlmMessage[] => {
+    if (message.role === "system") return [{ role: "system", content: message.content }];
+    if (message.role === "user") return [{ role: "user", content: textFromContent(message.content) }];
+
+    if (message.role === "tool") {
+      const parts = Array.isArray(message.content) ? message.content : [];
+      return parts
+        .filter((part) => part.type === "tool-result")
+        .map((part) => ({
+          role: "tool",
+          content: stringifyOutput(part.output),
+          name: String(part.toolName ?? "unknown"),
+          tool_call_id: String(part.toolCallId ?? "")
+        }));
+    }
+
+    const parts = Array.isArray(message.content) ? message.content : [];
+    let content = "";
+    let reasoning = "";
+    const toolCalls: LlmToolCall[] = [];
+    for (const rawPart of parts) {
+      if (!rawPart || typeof rawPart !== "object") continue;
+      const part = rawPart as Record<string, unknown>;
+      if (part.type === "text") content += String(part.text ?? "");
+      else if (part.type === "reasoning") reasoning += String(part.text ?? "");
+      else if (part.type === "tool-call") {
+        toolCalls.push({
+          id: String(part.toolCallId ?? ""),
+          type: "function",
+          function: {
+            name: String(part.toolName ?? ""),
+            arguments: JSON.stringify(part.input ?? {})
+          }
+        });
+      }
+    }
+    return [{
+      role: "assistant",
+      content,
+      ...(reasoning ? { reasoning } : {}),
+      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {})
+    }];
+  });
+}
+
+export function countLlmMessageTokens(message: LlmMessage, tokenizer?: BenchmarkTokenizer): number {
+  if (tokenizer) {
+    return tokenizer.countMessage(message);
   }
+  const reasoning = message.role === "assistant" ? message.reasoning ?? "" : "";
+  const toolCalls = message.role === "assistant" && message.tool_calls?.length
+    ? message.tool_calls.map((call) => `${call.function.name}\n${call.function.arguments}`).join("\n")
+    : "";
+  const metadata = message.role === "tool"
+    ? `${message.name ?? ""}\n${message.tool_call_id ?? ""}`
+    : "";
+  return countTokens([message.content, reasoning, toolCalls, metadata].filter(Boolean).join("\n"));
+}
 
-  const latencyMs = Math.round(performance.now() - t0);
-  const choice = json.choices?.[0];
-  const msg = choice?.message ?? {};
-  const usage = json.usage ?? {};
-
-  const toolCalls: LlmToolCall[] = Array.isArray(msg.tool_calls)
-    ? msg.tool_calls.map((tc: any) => ({
-        id: tc.id ?? `call_${Math.random().toString(36).slice(2)}`,
-        type: "function" as const,
-        function: {
-          name: tc.function?.name ?? "",
-          arguments: typeof tc.function?.arguments === "string" ? tc.function.arguments : JSON.stringify(tc.function?.arguments ?? {})
-        }
-      }))
-    : [];
-
-  const content: string = msg.content ?? "";
-  const finish = choice?.finish_reason ?? (toolCalls.length > 0 ? "tool_calls" : "stop");
-
-  return {
-    content,
-    toolCalls,
-    promptTokens: usage.prompt_tokens ?? 0,
-    completionTokens: usage.completion_tokens ?? 0,
-    cachedTokens: usage.prompt_tokens_details?.cached_tokens ?? 0,
-    cost: usage.cost ?? 0,
-    latencyMs,
-    resolvedModel: json.model ?? model,
-    stopReason: finish === "tool_calls" ? "tool_calls" : finish === "length" ? "length" : "stop"
-  };
+export function cacheAccounting(
+  messages: readonly LlmMessage[],
+  promptTokens: number,
+  state: LlmCacheState,
+  tokenizer?: BenchmarkTokenizer
+): { cachedTokens: number; cacheWriteTokens: number } {
+  const fingerprints = messages.map((message) => JSON.stringify(message));
+  let commonCount = 0;
+  let commonTokens = 0;
+  if (state.previousMessages) {
+    for (let i = 0; i < Math.min(state.previousMessages.length, fingerprints.length); i++) {
+      if (state.previousMessages[i] !== fingerprints[i]) break;
+      commonTokens += countLlmMessageTokens(messages[i]!, tokenizer);
+      commonCount++;
+    }
+  }
+  let freshTokens = 0;
+  for (let i = commonCount; i < messages.length; i++) {
+    freshTokens += countLlmMessageTokens(messages[i]!, tokenizer);
+  }
+  const totalLocal = commonTokens + freshTokens;
+  let effectiveCommon = commonTokens;
+  if (totalLocal > promptTokens && totalLocal > 0) {
+    effectiveCommon = Math.floor(promptTokens * (commonTokens / totalLocal));
+    if (freshTokens > 0 && effectiveCommon >= promptTokens) {
+      effectiveCommon = Math.max(0, promptTokens - 1);
+    }
+  }
+  const eligible = promptTokens >= MIN_CACHEABLE_INPUT_TOKENS;
+  const cachedTokens = eligible && effectiveCommon >= MIN_CACHEABLE_INPUT_TOKENS
+    ? Math.min(promptTokens, effectiveCommon)
+    : 0;
+  const cacheWriteTokens = eligible ? Math.max(0, promptTokens - cachedTokens) : 0;
+  state.previousMessages = fingerprints;
+  return { cachedTokens, cacheWriteTokens };
 }

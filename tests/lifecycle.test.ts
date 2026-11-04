@@ -185,13 +185,23 @@ describe("tiered block lifecycle", () => {
 });
 
 describe("protected recent tail", () => {
-  it("rejects folds that reach into the tail and keeps it out of recommendations", () => {
+  it("snaps folds that reach into the tail to their foldable interior and keeps the tail unfolderable", () => {
     const { engine } = harness({ config: { protectedTailMessages: 4, protectedTailTokens: 0 } });
-    // Last 4 messages are turns 5-6 (m00009..m00012).
+    // Last 4 messages are turns 5-6 (m00009..m00012); turn 4 (m00007..m00008) is foldable.
     const res = engine.executeFold({ folds: [fold("m00007..m00010")] });
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error).toContain("protected recent tail (turn 5 onward)");
-    expect(engine.recommendedRanges().map((r) => `${r.start}..${r.end}`)).toEqual(["m00003..m00008"]);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.outcome.snapped).toEqual(["m00007..m00010 → m00007..m00008"]);
+      expect(res.outcome.blocks[0]!.refs).toEqual(["m00007", "m00008"]);
+    }
+    // The tail itself still cannot be folded.
+    const tailRes = engine.executeFold({ folds: [fold("m00009..m00010")] });
+    expect(tailRes.ok).toBe(false);
+    if (!tailRes.ok) expect(tailRes.error).toContain("protected recent tail (turn 5 onward)");
+    // Recommendations keep the unfolded middle out of the protected tail.
+    const recs = engine.recommendedRanges().map((r) => `${r.start}..${r.end}`);
+    expect(recs).not.toContain("m00009..m00012");
+    expect(recs.some((r) => r.includes("m00003"))).toBe(true);
     expect(engine.status().protectedFromTurn).toBe(5);
   });
 });

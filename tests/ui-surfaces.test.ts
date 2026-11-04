@@ -1,8 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { Settings } from "@oh-my-pi/pi-coding-agent";
 import { unlinkSync } from "node:fs";
 import { initThemeSync, theme } from "@oh-my-pi/pi-tui/theme";
 import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
-import type { ExtensionAPI, RegisteredCommand } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import type { ExtensionAPI, ExtensionCommandContext, RegisteredCommand } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { DescribeContext } from "@oh-my-pi/pi-tui/native/node";
 import type { TspChartProps } from "@oh-my-pi/pi-wire";
 import origamiExtension from "../src/index.ts";
@@ -10,7 +11,7 @@ import { configFromPreset } from "../src/config.ts";
 import { openDb } from "../src/persist/db.ts";
 import type { JournalOp } from "../src/persist/journal.ts";
 import { OrigamiRuntime } from "../src/runtime.ts";
-import { SessionRegistry } from "../src/sessions.ts";
+import { SessionRegistry, sessionRegistry } from "../src/sessions.ts";
 import { OrigamiFoldMessageComponent } from "../src/tools/display.ts";
 import { registerTools } from "../src/tools/index.ts";
 import { formatStatusChip } from "../src/ui/status.ts";
@@ -28,6 +29,9 @@ import { WorkbenchComponent } from "../src/ui/workbench.ts";
 
 
 initThemeSync();
+beforeAll(async () => {
+  await Settings.init({ inMemory: true });
+});
 const nativeCx: DescribeContext = {
   cols: 120,
   reduceMotion: false,
@@ -300,10 +304,82 @@ describe("First-party Transcript Banner, Inline Tools & Workbench", () => {
 
     origamiExtension(fakeApi);
     const complete = commands.get("fold")?.getArgumentCompletions;
-    expect(complete?.("")?.map((item) => item.value)).toEqual(["trajectory", "blocks", "zones", "web", "config", "export"]);
+    expect(complete?.("")?.map((item) => item.value)).toEqual(["now", "trajectory", "blocks", "zones", "web", "config", "export"]);
     expect(complete?.("co")?.map((item) => item.value)).toEqual(["config"]);
     expect(complete?.("blocks ")).toBeNull();
   });
+  it("executes /fold now to immediately fold eligible history", async () => {
+    const commands = new Map<string, RegisteredCommand>();
+    const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+    const notifications: { message: string; type: string }[] = [];
+    const entries: { type: string; id: string; message: unknown }[] = [];
+    const events: { event: string; sessionId: string | null }[] = [];
+
+    // Create conversation turns: turn 1 pinned, turns 2-10 for folding, turns 11-13 protected tail
+    entries.push({ type: "message", id: "m0", message: { role: "system", content: "sys" } });
+    entries.push({ type: "message", id: "m1", message: { role: "user", content: "turn 1 initial prompt" } });
+    entries.push({ type: "message", id: "m2", message: { role: "assistant", content: "turn 1 reply" } });
+    for (let turn = 2; turn <= 14; turn++) {
+      entries.push({ type: "message", id: `m${turn * 2 - 1}`, message: { role: "user", content: `turn ${turn} prompt ${"finished work on parser ".repeat(60)}` } });
+      entries.push({ type: "message", id: `m${turn * 2}`, message: { role: "assistant", content: `turn ${turn} response ${"finished work on parser ".repeat(60)}` } });
+    }
+    const fakeApi = {
+      typebox: {
+        Type: {
+          Object: (v: unknown) => v,
+          Array: (v: unknown) => v,
+          String: (v: unknown) => v,
+          Optional: (v: unknown) => v,
+          Union: (v: unknown) => v,
+          Literal: (v: unknown) => v,
+          Integer: (v: unknown) => v,
+          Boolean: (v: unknown) => v,
+        },
+      },
+      registerTool: () => {},
+      registerMessageRenderer: () => {},
+      registerCommand: (name: string, command: RegisteredCommand) => commands.set(name, command),
+      appendEntry: () => {},
+      registerShortcut: () => {},
+      on: (event: string, handler: (event: unknown, ctx: unknown) => void) => handlers.set(event, handler),
+    } as unknown as ExtensionAPI;
+
+    origamiExtension(fakeApi);
+    const foldCmd = commands.get("fold");
+    expect(foldCmd).toBeDefined();
+
+    const fakeCtx = {
+      cwd: "/test",
+      hasUI: true,
+      agent: { kind: "main" },
+      sessionManager: {
+        getSessionId: () => "test-fold-now-session",
+        getEntries: () => entries,
+        saveArtifact: async () => "/fake/artifact.json",
+      },
+      ui: {
+        notify: (message: string, type: string) => {
+          notifications.push({ message, type });
+        },
+      },
+      getContextUsage: () => ({ tokens: 10_000, contextWindow: 128_000 }),
+    } as unknown as ExtensionCommandContext;
+
+    handlers.get("before_agent_start")!({ systemPrompt: [] }, fakeCtx);
+    const record = sessionRegistry().live("test-fold-now-session")!;
+    Object.assign(record.config, {
+      protectedTailMessages: 2,
+      protectedTailTokens: 0,
+      minFoldBenefitTokens: 0,
+      minFoldBenefitWindowPct: 0,
+    });
+    await foldCmd!.handler("now", fakeCtx);
+    expect(notifications.length).toBeGreaterThan(0);
+    expect(notifications[0]!.type).toBe("info");
+    expect(notifications[0]!.message).toContain("Origami: folded");
+    expect(notifications[0]!.message).toContain("reclaimed");
+  });
+
 
   it("marks all 5 tools as inline + mergeCallAndResult with both describeCall and describeResult", () => {
     const tools = new Map<string, ToolDefinition & { inline?: boolean; mergeCallAndResult?: boolean }>();

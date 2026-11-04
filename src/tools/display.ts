@@ -727,6 +727,9 @@ export function formatFoldOutcome(outcome: FoldOutcome): string {
     (b: FoldCreatedBlock) =>
       `${b.id} (tier ${b.tier}) ${b.refs[0]}..${b.refs[b.refs.length - 1]} · ${formatTokens(b.tokensBefore)}t → ${formatTokens(b.tokensAfter)}t · ${b.topic}`,
   );
+  if (outcome.snapped && outcome.snapped.length > 0) {
+    lines.push(`range snapped to whole turns: ${outcome.snapped.join("; ")}`);
+  }
   for (const b of outcome.blocks) {
     if (b.missing.length === 0) continue;
     lines.push(

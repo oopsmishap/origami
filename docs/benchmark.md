@@ -131,21 +131,55 @@ The agentic benchmark harness (`bench/agentic/runner.ts`) evaluates context comp
 - **Programming (`programming`)**: Builds a playable HTML5 Canvas Pac-Man arcade game in `game.js`, `index.html`, and `style.css`. Rubric verifies 15 functional criteria including maze rendering, directional controls, four ghost AI algorithms (Blinky, Pinky, Inky, Clyde), pellets, power pellets with frightened mode, score tracking, local storage persistence, sound effects, and game over states.
 - **Research (`research`)**: Conducts a security vulnerability audit across seeded repository code (`src/db/users.js`, `src/api/files.js`, `src/utils/media.js`, `src/config/auth.js`, `src/api/comments.js`, `src/api/orders.js`). Rubric checks `AUDIT_REPORT.md` for detection of SQL injection, path traversal, command injection, hardcoded credentials, stored XSS, and broken object authorization.
 - **General (`general`)**: Sustained development session building a matrix math library (`src/matrix.ts`), updating architectural specifications (`docs/ARCHITECTURE.md`), and authoring unit tests (`tests/matrix.test.ts`).
-- **Memory (`memory`)**: Needle retention across extended horizons. Configuration facts planted in turns 1 through 3 are queried with recall probes across the run.
+- **Memory (`memory`)**: Stratified deep-horizon and temporal-override needle retention under sustained engineering load. Needles are never planted on Turn 1 (preventing head-pinning freebies), enforce a $\ge 45\%$ session-length lag before probing, keep secrets strictly out of workspace files, and mix static operational facts (75%) with superseded policy overrides (25%).
+- **All (`all`)**: Full-spectrum multi-phase session combining `programming`, `research`, `general`, and `memory` across a single continuous run.
 
-### Context Intensity Scales
+Every turn across every mode and scale generates a **unique, non-repeating engineering deliverable** (distinct module, stage, security control, numerical algorithm, test suite, or RFC), preventing models from short-circuiting repeated prompts.
 
-| Scale | Turns per Run | Intended Coverage |
-|---|---|---|
-| `low` | 20 | Rapid verification, surface smoke testing, and regression runs |
-| `medium` | 60 | Standard coding session matching single-task agent lifecycles |
-| `high` | 150 | Heavy multi-task engineering sessions testing multi-round compactions |
-| `insane` | 300 | Multi-day session simulation testing long-horizon needle survival |
+### Task Rubric vs Probe Recall
 
-### Sandbox and Egress Boundaries
+The two headline columns measure different things and are never merged:
 
+- **Task Rubric** scores what the run *shipped* into the sandbox. In `memory` (and the memory slice of `all`) this is scale-aware: platform modules, unit tests, domain barrel exports (`src/**/index.ts` with re-exports), and operational runbooks are checked against the deliverables actually scheduled at the chosen scale (unscheduled kinds report `unavailable`, excluded from the score), plus a **zero-leaked-secrets scan** asserting no session-only needle value ever landed in a workspace file.
+- **Probe Recall** scores the stratified deep-horizon and override needles only, using `evaluateProbeAnswer` (stale-value and hedged-answer rejection).
+
+### Context Intensity Scales & Stratified Needle Counts
+
+| Scale | Turns per Run | Needles (`memory` / `all`) | Domain Probes (`programming` / `research` / `general`) | Intended Coverage |
+|---|---:|---:|---:|---|
+| `low` | 20 | 4 (1 override) | 2 | Rapid verification, surface smoke testing, and regression runs |
+| `medium` | 60 | 8 (2 overrides) | 4 | Standard coding session matching single-task agent lifecycles |
+| `high` | 150 | 14 (3 overrides) | 6 | Heavy multi-task engineering sessions testing multi-round compactions |
+| `insane` | 300 | 20 (5 overrides) | 10 | Multi-day session simulation testing long-horizon needle survival |
+| `marathon` | 1500 | 32 (8 overrides) | 16 | Extreme 1,500-turn stress run testing multi-tier Pagoda consolidation (`T1 → T2 → T3`) |
+### Runtime Architecture and Boundaries
+
+- **Model and Agent Loop Orchestration**: Multi-step tool execution, retries, and schema validation are driven by the Vercel AI SDK Core (`generateText`, `stopWhen`, `prepareStep`) with `zod` parameter schemas.
 - **Filesystem Isolation**: Runs execute inside temporary scratch workspaces (`.bench_workspace/` or OS temp directories). Paths resolving outside the sandbox root throw `SandboxEscapeError` before any file operation executes.
-- **Egress Restrictions**: Sandbox tools have zero network access. Outbound HTTP calls are restricted exclusively to configured LLM endpoints (`openrouter.ai` or operator endpoint allowlist); any other host target throws `EgressBlockedError`.
+- **Egress Restrictions**: Sandbox tools have zero network access. The only model transport is the configured Ollama host (`OLLAMA_HOST`, default `http://127.0.0.1:11434`).
+### Modeled Cost and Cache Telemetry
+
+Ollama reports prompt and completion token counts but does not expose provider billing or prompt-cache read/write counts. The agentic benchmark therefore models each live Ollama run against the **GPT-5.6 Sol Standard** profile; these values are estimates, not an Ollama invoice:
+
+| Input category | Rate per 1M tokens |
+|---|---:|
+| Uncached input (≤272K prompt) | $4.00 |
+| Cache read (≤272K prompt) | $0.40 |
+| 30-minute cache write (≤272K prompt) | $5.00 |
+| Output (≤272K prompt) | $20.00 |
+
+For prompts above 272K tokens, the modeled rates are $8.00 input, $0.80 cache read, $10.00 cache write, and $30.00 output per million tokens. The simulator treats a stable prefix of at least 1,024 tokens as a cache read; newly eligible prompt tokens are cache writes. Prefixes are compared across actual requests in the run, including tool-result rounds, so the estimate reflects real benchmark work rather than a fixed cache percentage.
+
+The profile follows the published GPT-5.6 pricing and prompt-caching behavior: [pricing](https://developers.openai.com/api/docs/pricing) and [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
+For `lfm3:*` models, the adapter preserves Ollama's native `thinking` field in assistant history. The benchmark does not replay reasoning as ordinary assistant text: late-context probes showed that plain replay inflated a 22,040-token native prompt to 108,045 tokens and caused LFM3 to spend the full output budget without a tool call, while native thinking still recalled a marker and emitted tools. Ollama's `prompt_eval_count` does not include the native thinking field, so benchmark context telemetry also reports a local logical outbound estimate that includes reasoning; provider prompt and billing counters remain the raw Ollama values.
+If LFM3 returns an empty assistant response whose native thinking contains unparsed `<tool_call>`, `<function>`, or `<parameter>` markup, the adapter retries that same request once with thinking disabled so the action can be emitted through Ollama's native tool channel. The malformed thought is discarded rather than parsed or replayed as assistant content.
+The default model is `gemma4:latest` (E4B), with a 131,072-token context window sent to Ollama as `num_ctx`. The benchmark uses temperature `1.0`, top-p `0.95`, top-k `64`, and native Ollama thinking (`think: true`); Ollama's Gemma renderer handles the thinking control tokens. Generated thoughts remain visible in the transcript but are not replayed in later requests, including tool-result rounds. The text-only benchmark does not send image or audio inputs.
+
+LFM3 defaults to a 220,000-token effective window (below its 262,144-token Ollama ceiling). Gemma 4 and LFM3 have no benchmark-imposed output cap; other models default to 4,096 tokens. Use `--max-tokens <tokens>` to set Ollama's `num_predict` and `--window <tokens>` to override the effective context window.
+
+At 80% of the configured window, the runner requests strategy-specific maintenance before model requests and after turns, using the estimated outbound history and the latest provider-reported prompt count. Origami folds eligible completed ranges; soft and handover summarize or hand off; shake prunes eligible observations; sliding-window truncates older history. Maintenance cannot always reclaim space, for example when all history is protected or there are no eligible tool outputs. `--compact-every <n>` additionally requests maintenance every N turns.
+
+Each strategy also uses a `max(10,000, window - 8,000)` estimated-token outbound guard. Counts are character-based estimates, not model tokenization; the guard can retain an oversized indivisible message, so it is not a guaranteed provider limit. Tool-call/result pairs are sanitized when history is trimmed. Ollama's reported prompt count is recorded separately.
 
 ### Running the Agentic Benchmark
 
@@ -155,14 +189,14 @@ Run a local smoke test across all strategies:
 bun run bench:agentic:smoke
 ```
 
-Run a live benchmark against OpenRouter with live web dashboard:
+Run a live Ollama benchmark with the modeled GPT-5.6 Sol billing profile and live web dashboard:
 
 ```bash
-bun run bench:agentic:web --mode programming --scale low --strategy all --port 4143
+bun run bench:agentic:web --mode programming --scale low --strategy all --model gemma4:latest --pricing-model gpt-5.6-sol --port 4143
 ```
 
 Run a specific scenario and scale headless:
 
 ```bash
-bun bench/agentic/runner.ts --mode memory --scale high --strategy origami,soft,handover --model openrouter/nvidia/nemotron-3.5-super-vl:free
+bun bench/agentic/runner.ts --mode memory --scale high --strategy origami --model gemma4:latest --pricing-model gpt-5.6-sol
 ```

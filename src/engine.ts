@@ -15,7 +15,7 @@ import { assessFoldTiming, type FoldTiming } from "./kernel/fold-timing.ts";
 import { annotateCachedPrefix } from "./kernel/cache-zones.ts";
 import { EMPTY_MANIFEST, extractManifest, mergeManifests } from "./kernel/manifest.ts";
 import { formatRecallHints, matchRecallHints } from "./kernel/recall-hints.ts";
-import { ledgerSemanticKey, normalizeInheritedLedger } from "./kernel/ledger.ts";
+import { ledgerSemanticKey, normalizeInheritedLedger, normalizedLedgerText } from "./kernel/ledger.ts";
 import { estimateOutboundTokens, type OutboundEstimate } from "./engine-status.ts";
 import { lintSummary } from "./kernel/summary-lint.ts";
 import { makeFoldOp, makeUnfoldOp, makeTierOp } from "./persist/journal.ts";
@@ -531,7 +531,7 @@ export class OrigamiEngine {
 
       for (const ref of refs) claimedRefs.set(ref, i);
       for (const c of children) claimedChildren.set(c, i);
-      planned.push({ refs, block });
+      planned.push({ refs, block, ...(projection.snapped ? { snapped: projection.snapped } : {}) });
     }
 
     const tier1Planned = planned.filter((p) => p.block.tier === 1);
@@ -561,7 +561,7 @@ export class OrigamiEngine {
       const total = tier1Planned.reduce((s, p) => s + Math.max(0, p.block.tokensBefore - p.block.tokensAfter), 0);
       const window = this.host.windowTokens();
       const emergency = window > 0 && this.host.projectedTokens() / window >= this.config.emergencyFillPct;
-      if (floor > 0 && total < floor && !emergency) {
+      if (floor > 0 && total < floor && !emergency && !params.force) {
         return {
           ok: false,
           error: `batch reclaims ~${formatTokens(total)}t, below the minimum fold benefit of ${formatTokens(floor)}t; fold more finished work at once or defer`,
@@ -619,8 +619,10 @@ export class OrigamiEngine {
   commitFoldBatch(planned: readonly PlannedFold[]): FoldResult {
     const tree = this.state.tree;
     const created: FoldCreatedBlock[] = [];
+    const snapped: string[] = [];
     let reclaimed = 0;
     for (const p of planned) {
+      if (p.snapped) snapped.push(...p.snapped);
       const replaced = p.block.tier === 1 ? p.block.tokensBefore : p.block.children.reduce((s, c) => s + (tree.get(c)?.tokensAfter ?? 0), 0);
       this.host.appendEvent(makeFoldOp(p.block));
       tree.apply({ op: "fold", block: p.block });
@@ -654,7 +656,7 @@ export class OrigamiEngine {
     }
     return {
       ok: true,
-      outcome: { blocks: created, tokensReclaimed: reclaimed, foldCount: created.length },
+      outcome: { blocks: created, tokensReclaimed: reclaimed, foldCount: created.length, ...(snapped.length > 0 ? { snapped } : {}) },
     };
   }
 
@@ -680,14 +682,28 @@ export class OrigamiEngine {
     const seed: { kind: LedgerKind; text: string; ref: string | null }[] = [];
     if (tier === 1) {
       if (spec.retire && spec.retire.length > 0) return "retire is only valid when merging blocks";
-      const intents = this.state.bound
+      const rawIntents = this.state.bound
         .filter((m) => !m.ephemeral && m.role === "user" && refSet.has(m.ref))
         .map((m) => {
           const text = m.text.replace(/^text:/gm, "").trim();
           return { kind: "intent" as const, text: text.length <= INTENT_VERBATIM_CHARS ? text : `${text.slice(0, INTENT_CLIP_CHARS)} …`, ref: m.ref };
         })
         .filter((r) => r.text.length > 0);
-      seed.push(...(intents.length > MAX_INTENTS ? [...intents.slice(0, 2), ...intents.slice(-(MAX_INTENTS - 2))] : intents));
+      let intents = rawIntents;
+      if (rawIntents.length > MAX_INTENTS) {
+        const seenIntentText = new Set<string>();
+        const dedupedHead: typeof rawIntents = [];
+        for (const item of rawIntents) {
+          const norm = normalizedLedgerText(item.text);
+          if (seenIntentText.has(norm)) continue;
+          seenIntentText.add(norm);
+          dedupedHead.push(item);
+        }
+        intents = dedupedHead.length > MAX_INTENTS
+          ? [...dedupedHead.slice(0, 2), ...dedupedHead.slice(-(MAX_INTENTS - 2))]
+          : dedupedHead;
+      }
+      seed.push(...intents);
     } else {
       for (const c of children) inherited.push(...(this.state.tree.get(c)?.ledger ?? []));
       const retire = new Set(spec.retire ?? []);
@@ -813,8 +829,8 @@ export class OrigamiEngine {
    * One clipped line per covered message: a mechanical summary for emergency archives.
    * Full originals are kept in the durable archive (see `recall`), not in the summary.
    */
-  archiveDigest(ranges: readonly RefRange[], perMessageChars = 160): string {
-    return buildArchiveDigest(this.context(), ranges, perMessageChars);
+  archiveDigest(ranges: readonly RefRange[], perMessageChars = 160, maxChars = 4800): string {
+    return buildArchiveDigest(this.context(), ranges, perMessageChars, maxChars);
   }
 
   /**

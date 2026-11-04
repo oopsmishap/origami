@@ -73,6 +73,8 @@ describe("projectUnit", () => {
     if (r.ok) {
       expect(r.projected.refs).toEqual(["m00004", "m00005", "m00006"]);
       expect(r.widened).toBe(true);
+      // Ordinary whole-turn widening is not boundary snapping.
+      expect(r.snapped).toBeUndefined();
     }
   });
 
@@ -100,6 +102,31 @@ describe("projectUnit", () => {
     const r = projectUnit({ bound: makeBound(), ranges: [{ start: "m00014", end: "m00014" }], ...base });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toBe("range splits 1 turn(s); end at m00012 or earlier (turn 5 is in flight)");
+  });
+
+  it("snaps a request that cuts protected turns to its foldable interior", () => {
+    // The forensics shape: model folds from mid-head through the in-flight turn.
+    // Head turn 1 (m00001..m00003) and in-flight turn 5 (m00013..m00015) must stay whole.
+    const r = projectUnit({ bound: makeBound(), ranges: [{ start: "m00002", end: "m00014" }], ...base });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.projected.refs).toEqual(["m00004", "m00005", "m00006", "m00007", "m00008", "m00009", "m00010", "m00011", "m00012"]);
+      expect(r.snapped).toEqual(["m00002..m00014 → m00004..m00012"]);
+      expect(r.turnCount).toBe(5);
+    }
+  });
+
+  it("drops a requested range whose interior is fully protected but folds the rest", () => {
+    const r = projectUnit({
+      bound: makeBound(),
+      ranges: [{ start: "m00004", end: "m00006" }, { start: "m00013", end: "m00014" }],
+      ...base,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.projected.refs).toEqual(["m00004", "m00005", "m00006"]);
+      expect(r.snapped).toEqual(["m00013..m00014 → dropped (protected turn)"]);
+    }
   });
 
   it("counts multiple cut turns in the split literal", () => {

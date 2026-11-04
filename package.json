@@ -1,6 +1,6 @@
 {
   "name": "origami",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "First-principles incremental hierarchical context folding for oh-my-pi",
   "type": "module",
   "license": "MIT",
@@ -25,7 +25,9 @@
     "bench:real-world": "bun bench/real-world.ts",
     "bench:agentic": "bun bench/agentic/runner.ts",
     "bench:agentic:smoke": "bun bench/agentic/runner.ts --mode programming --scale low --strategy all --mock",
-    "bench:agentic:web": "bun bench/agentic/runner.ts --web"
+    "bench:agentic:web": "bun bench/agentic/runner.ts --web",
+    "bench:agentic:marathon": "bun bench/agentic/runner.ts --mode all --scale marathon --strategy all --parallel --concurrency 4 --web",
+    "bench:agentic:marathon:origami": "bun bench/agentic/runner.ts --mode all --scale marathon --strategy origami --parallel --web"
   },
   "peerDependencies": {
     "@oh-my-pi/pi-coding-agent": ">=18.6.0",
@@ -44,11 +46,22 @@
     }
   },
   "devDependencies": {
+    "@ai-sdk/provider": "^4.0.35",
+    "@huggingface/tokenizers": "^0.2.0",
     "@oh-my-pi/pi-coding-agent": "^18.13.2",
     "@oh-my-pi/pi-natives": "^18.13.2",
     "@oh-my-pi/pi-tui": "^18.13.2",
     "@oh-my-pi/pi-wire": "^18.13.2",
     "@types/bun": "^1.2.0",
-    "typescript": "^5.6.0"
+    "ai": "^7.0.159",
+    "chart.js": "^4.6.1",
+    "commander": "^15.0.0",
+    "memfs": "^4.80.0",
+    "ollama-ai-provider-v2": "^4.1.0",
+    "p-limit": "^7.3.3",
+    "playwright": "^1.64.1",
+    "promptfoo": "^0.125.1",
+    "typescript": "^5.6.0",
+    "zod": "^4.6.7"
   }
 }
