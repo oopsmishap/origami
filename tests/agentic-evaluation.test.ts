@@ -112,23 +112,53 @@ const fakeAudio = "AudioContext";
 `
       );
 
+      // Hermetic invariant: without container verification, unverifiable criteria
+      // must report "unavailable" and must NEVER credit keyword stuffing as "passed".
+      // (Functional rejection by a real container lives in the e2e-gated test below.)
       const res = await evaluateScenario({
         scenario: SCENARIO_REGISTRY.programming,
-        sandbox
+        sandbox,
+        skipContainer: true
       });
 
-      // Crucial acceptance invariant: A keyword-only file must not pass
+      expect(res.rubricTotalCount).toBe(15);
       expect(res.rubricPassedCount).toBe(0);
-      if (res.rubricScore !== null) {
-        expect(res.rubricScore).toBe(0);
-      }
       for (const item of res.rubricDetails) {
+        expect(item.status).toBe("unavailable");
         expect(item.passed).toBe(false);
       }
     } finally {
       cleanup();
     }
   });
+
+  test.skipIf(!process.env.ORIGAMI_PACMAN_CONTAINER_E2E)(
+    "e2e: keyword-only Pac-Man file is functionally rejected by the container evaluator",
+    async () => {
+      const { sandbox, cleanup } = createTestSandbox();
+      try {
+        sandbox.write("index.html", `<!DOCTYPE html><html><body><!-- canvas requestAnimationFrame maze grid wall map pacman pellet dot score --><script src="game.js"></script></body></html>`);
+        sandbox.write("game.js", `// canvas requestAnimationFrame maze grid wall map pacman direction move speed pellet dot score power energizer frightened blue blinky pinky inky clyde lives death respawn reset level nextLevel difficulty clear localStorage highScore best AudioContext sound beep sfx ArrowUp ArrowDown KeyW KeyA addEventListener game over win victory restart\nconst fakeCanvas = "canvas";`);
+
+        const res = await evaluateScenario({
+          scenario: SCENARIO_REGISTRY.programming,
+          sandbox
+        });
+
+        // Crucial acceptance invariant: a real functional run must not credit keyword stuffing.
+        expect(res.rubricPassedCount).toBe(0);
+        if (res.rubricScore !== null) {
+          expect(res.rubricScore).toBe(0);
+        }
+        for (const item of res.rubricDetails) {
+          expect(item.passed).toBe(false);
+        }
+      } finally {
+        cleanup();
+      }
+    },
+    300_000
+  );
 
   test("Docker prerequisite check correctly detects availability or reports missing daemon", async () => {
     const prereq = await checkDockerPrerequisite(4000);

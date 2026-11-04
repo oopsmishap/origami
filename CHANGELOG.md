@@ -17,6 +17,11 @@
 ### Bench
 - Verified `bun test` 360 pass / 0 fail (2,778 assertions) and a live `gemma4:latest` 20-turn run exercising fold snapping and override recall.
 
+### CI / Testing
+- **Hermetic container evaluation**: mock `AgentRunner` runs no longer launch the Docker/Playwright Pac-Man container (`skipContainer` on `evaluateScenario`); on runners with Docker installed these 20-turn simulations were spending minutes in a real container and timing out. Container criteria report `unavailable` instead. The keyword-only Pac-Man rejection test is now deterministic (`skipContainer: true`) with the functional container-level assertion behind `ORIGAMI_PACMAN_CONTAINER_E2E=1` opt-in (5-min budget).
+- Heavy mock-simulation tests carry explicit 30s budgets (Linux CI is 2–3× slower than local and hit bun's 5s default).
+- Regenerated `bun.lock` so `bun install --frozen-lockfile` passes again.
+
 ## 0.5.4 — 2026-11-02
 
 ### Changed

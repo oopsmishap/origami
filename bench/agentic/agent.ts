@@ -705,7 +705,10 @@ export class AgentRunner {
     const evalResult = await evaluateScenario({
       scenario: opts.scenario,
       scale: opts.scale,
-      sandbox
+      sandbox,
+      // Mock simulations must never spin up real Docker/Playwright infrastructure:
+      // container criteria report "unavailable" instead of launching a container.
+      skipContainer: Boolean(opts.mock)
     });
 
     const probePassedCount = probeOutcomes.filter((probe) => probe.passed).length;

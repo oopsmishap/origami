@@ -66,6 +66,13 @@ export interface ScenarioEvaluationOptions {
   sandbox: Sandbox;
   timeoutMs?: number;
   usePromptfoo?: boolean;
+  /** Docker image override for the Pac-Man container evaluator. */
+  containerImage?: string;
+  /**
+   * Skip container evaluation and report every container criterion "unavailable".
+   * Used by mock runs and hermetic unit tests so the suite never depends on a Docker daemon.
+   */
+  skipContainer?: boolean;
 }
 
 /**
@@ -106,9 +113,23 @@ export function getSandboxFileSnapshot(sandbox: Sandbox): Record<string, string>
  */
 async function evaluateProgrammingScenario(
   sandbox: Sandbox,
-  timeoutMs = 30000
+  timeoutMs = 30000,
+  container: { image?: string; skip?: boolean } = {}
 ): Promise<{ details: RubricOutcome[]; containerAvailable: boolean; containerError?: string }> {
   const files = getSandboxFileSnapshot(sandbox);
+
+  if (container.skip) {
+    const details: RubricOutcome[] = PACMAN_FEATURES.map((feat) => ({
+      id: feat.id,
+      name: feat.name,
+      weight: 1,
+      passed: false,
+      status: "unavailable",
+      reason: "Container evaluation skipped (mock/hermetic run): isolated container execution not performed"
+    }));
+    return { details, containerAvailable: false, containerError: "container evaluation skipped" };
+  }
+
   const prereq = await checkDockerPrerequisite();
 
   if (!prereq.available) {
@@ -125,7 +146,8 @@ async function evaluateProgrammingScenario(
 
   const containerResults = await evaluatePacmanInContainer({
     files,
-    timeoutMs
+    timeoutMs,
+    ...(container.image ? { dockerImage: container.image } : {})
   });
 
   const details: RubricOutcome[] = PACMAN_FEATURES.map((feat) => {
@@ -487,7 +509,10 @@ export async function evaluateScenario(options: ScenarioEvaluationOptions): Prom
 
   switch (mode) {
     case "programming": {
-      const prog = await evaluateProgrammingScenario(options.sandbox, options.timeoutMs);
+      const prog = await evaluateProgrammingScenario(options.sandbox, options.timeoutMs, {
+        image: options.containerImage,
+        skip: options.skipContainer
+      });
       rubricDetails = prog.details;
       containerRuntimeAvailable = prog.containerAvailable;
       containerRuntimeError = prog.containerError;
