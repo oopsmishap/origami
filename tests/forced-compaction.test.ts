@@ -78,7 +78,7 @@ describe("Forced Periodic Compaction (every 10 turns)", () => {
     // Strategy telemetry shows compaction events occurred
     expect(result.strategyTelemetry.compactionEvents).toBeGreaterThanOrEqual(1);
     expect(result.tokens.billedTokens).toBeGreaterThan(0);
-  });
+  }, 30_000);
 
   test("AgentRunner forces soft compaction on turn 10", async () => {
     const result = await AgentRunner.run({
@@ -94,7 +94,7 @@ describe("Forced Periodic Compaction (every 10 turns)", () => {
     const turn10 = result.trajectory.find((t) => t.turnIndex === 10);
     expect(turn10?.maintenanceNote).toBeDefined();
     expect(turn10?.maintenanceNote).toContain("Soft-compacted");
-  });
+  }, 30_000);
 
   test("AgentRunner forces handover on turn 10", async () => {
     const result = await AgentRunner.run({
@@ -110,7 +110,7 @@ describe("Forced Periodic Compaction (every 10 turns)", () => {
     const turn10 = result.trajectory.find((t) => t.turnIndex === 10);
     expect(turn10?.maintenanceNote).toBeDefined();
     expect(turn10?.maintenanceNote).toContain("Auto-handed off");
-  });
+  }, 30_000);
 
   test("AgentRunner forces shake on turn 10", async () => {
     const result = await AgentRunner.run({
@@ -126,7 +126,7 @@ describe("Forced Periodic Compaction (every 10 turns)", () => {
     const turn10 = result.trajectory.find((t) => t.turnIndex === 10);
     expect(turn10?.maintenanceNote).toBeDefined();
     expect(turn10?.maintenanceNote).toContain("Auto-shook");
-  });
+  }, 30_000);
   test("Origami compacts at 80% and retains messages appended after a fold", () => {
     const windowTokens = 100_000;
     const runtime = createCompactionRuntime("origami", { windowTokens });

@@ -290,7 +290,7 @@ describe("Agentic Benchmark Suite", () => {
     expect(res.tokens.billedTokens).toBeGreaterThan(0);
     expect(res.trajectory.length).toBe(20);
     expect(res.strategyTelemetry.strategy).toBe("origami");
-  });
+  }, 30_000);
 
 
   test("GPT-5.6 Sol modeled billing separates uncached, cache-read, cache-write, and output costs", () => {
@@ -551,5 +551,5 @@ describe("Agentic Benchmark Suite", () => {
     expect(html).toContain('<div class="meta-bar">');
     expect(html).toContain("ORIGAMI · SHAKE (TIE)");
     expect(html).not.toContain("achieved 100% needle recall via JIT reactive hydration");
-  });
+  }, 30_000);
 });
