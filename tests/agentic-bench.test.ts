@@ -235,6 +235,90 @@ describe("Agentic Benchmark Suite", () => {
     }
   });
 
+  test("soft/handover compact omp-style: model-authored summary, FILES/HISTORY doc, previous-summary merge, deterministic fallback", async () => {
+    // --- Soft: model-authored summary with omp's compaction heading + merge prompt ---
+    const seen: string[] = [];
+    const usage = { inputTokens: 0, outputTokens: 0 };
+    const soft = createCompactionRuntime("soft", {
+      windowTokens: 100_000,
+      keepRecentTokens: 200,
+      summaryFn: async (request) => {
+        seen.push(request.prompt);
+        const inputTokens = 500;
+        const outputTokens = 80;
+        usage.inputTokens += inputTokens;
+        usage.outputTokens += outputTokens;
+        return { text: "FILES\n===================\n- src/a.ts — module A\n\nHISTORY\n===================\n- chose SQLite FTS", usage: { inputTokens, outputTokens } };
+      }
+    });
+    const messages: LlmMessage[] = [{ role: "system", content: "sys" }];
+    for (let i = 0; i < 8; i++) {
+      messages.push({ role: "user", content: `Turn ${i}: use SQLite FTS for search. ${"pad ".repeat(120)}` });
+      messages.push({ role: "assistant", content: `Done ${i}. ${"pad ".repeat(120)}` });
+    }
+    const first = await soft.autoMaintain(messages, 100_000, true);
+    expect(first.acted).toBe(true);
+    // Summary carries omp's `### compaction summary (N tokens before)` heading + model text.
+    expect(messages.some((m) => m.content.startsWith("### compaction summary ("))).toBe(true);
+    expect(messages.some((m) => m.content.includes("chose SQLite FTS"))).toBe(true);
+    // Summarizer prompt is omp's: transcript then "summarize the conversation above" + FILES/HISTORY.
+    expect(seen[0]).toContain("summarize the conversation above into a structured compaction summary");
+    expect(seen[0]).toContain("FILES");
+    expect(seen[0]).toContain("HISTORY");
+
+    // --- Second soft cycle feeds the prior summary back in <previous-summary> tags ---
+    for (let i = 8; i < 16; i++) {
+      messages.push({ role: "user", content: `Turn ${i}: add rate limiter. ${"pad ".repeat(120)}` });
+      messages.push({ role: "assistant", content: `Done ${i}. ${"pad ".repeat(120)}` });
+    }
+    const second = await soft.autoMaintain(messages, 100_000, true);
+    expect(second.acted).toBe(true);
+    const lastPrompt = seen[seen.length - 1]!;
+    expect(lastPrompt).toContain("<previous-summary>");
+    expect(lastPrompt).toContain("preserve all previous-summary information");
+    // Summary usage was recorded for billing (2 compaction calls).
+    expect(usage.inputTokens).toBe(1000);
+    expect(usage.outputTokens).toBe(160);
+  });
+
+  test("handover writes a FILES/HISTORY handoff doc and resets history; falls back deterministically without a model", async () => {
+    const messages: LlmMessage[] = [{ role: "system", content: "sys" }];
+    for (let i = 0; i < 10; i++) {
+      messages.push({ role: "user", content: `Turn ${i}: decided to use immutable prefix. ${"pad ".repeat(120)}` });
+      messages.push({ role: "assistant", content: `Done ${i} in src/engine.ts. ${"pad ".repeat(120)}` });
+    }
+    // No summaryFn → deterministic fallback keeps omp's FILES/HISTORY + re-derive rule.
+    const handover = createCompactionRuntime("handover", { windowTokens: 100_000 });
+    const res = await handover.autoMaintain(messages, 100_000, true);
+    expect(res.acted).toBe(true);
+    const doc = messages.find((m) => m.content.includes("<handoff-context>"));
+    expect(doc).toBeDefined();
+    expect(doc!.content).toContain("FILES");
+    expect(doc!.content).toContain("HISTORY");
+    expect(doc!.content).toContain("re-derive from the workspace");
+    // History is reset to system + handoff doc + a short tail (not the full transcript).
+    expect(messages.length).toBeLessThan(5);
+
+    // Model-authored handoff uses omp's "handoff summary for another LLM to resume" prompt.
+    let handoffPrompt = "";
+    const modelHandover = createCompactionRuntime("handover", {
+      windowTokens: 100_000,
+      summaryFn: async (request) => {
+        handoffPrompt = request.prompt;
+        return { text: "FILES\n===\n- src/a.ts — A\nHISTORY\n===\n- did the thing", usage: { inputTokens: 100, outputTokens: 20 } };
+      }
+    });
+    const msgs2: LlmMessage[] = [{ role: "system", content: "sys" }];
+    for (let i = 0; i < 10; i++) {
+      msgs2.push({ role: "user", content: `Task ${i}: build the thing. ${"pad ".repeat(120)}` });
+      msgs2.push({ role: "assistant", content: `Done ${i}. ${"pad ".repeat(120)}` });
+    }
+    await modelHandover.autoMaintain(msgs2, 100_000, true);
+    expect(handoffPrompt).toContain("structured handoff summary for another LLM to resume the task");
+    expect(handoffPrompt).toContain("HISTORY");
+    expect(msgs2.some((m) => m.content.includes("did the thing"))).toBe(true);
+  });
+
   test("Scenarios support all 4 modes across low, medium, high, and insane scales", () => {
     const modes: ScenarioMode[] = ["programming", "research", "general", "memory"];
     const scales: ContextScale[] = ["low", "medium", "high", "insane"];
@@ -367,7 +451,7 @@ describe("Agentic Benchmark Suite", () => {
     }
   });
 
-  test("Origami archiveDigest bounds summary length on deep 850-turn spans and OrigamiRuntime indexes archive in SQLite FTS", () => {
+  test("Origami archiveDigest bounds summary length on deep 850-turn spans and OrigamiRuntime indexes archive in SQLite FTS", async () => {
     const entries: { type: string; id: string; message: { role: string; content: string } }[] = [];
     for (let t = 1; t <= 400; t++) {
       entries.push({ type: "message", id: `u${t}`, message: { role: "user", content: `Task ${t}: implement src/mod_${t}.ts exporting handler${t}()` } });
@@ -404,7 +488,7 @@ describe("Agentic Benchmark Suite", () => {
       messages.push({ role: "user", content: `Turn ${i} work item ${"padding ".repeat(80)}` });
       messages.push({ role: "assistant", content: `Turn ${i} completed ${"padding ".repeat(80)}` });
     }
-    const maint = runtime.autoMaintain(messages, 50_000, true);
+    const maint = await runtime.autoMaintain(messages, 50_000, true);
     expect(maint.acted).toBe(true);
     const searchOut = runtime.handleTool("fold_search", { query: "X-Origin-Zone eu-west-1a" }, messages);
     expect(searchOut).not.toContain("(no matches");
@@ -491,7 +575,7 @@ describe("Agentic Benchmark Suite", () => {
     }
   });
 
-  test("createTurnMaintainer reports each distinct compaction note at most once per turn", () => {
+  test("createTurnMaintainer reports each distinct compaction note at most once per turn", async () => {
     const notes: string[] = [];
     let compactions = 0;
     const messages: LlmMessage[] = [
@@ -520,9 +604,9 @@ describe("Agentic Benchmark Suite", () => {
       onNote: (n) => notes.push(n)
     });
 
-    maintain();
-    maintain();
-    maintain();
+    await maintain();
+    await maintain();
+    await maintain();
     // Three maintenance passes with an identical note surface exactly once.
     expect(compactions).toBe(3);
     expect(notes).toEqual(["Soft-compacted older turns (1,000 tokens reclaimed)"]);

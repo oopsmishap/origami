@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed
+- **omp-faithful soft/handover compaction** (`bench/agentic/strategy-runtime.ts`, `bench/agentic/agent.ts`): both now write their compaction summary/handoff **with the active model** (omp's `soft` = "Summarize in place with a compaction model"; `handoff` = "You MUST summarize the conversation above into a structured handoff summary for another LLM to resume the task"). Summaries carry omp's `### compaction summary (N tokens before)` heading and `FILES`/`HISTORY` section shape with the re-derive-from-workspace rule (never guess unclear details). Soft keeps 20K recent tokens (omp `keepRecentTokens`), feeds prior summaries back via `<previous-summary>` merge tags, and lets superseded summaries be absorbed by the splice. Live runs count summarizer tokens/cost as real overhead (per the modeling decision: `summary_author` = real model + mock fallback, `cost_accounting` = count it); mock/hermetic runs fall back to deterministic extraction so tests stay offline. `CompactionRuntime.handleTool`/`autoMaintain` became `T | Promise<T>` (async tool dispatch in `ai-tools.ts`, async `createTurnMaintainer`).
+
 ### Removed
 - **Dropped `shake` and `sliding-window` benchmark strategies**: both were unrealistic standalone comparators (shake's observation pruning starves on tool-heavy code-authoring workloads where tokens live in `tool_calls` arguments, not tool results; sliding-window's FIFO truncation is a strawman once deep-horizon probes enforce ≥45% plant→probe lag) and neither models how real agents manage context. The benchmark now runs `origami`, `soft`, and `handover` (`--strategy all` = 3 runs). The replay-tracker library (`bench/compaction-strategies.ts`) drops the same two trackers; unnamed FIFO baselines used for compression-ratio comparisons in `real-world.ts`/`web-server.ts` are unchanged. Reports rename the "Sliding Recall" tile to "Handover Recall".
 

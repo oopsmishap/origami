@@ -5,7 +5,7 @@ import { createCompactionRuntime, type CompactionStrategyName } from "../bench/a
 import { countLlmMessageTokens, type LlmMessage } from "../bench/agentic/llm.ts";
 
 describe("Forced Periodic Compaction (every 10 turns)", () => {
-  test("strategy-runtime autoMaintain honors force flag for all strategies", () => {
+  test("strategy-runtime autoMaintain honors force flag for all strategies", async () => {
     const strategies: CompactionStrategyName[] = [
       "origami",
       "soft",
@@ -34,11 +34,11 @@ describe("Forced Periodic Compaction (every 10 turns)", () => {
       }
 
       // Normal call without force should not trigger on small 5-turn history
-      const normal = runtime.autoMaintain(messages, 100_000, false);
+      const normal = await runtime.autoMaintain(messages, 100_000, false);
       expect(normal.acted).toBe(false);
 
       // Forced call should trigger compaction / maintenance
-      const forced = runtime.autoMaintain(messages, 100_000, true);
+      const forced = await runtime.autoMaintain(messages, 100_000, true);
       expect(forced.acted).toBe(true);
       expect(forced.note).toBeDefined();
     }
@@ -110,7 +110,7 @@ describe("Forced Periodic Compaction (every 10 turns)", () => {
     expect(turn10?.maintenanceNote).toContain("Auto-handed off");
   }, 30_000);
 
-  test("Origami compacts at 80% and retains messages appended after a fold", () => {
+  test("Origami compacts at 80% and retains messages appended after a fold", async () => {
     const windowTokens = 100_000;
     const runtime = createCompactionRuntime("origami", { windowTokens });
     const messages: LlmMessage[] = [{ role: "system", content: "system" }];
@@ -119,20 +119,20 @@ describe("Forced Periodic Compaction (every 10 turns)", () => {
       messages.push({ role: "assistant", content: `Done ${i}: ${"implementation details ".repeat(220)}` });
     };
     for (let i = 0; i < 20; i++) appendTurn(i);
-    expect(runtime.autoMaintain(messages, windowTokens).acted).toBe(false);
+    expect((await runtime.autoMaintain(messages, windowTokens)).acted).toBe(false);
     for (let i = 20; i < 32; i++) appendTurn(i);
     const count = () => runtime.prepareOutbound(messages, windowTokens)
       .reduce((sum, message) => sum + countLlmMessageTokens(message), 0);
     const before = count();
     expect(before).toBeGreaterThanOrEqual(windowTokens * 0.8);
-    expect(runtime.autoMaintain(messages, windowTokens).acted).toBe(true);
+    expect((await runtime.autoMaintain(messages, windowTokens)).acted).toBe(true);
     expect(count()).toBeLessThan(before * 0.5);
     messages.push({ role: "user", content: "New instruction after compaction" });
     messages.push({ role: "assistant", content: "New answer after compaction" });
     const outbound = runtime.prepareOutbound(messages, windowTokens);
     expect(outbound.some((message) => message.content.includes("New instruction after compaction"))).toBe(true);
     expect(outbound.some((message) => message.content.includes("New answer after compaction"))).toBe(true);
-    expect(runtime.autoMaintain(messages, windowTokens).acted).toBe(false);
+    expect((await runtime.autoMaintain(messages, windowTokens)).acted).toBe(false);
   });
 
   test("hard-bounds outbound history for every strategy and keeps tool pairs valid", () => {

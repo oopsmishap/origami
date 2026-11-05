@@ -121,8 +121,8 @@ The agentic benchmark harness (`bench/agentic/runner.ts`) evaluates context comp
 ### Compaction Strategies
 
 1. **Origami (`origami`)**: Hierarchical pagoda folding with monotonic prefix retention, bounded pinned ledgers, and just-in-time reactive tail hydration.
-2. **Soft Compaction (`soft`)**: Periodic full-history summarization replacing older turns with a synthesized Markdown brief (`omp /compact soft`, Claude Code).
-3. **Handover (`handover`)**: Structured state transfer document capturing decisions, files, and next actions while clearing prior conversation history (`omp /handoff`, Devin, SWE-agent).
+2. **Soft Compaction (`soft`)**: Periodic model-authored summarization replacing older turns with a structured `FILES`/`HISTORY` brief, keeping 20K recent tokens verbatim (`omp /compact soft` / `soft` method). Prior summaries merge via `<previous-summary>` tags; superseded summaries are absorbed. Live runs call the active model to write the summary (tokens/cost counted); mock runs fall back to deterministic extraction.
+3. **Handover (`handover`)**: Model-authored `FILES`/`HISTORY` handoff document replacing the full prior history (system + doc + 2-message tail), matching omp's `handoff` method ("Generate a handoff document and continue from it as the compaction summary"). Includes the re-derive-from-workspace rule rather than guessing unclear details.
 
 ### Evaluation Modes
 

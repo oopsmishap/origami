@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateText, stepCountIs } from "ai";
-import { createNativeOllamaModel, isTimeoutError } from "./ollama-model.ts";
+import { createNativeOllamaModel, isTimeoutError, type NativeOllamaLanguageModel } from "./ollama-model.ts";
 import { Sandbox } from "./sandbox.ts";
 import {
   cacheAccounting,
@@ -37,7 +37,10 @@ import {
   type CompactionStrategyName,
   createCompactionRuntime,
   type CompactionRuntime,
-  type StrategyTelemetry
+  type StrategyTelemetry,
+  type SummaryFn,
+  type SummaryRequest,
+  type SummaryUsage
 } from "./strategy-runtime.ts";
 import {
   type ContextScale,
@@ -294,6 +297,37 @@ export function buildTurnTimeout(stepTimeoutMs = 600_000): { stepMs: number; tot
 }
 
 /**
+ * A model-backed compaction summary author, matching omp's "soft"/"handoff"
+ * (both write their summary with the active model rather than scraping text).
+ * Returns `undefined` on mock runs so hermetic tests fall back to deterministic
+ * extraction; live runs always call the model and its tokens/cost are counted
+ * against the run (the real overhead of model-driven compaction).
+ */
+function createSummarizer(opts: {
+  model: NativeOllamaLanguageModel | undefined;
+  tokenizer: BenchmarkTokenizer;
+  usage: SummaryUsage;
+}): SummaryFn | undefined {
+  const { model, tokenizer } = opts;
+  if (!model) return undefined;
+  return async (request: SummaryRequest): Promise<{ text: string; usage: SummaryUsage }> => {
+    const result = await generateText({
+      model,
+      system: request.system,
+      prompt: request.prompt,
+      maxOutputTokens: request.maxOutputTokens ?? 4_096,
+      temperature: 0.2,
+      maxRetries: 3
+    });
+    const inputTokens = tokenizer.countText(request.system + "\n" + request.prompt);
+    const outputTokens = Math.max(1, tokenizer.countText(result.text));
+    opts.usage.inputTokens += inputTokens;
+    opts.usage.outputTokens += outputTokens;
+    return { text: result.text, usage: { inputTokens, outputTokens } };
+  };
+}
+
+/**
  * Threshold-triggered maintenance over the persistent message array.
  *
  * Multi-step tool turns used to compact a throwaway copy of the history on every
@@ -301,6 +335,9 @@ export function buildTurnTimeout(stepTimeoutMs = 600_000): { stepMs: number; tot
  * `compactionEvents`/`tokensReclaimed` (Soft logged 6 identical notes on one turn).
  * Maintaining the persistent array is idempotent — a second pass finds nothing left
  * to reclaim — and identical notes are emitted at most once per turn.
+ *
+ * Async because omp-style compaction writes its summary with the model
+ * (`summaryFn`), so a maintenance pass may await a summarizer call.
  */
 export function createTurnMaintainer(opts: {
   runtime: CompactionRuntime;
@@ -308,13 +345,13 @@ export function createTurnMaintainer(opts: {
   windowTokens: number;
   count: (messages: readonly LlmMessage[]) => number;
   onNote: (note: string) => void;
-}): (observedPromptTokens?: number) => void {
+}): (observedPromptTokens?: number) => Promise<void> {
   const emittedNotes = new Set<string>();
-  return (observedPromptTokens = 0): void => {
+  return async (observedPromptTokens = 0): Promise<void> => {
     const outbound = opts.runtime.prepareOutbound(opts.messages, opts.windowTokens + 8_000);
     const tokens = opts.count(outbound);
     if (Math.max(tokens, observedPromptTokens) < Math.ceil(opts.windowTokens * AUTO_COMPACTION_FILL)) return;
-    const maintenance = opts.runtime.autoMaintain(opts.messages, opts.windowTokens, true);
+    const maintenance = await opts.runtime.autoMaintain(opts.messages, opts.windowTokens, true);
     if (maintenance.acted && maintenance.note && !emittedNotes.has(maintenance.note)) {
       emittedNotes.add(maintenance.note);
       opts.onNote(maintenance.note);
@@ -387,11 +424,26 @@ export class AgentRunner {
 
     const tokenizer: BenchmarkTokenizer = await getBenchmarkTokenizer(opts.model, { mock: isMock });
 
+    const id = modelId(opts.model);
+    const isGemma4 = /^gemma4(?::|$)/i.test(id);
+    const isLfm3 = /^lfm3(?::|$)/i.test(id);
+    const effectiveMaxOutputTokens = opts.maxOutputTokens ?? (isGemma4 || isLfm3 ? 8_192 : 4_096);
+    const turnTimeout = buildTurnTimeout(opts.timeoutMs ?? 600_000);
+    const model = isMock ? undefined : createNativeOllamaModel(id, ollamaBaseUrl(), true, isGemma4 ? windowTokens : undefined);
+
+    // omp's soft/handoff write their compaction summary with the active model.
+    // Mock runs omit it and fall back to deterministic extraction; live runs count
+    // the summarizer's tokens/cost like any other model call (folded into totals
+    // after the loop).
+    const summaryUsage: SummaryUsage = { inputTokens: 0, outputTokens: 0 };
+    const summaryFn = createSummarizer({ model, tokenizer, usage: summaryUsage });
+
     const runtime: CompactionRuntime = createCompactionRuntime(opts.strategy, {
       preset: opts.preset ?? "balanced",
       windowTokens,
       forceThresholds: Boolean(opts.compactEvery && opts.compactEvery > 0),
-      tokenizer
+      tokenizer,
+      summaryFn
     });
     const toolContext = {
       sandbox,
@@ -434,12 +486,6 @@ export class AgentRunner {
     let activeTurnIndex = 0;
     let toolCallsForTurn = 0;
 
-    const id = modelId(opts.model);
-    const isGemma4 = /^gemma4(?::|$)/i.test(id);
-    const isLfm3 = /^lfm3(?::|$)/i.test(id);
-    const effectiveMaxOutputTokens = opts.maxOutputTokens ?? (isGemma4 || isLfm3 ? 8_192 : 4_096);
-    const turnTimeout = buildTurnTimeout(opts.timeoutMs ?? 600_000);
-    const model = isMock ? undefined : createNativeOllamaModel(id, ollamaBaseUrl(), true, isGemma4 ? windowTokens : undefined);
     const toolMemo = createToolCallMemo();
     const tools = createAgentTools(toolContext, runtime, () => messages, {
       memo: toolMemo,
@@ -472,7 +518,7 @@ export class AgentRunner {
           opts.onMaintenance?.(note);
         }
       });
-      maintainAtLimit();
+      await maintainAtLimit();
       const turnMessages: ChatMessageRecord[] = [{
         id: `msg-u-${turn.turnIndex}`,
         role: "user",
@@ -617,7 +663,7 @@ export class AgentRunner {
         return withoutReasoning;
       }));
       if (lastProviderPromptTokens >= Math.ceil(windowTokens * AUTO_COMPACTION_FILL)) {
-        maintainAtLimit(lastProviderPromptTokens);
+        await maintainAtLimit(lastProviderPromptTokens);
       }
 
       let probeOutcome: ProbeOutcome | undefined;
@@ -642,7 +688,7 @@ export class AgentRunner {
       const shouldForce = opts.compactEvery != null && opts.compactEvery > 0
         ? turn.turnIndex % opts.compactEvery === 0
         : false;
-      const maint = runtime.autoMaintain(messages, windowTokens, shouldForce);
+      const maint = await runtime.autoMaintain(messages, windowTokens, shouldForce);
       if (maint.acted && maint.note) {
         maintenanceNotes.push(maint.note);
         opts.onMaintenance?.(maint.note);
@@ -700,6 +746,23 @@ export class AgentRunner {
       };
       chatTranscript.push(chatTurn);
       opts.onChatTurn?.(chatTurn);
+    }
+
+    // Bill the compaction summarizer like any other model call (omp's soft/handoff
+    // pay this every cycle). Each summarizer call re-sends the transcript under a
+    // fresh system prompt, so its input is uncached fresh input, not a cache
+    // continuation of the task loop's prefix.
+    if (summaryUsage.inputTokens > 0 || summaryUsage.outputTokens > 0) {
+      const summaryCost = estimateLlmCost(
+        GPT_5_6_SOL_PRICING,
+        summaryUsage.inputTokens,
+        0,
+        0,
+        summaryUsage.outputTokens
+      );
+      totalPrompt += summaryUsage.inputTokens;
+      totalCompletion += summaryUsage.outputTokens;
+      totalCost += summaryCost.totalCost;
     }
 
     const evalResult = await evaluateScenario({

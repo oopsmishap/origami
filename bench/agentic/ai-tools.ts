@@ -66,19 +66,26 @@ function duplicateNotice(name: string, cached: string): string {
 function withCallback(
   name: string,
   args: Record<string, unknown>,
-  produce: () => string,
+  produce: () => string | Promise<string>,
   callbacks: AgentToolCallbacks
-): string {
+): string | Promise<string> {
   const memo = callbacks.memo;
   const cached = memo?.take(name, args) ?? null;
   if (cached !== null) {
     callbacks.onToolCall?.({ name, args, output: cached });
     return duplicateNotice(name, cached);
   }
-  const output = produce();
-  memo?.store(name, args, output);
-  callbacks.onToolCall?.({ name, args, output });
-  return output;
+  const produced = produce();
+  if (produced instanceof Promise) {
+    return produced.then((output) => {
+      memo?.store(name, args, output);
+      callbacks.onToolCall?.({ name, args, output });
+      return output;
+    });
+  }
+  memo?.store(name, args, produced);
+  callbacks.onToolCall?.({ name, args, output: produced });
+  return produced;
 }
 
 export function createAgentTools(
