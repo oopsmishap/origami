@@ -36,11 +36,12 @@ describe("Emergency guard test (overflow elision)", () => {
       thresholds: { elideFillPct: 0.85, targetFillPct: 0.7 },
     });
 
-    // To get from 90K down to <= 70K, we need to shed at least 20K.
-    // Largest candidate is 15K (m00005) -> 90K - 15K = 75K.
-    // Next largest candidate is 10K (m00003) -> 75K - 10K = 65K <= 70K.
+    // Shed at least 20K to get <= 70K.
+    // Cache-aware elision prefers candidates near the tail (m00007 @ index 6, m00005 @ index 4)
+    // to preserve prefix cache at index 2 (m00003).
+    // 15K (m00005) + 5K (m00007) = 20K shed -> 70K <= 70K.
     expect(plan.elided.length).toBe(2);
-    expect(plan.elided.map((e) => e.ref)).toEqual(["m00005", "m00003"]);
+    expect(plan.elided.map((e) => e.ref)).toEqual(["m00005", "m00007"]);
   });
 
   it("never selects assistant, user, or thinking messages as elide candidates", () => {

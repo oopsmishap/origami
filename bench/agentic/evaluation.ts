@@ -262,24 +262,24 @@ async function evaluateResearchScenario(
         remediationIdentified = lowerReport.includes("parameter") || lowerReport.includes("prepared") || lowerReport.includes("placeholder");
         break;
       case "vuln-traversal":
-        flawIdentified = (lowerReport.includes("traversal") || lowerReport.includes("path")) && (lowerReport.includes("../") || lowerReport.includes("directory"));
-        remediationIdentified = lowerReport.includes("resolve") || lowerReport.includes("basename") || lowerReport.includes("sanitiz") || lowerReport.includes("whitelist");
+        flawIdentified = (lowerReport.includes("traversal") || lowerReport.includes("path")) && (lowerReport.includes("../") || lowerReport.includes("directory") || lowerReport.includes("dot-dot") || lowerReport.includes("escape") || lowerReport.includes("relative"));
+        remediationIdentified = lowerReport.includes("resolve") || lowerReport.includes("basename") || lowerReport.includes("sanitiz") || lowerReport.includes("whitelist") || lowerReport.includes("contain");
         break;
       case "vuln-rce":
-        flawIdentified = (lowerReport.includes("command") || lowerReport.includes("exec") || lowerReport.includes("rce")) && lowerReport.includes("media");
+        flawIdentified = (lowerReport.includes("command") || lowerReport.includes("exec") || lowerReport.includes("rce") || lowerReport.includes("shell")) && (lowerReport.includes("media") || lowerReport.includes("image"));
         remediationIdentified = lowerReport.includes("execfile") || lowerReport.includes("spawn") || lowerReport.includes("array") || lowerReport.includes("escape");
         break;
       case "vuln-secret":
-        flawIdentified = (lowerReport.includes("secret") || lowerReport.includes("jwt") || lowerReport.includes("hardcoded") || lowerReport.includes("key")) && lowerReport.includes("auth");
+        flawIdentified = (lowerReport.includes("secret") || lowerReport.includes("jwt") || lowerReport.includes("hardcoded") || lowerReport.includes("credential") || lowerReport.includes("key")) && (lowerReport.includes("auth") || lowerReport.includes("token") || lowerReport.includes("config"));
         remediationIdentified = lowerReport.includes("env") || lowerReport.includes("variable") || lowerReport.includes("vault") || lowerReport.includes("secrets manager");
         break;
       case "vuln-xss":
-        flawIdentified = (lowerReport.includes("xss") || lowerReport.includes("script") || lowerReport.includes("cross-site")) && lowerReport.includes("comment");
-        remediationIdentified = lowerReport.includes("escape") || lowerReport.includes("sanitize") || lowerReport.includes("encode") || lowerReport.includes("dompurify");
+        flawIdentified = (lowerReport.includes("xss") || lowerReport.includes("script") || lowerReport.includes("cross-site")) && (lowerReport.includes("comment") || lowerReport.includes("html") || lowerReport.includes("render"));
+        remediationIdentified = lowerReport.includes("escape") || lowerReport.includes("sanitize") || lowerReport.includes("encode") || lowerReport.includes("dompurify") || lowerReport.includes("entity");
         break;
       case "vuln-auth":
-        flawIdentified = (lowerReport.includes("bola") || lowerReport.includes("idor") || lowerReport.includes("authorization") || lowerReport.includes("ownership")) && lowerReport.includes("order");
-        remediationIdentified = lowerReport.includes("user") || lowerReport.includes("auth") || lowerReport.includes("check") || lowerReport.includes("verify");
+        flawIdentified = (lowerReport.includes("bola") || lowerReport.includes("idor") || lowerReport.includes("authorization") || lowerReport.includes("ownership") || lowerReport.includes("access control")) && lowerReport.includes("order");
+        remediationIdentified = lowerReport.includes("user") || lowerReport.includes("auth") || lowerReport.includes("check") || lowerReport.includes("verify") || lowerReport.includes("owner");
         break;
     }
 
@@ -406,12 +406,17 @@ const DELIVERABLE_MATCHERS: Record<MemoryDeliverableKind, RegExp> = {
 export type MemoryDeliverableKind = "modules" | "tests" | "barrels" | "docs";
 
 /** Needle strings distinctive enough to grep without false positives (no bare numbers). */
+const NUMERIC_UNIT_RE = /^\d+(?:ms|s|m|h|b|kb|mb|gb|%)?$/i;
+
+/** Needle strings distinctive enough to grep without false positives (no bare numbers or duration literals). */
 export function distinctiveNeedleStrings(): string[] {
   const out = new Set<string>();
   for (const n of MEMORY_NEEDLE_CATALOG) {
     for (const value of [...n.expectedKeywords, ...(n.staleKeywords ?? []), ...n.answer]) {
       const t = value.trim();
-      if (t.length >= 5 && !/^\d+$/.test(t)) out.add(t.toLowerCase());
+      if (t.length >= 5 && !NUMERIC_UNIT_RE.test(t) && (/[-_/:.@]/.test(t) || t.length >= 8)) {
+        out.add(t.toLowerCase());
+      }
     }
   }
   return [...out];

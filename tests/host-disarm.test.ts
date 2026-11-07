@@ -6,21 +6,42 @@ import { Settings, settings } from "@oh-my-pi/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 
 describe("Host disarm proof", () => {
-  it("disarms the four compaction.* settings on main agent session initialization", async () => {
-    await Settings.init({ inMemory: true });
-    // 1. Initial state: ensure settings are initially enabled/true for the test
-    const keys = [
-      "compaction.enabled",
-      "compaction.idleEnabled",
-      "compaction.supersedeReads",
-      "compaction.dropUseless",
-    ];
+  /**
+   * The full disarm set. Every id must resolve in omp's registry: a key that does not
+   * exist makes the override a silent no-op, which is how two invented ids
+   * (`compaction.memoryEnabled`, `compaction.shakeEnabled`) previously went unnoticed.
+   */
+  const DISARM_KEYS = [
+    "compaction.enabled",
+    "compaction.idleEnabled",
+    "compaction.midTurnEnabled",
+    "compaction.modelThresholdsEnabled",
+    "compaction.experimentalContextManagement",
+    "compaction.asyncEnabled",
+    "compaction.autoContinue",
+    "compaction.supersedeReads",
+    "compaction.dropUseless",
+  ] as const;
 
-    for (const k of keys) {
+  it("every disarm key is a real omp boolean setting", async () => {
+    await Settings.init({ inMemory: true });
+    for (const k of DISARM_KEYS) {
+      const s = lookup(k);
+      expect({ key: k, resolved: s !== undefined }).toEqual({ key: k, resolved: true });
+      expect({ key: k, type: s?.type }).toEqual({ key: k, type: "boolean" });
+    }
+  });
+
+  it("disarms every compaction.* prefix-rewrite setting on main agent session initialization", async () => {
+    await Settings.init({ inMemory: true });
+    // 1. Initial state: force every key true so the assertion cannot pass vacuously.
+    for (const k of DISARM_KEYS) {
       const s = lookup(k);
       expect(s).toBeDefined();
       if (s) s.override(settings, true);
     }
+    for (const k of DISARM_KEYS) expect(lookup(k)!.get(settings)).toBe(true);
+
 
     // Verify they read true
     expect(lookup("compaction.enabled")!.get(settings)).toBe(true);
@@ -92,11 +113,10 @@ describe("Host disarm proof", () => {
     expect(started.systemPrompt[0]).toBe("test prompt");
     expect(started.systemPrompt).toHaveLength(2);
 
-    // 5. Verify all four settings are now false!
-    expect(lookup("compaction.enabled")!.get(settings)).toBe(false);
-    expect(lookup("compaction.idleEnabled")!.get(settings)).toBe(false);
-    expect(lookup("compaction.supersedeReads")!.get(settings)).toBe(false);
-    expect(lookup("compaction.dropUseless")!.get(settings)).toBe(false);
+    // 5. Verify every key in the disarm set is now false.
+    for (const k of DISARM_KEYS) {
+      expect({ key: k, value: lookup(k)!.get(settings) }).toEqual({ key: k, value: false });
+    }
   });
 
   it("does not fold when omp host compaction starts; it only records the host rewrite", async () => {

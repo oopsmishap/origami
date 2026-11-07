@@ -36,7 +36,17 @@ export function planElision(input: {
   }
 
   let current = projectedTokens;
-  const sorted = [...candidates].sort((a, b) => b.tokens - a.tokens);
+  // Prefix-aware sorting: maximize reclaimed tokens while minimizing cache prefix destruction.
+  // Candidates near the tail (higher index) invalidate far less prefix than candidates near the head.
+  const maxIdx = candidates.reduce((m, c) => Math.max(m, c.index), 1);
+  const sorted = [...candidates].sort((a, b) => {
+    const costA = Math.max(1, maxIdx - a.index + 1);
+    const costB = Math.max(1, maxIdx - b.index + 1);
+    const ratioA = a.tokens / costA;
+    const ratioB = b.tokens / costB;
+    if (Math.abs(ratioA - ratioB) > 1e-4) return ratioB - ratioA;
+    return b.tokens - a.tokens;
+  });
   for (const c of sorted) {
     if (current <= limit) break;
     elided.push({ ref: c.ref, index: c.index, tokens: c.tokens });

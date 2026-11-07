@@ -17,7 +17,7 @@ function conversation(turns: number) {
   return entries;
 }
 
-function harness(opts: { turns?: number; config?: Partial<OrigamiConfig>; db?: OrigamiDb; sessionId?: string; entries?: ReturnType<typeof conversation> } = {}) {
+function harness(opts: { turns?: number; config?: Partial<OrigamiConfig>; db?: OrigamiDb; sessionId?: string; entries?: ReturnType<typeof conversation>; windowTokens?: number } = {}) {
   const journal: JournalOp[] = [];
   const entries = opts.entries ?? conversation(opts.turns ?? 6);
   const engine = new OrigamiEngine({
@@ -25,7 +25,7 @@ function harness(opts: { turns?: number; config?: Partial<OrigamiConfig>; db?: O
       sessionId: () => opts.sessionId ?? "lifecycle",
       appendEvent: (op) => journal.push(op),
       saveArtifact: async () => "/tmp/unused.md",
-      windowTokens: () => 100_000,
+      windowTokens: () => opts.windowTokens ?? 100_000,
       projectedTokens: () => 10_000,
     },
     entries,
@@ -305,6 +305,15 @@ describe("fold benefit floor", () => {
     const res = engine.executeFold({ folds: [fold("m00003..m00010")] });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain("5.0Kt");
+  });
+
+  it("caps the window-based floor with minFoldBenefitCapTokens on large contexts", () => {
+    // 1% of 1M = 10,000 tokens floor without cap; with 6,000 cap, floor is capped at 6,000
+    const { engine } = harness({
+      windowTokens: 1_000_000,
+      config: { minFoldBenefitTokens: 1000, minFoldBenefitWindowPct: 0.01, minFoldBenefitCapTokens: 6000 },
+    });
+    expect(engine.minFoldBenefit()).toBe(6000);
   });
 });
 

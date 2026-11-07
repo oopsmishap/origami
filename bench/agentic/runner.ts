@@ -24,9 +24,10 @@ import {
   AgentRunner,
   type AgenticRunResult,
   type TurnMetricRecord,
-  type ChatTurnRecord
+  type ChatTurnRecord,
+  parseModelTarget
 } from "./agent.ts";
-import { GPT_5_6_SOL_PRICING } from "./pricing.ts";
+import { GPT_5_6_SOL_PRICING, getPricingProfile, PRICING_PROFILES } from "./pricing.ts";
 import { generateReportHtml } from "./report-html.ts";
 import { getDashboardHtml } from "./dashboard-html.ts";
 import {
@@ -297,12 +298,18 @@ export function parseCliArgs(argv: string[]): RunnerCliArgs {
   let model = String(opts.model);
   if (model === "lfm3" || model === "ollama/lfm3" || model === "lfm3:latest") {
     model = "lfm3:256k";
+  } else if (/^deepinfra[:/]\s*deepseek-v4\.1-flash(?:-1017)?$/i.test(model) || /^deepseek-v4\.1-flash(?:-1017)?$/i.test(model)) {
+    model = "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017";
+  } else if (/^deepinfra[:/]\s*(.+)$/i.test(model)) {
+    const rawInner = model.match(/^deepinfra[:/]\s*(.+)$/i)![1]!.trim();
+    model = `deepinfra/${rawInner}`;
   }
 
   // Pricing model check
   const pricingModel = String(opts.pricingModel);
-  if (pricingModel !== GPT_5_6_SOL_PRICING.id) {
-    throw new Error(`Unsupported pricing model: ${pricingModel}. Available: ${GPT_5_6_SOL_PRICING.id}`);
+  const profile = getPricingProfile(pricingModel);
+  if (!profile) {
+    throw new Error(`Unsupported pricing model: ${pricingModel}. Available: ${Object.keys(PRICING_PROFILES).join(", ")}`);
   }
 
   // Concurrency implies parallel
@@ -768,11 +775,9 @@ export async function runBenchmark(cliArgs: RunnerCliArgs): Promise<AgenticRunRe
       text: `Track initialized: ${plan.scale.toUpperCase()} (${plan.totalTurns} turns)`
     });
 
-    const modelName = cliArgs.model.replace(/^ollama\//i, "");
-    const isLfm3 = /^lfm3(?::|$)/i.test(modelName);
-    const isGemma4 = /^gemma4(?::|$)/i.test(modelName);
-    const defaultWindowTokens = isGemma4 ? 131_072 : isLfm3 ? 220_000 : 1_000_000;
-    const defaultMaxOutputTokens = isGemma4 || isLfm3 ? 8_192 : 4_096;
+    const target = parseModelTarget(cliArgs.model);
+    const defaultWindowTokens = target.isDeepSeek ? 1_048_576 : target.isGemma4 ? 131_072 : target.isLfm3 ? 220_000 : 1_000_000;
+    const defaultMaxOutputTokens = target.isGemma4 || target.isLfm3 || target.isDeepSeek ? 8_192 : 4_096;
     const runResult = await AgentRunner.run({
       scenario: plan.scenario,
       scale: plan.scale,

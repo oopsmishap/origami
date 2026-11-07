@@ -43,9 +43,30 @@ function countTokensFn(input: string, encoding?: string): number {
   return countTokens(input, native ?? NativeEncoding.O200kBase);
 }
 
+/**
+ * Host compaction settings that can rewrite the prompt prefix Origami maintains.
+ *
+ * Every id must resolve in omp's settings registry; a key that does not exist makes
+ * `disarmCompaction` a silent no-op (see tests/host-disarm.test.ts). Verified against
+ * `@oh-my-pi/pi-coding-agent`:
+ *
+ * - `enabled` / `strategy` gate the threshold-driven compaction path entirely
+ *   (`if (!i.enabled || i.strategy === "off") return null`).
+ * - `supersedeReads` and `dropUseless` are per-turn *pruning* passes gated only by
+ *   their own keys, so they rewrite mid-context even when `enabled` is off.
+ * - `asyncEnabled` is the speculative background summariser that "splices the ready
+ *   result in" before the threshold is reached: a rewrite that fires early.
+ * - `idleEnabled`, `midTurnEnabled`, `modelThresholdsEnabled` and
+ *   `experimentalContextManagement` are additional trigger paths.
+ */
 const COMPACTION_SETTING_KEYS = [
   "compaction.enabled",
   "compaction.idleEnabled",
+  "compaction.midTurnEnabled",
+  "compaction.modelThresholdsEnabled",
+  "compaction.experimentalContextManagement",
+  "compaction.asyncEnabled",
+  "compaction.autoContinue",
   "compaction.supersedeReads",
   "compaction.dropUseless",
 ] as const;

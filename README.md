@@ -109,7 +109,6 @@ See [Configuration](docs/configuration.md) for every preset and option.
 
 - [Product and UI reference](docs/reference.md)
 - [Configuration](docs/configuration.md)
-- [Real-world long-context benchmark](docs/benchmark.md)
 - [Development, benchmark, and release guide](docs/development.md)
 - [Changelog](CHANGELOG.md)
 ## License

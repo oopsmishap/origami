@@ -21,6 +21,15 @@ describe("lintSummary", () => {
     expect(lint.required).toBe(3);
     expect(lint.missing).toEqual(["error Error one", "error Error two", "error Error three"]);
   });
+
+  it("matches relative traversal paths, Windows backslashes, and single-file paths", () => {
+    const manifest = {
+      ...EMPTY_MANIFEST,
+      paths: ["./agent.ts", "bench\\agentic\\tokenizer.ts", "../bench/agentic/evaluation.ts"],
+    };
+    const summary = "Touched agent.ts, bench/agentic/tokenizer.ts, and bench/agentic/evaluation.ts.";
+    expect(lintSummary(summary, manifest)).toEqual({ required: 3, missing: [] });
+  });
 });
 
 describe("fold attaches omitted items and counts what is sent", () => {

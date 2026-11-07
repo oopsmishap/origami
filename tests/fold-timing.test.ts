@@ -68,6 +68,31 @@ describe("assessFoldTiming", () => {
     expect(t.allowed).toBe(true);
     expect(t.breakevenTurns).toBeNull();
   });
+
+  it("adapts payback horizon dynamically under high growth debt to prevent absorbing cost trap", () => {
+    // candidate 20K, rewrite suffix 35K -> breakeven is ~18.6 turns (above normal paybackHorizonTurns 10)
+    const normalGrowth = assessFoldTiming({
+      ...base,
+      candidateTokens: 20_000,
+      estimatedRewriteTokens: 35_000,
+      paybackHorizonTurns: 10,
+      growthSinceFoldTokens: 25_000,
+      growthStep: 25_000,
+    });
+    expect(normalGrowth.blockedBy).toBe("cost");
+
+    // High growth debt (3x growthStep = 75K) scales effective horizon up to 2x (20 turns), admitting the fold
+    const highGrowth = assessFoldTiming({
+      ...base,
+      candidateTokens: 20_000,
+      estimatedRewriteTokens: 35_000,
+      paybackHorizonTurns: 10,
+      growthSinceFoldTokens: 75_000,
+      growthStep: 25_000,
+    });
+    expect(highGrowth.allowed).toBe(true);
+    expect(highGrowth.blockedBy).toBeNull();
+  });
 });
 
 describe("engine fold gate", () => {
@@ -104,6 +129,6 @@ describe("engine fold gate", () => {
   it("reports the fill floor in fold_status text", () => {
     const engine = engineAt(1_000_000, 50_000);
     expect(engine.decideNudge().kind).toBeNull();
-    expect(formatStatusReport(engine.status())).toContain("Fold gate: blocked by fill floor (context 50.0K < 160.0K)");
+    expect(formatStatusReport(engine.status())).toContain("Fold gate: blocked by fill floor (context 50.0K < 80.0K)");
   });
 });

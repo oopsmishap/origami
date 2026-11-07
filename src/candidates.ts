@@ -24,6 +24,8 @@ export interface CandidateEngineView {
     macroCompaction?: "auto" | "review" | "off";
     macroCompactionMinBlocks?: number;
     blockMatureFolds?: number;
+    tier2MassTokens?: number;
+    tier3MassTokens?: number;
   };
   turn: number;
   planFoldBatch(params: FoldParams): { ok: true; planned: PlannedFold[] } | { ok: false; error: string; foldIndex: number };
@@ -203,10 +205,24 @@ export function candidateConsolidation(engine: CandidateEngineView, store: Candi
     return { fromTier: 1, toTier: 2, blocks: matureTier1.slice(0, 6) };
   }
 
+  // Also check if accumulated summary mass of active tier-1 blocks is substantial (>= tier2MassTokens),
+  // allowing distillation without waiting for 5 distinct fold events.
+  const liveTier1 = live.filter((b) => b.tier === 1);
+  const totalTier1Tokens = liveTier1.reduce((sum, b) => sum + (b.tokensAfter || 0), 0);
+  if (liveTier1.length >= 2 && totalTier1Tokens >= (cfg.tier2MassTokens ?? 15000)) {
+    return { fromTier: 1, toTier: 2, blocks: liveTier1.slice(0, 6) };
+  }
+
   // 2. Mature tier-2 blocks eligible for tier-3 distillation
   const matureTier2 = live.filter((b) => b.tier === 2 && (ages.get(b.id) ?? 0) >= matureFolds);
   if (matureTier2.length >= minBlocks) {
     return { fromTier: 2, toTier: 3, blocks: matureTier2.slice(0, 4) };
+  }
+
+  const liveTier2 = live.filter((b) => b.tier === 2);
+  const totalTier2Tokens = liveTier2.reduce((sum, b) => sum + (b.tokensAfter || 0), 0);
+  if (liveTier2.length >= 2 && totalTier2Tokens >= (cfg.tier3MassTokens ?? 22500)) {
+    return { fromTier: 2, toTier: 3, blocks: liveTier2.slice(0, 4) };
   }
 
   return null;
@@ -224,7 +240,15 @@ export function consolidationPrompt(consolidation: ConsolidationCandidate): stri
     })
     .join("\n");
 
-  const rangeSpec = `${blocks[0]!.id}..${blocks[blocks.length - 1]!.id}`;
+  const isContiguousRun = blocks.every((b, idx) => {
+    if (idx === 0) return true;
+    const prevNum = Number.parseInt(blocks[idx - 1]!.id.replace(/^b/, ""), 10);
+    const currNum = Number.parseInt(b.id.replace(/^b/, ""), 10);
+    return Number.isInteger(prevNum) && Number.isInteger(currNum) && currNum === prevNum + 1;
+  });
+  const rangeSpec = isContiguousRun
+    ? `${blocks[0]!.id}..${blocks[blocks.length - 1]!.id}`
+    : blocks.map((b) => b.id).join(",");
   return (
     `${CANDIDATE_MARKER} Do not call tools. Consolidate these ${blocks.length} active tier-${consolidation.fromTier} blocks into ONE tier-${toTier} distillation covering ${rangeSpec}.\n` +
     `Blocks to consolidate:\n${blockList}\n` +

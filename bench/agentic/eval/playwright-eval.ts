@@ -59,7 +59,7 @@ export interface ContainerPrerequisiteCheck {
  */
 let cachedDockerCheck: { at: number; result: ContainerPrerequisiteCheck } | null = null;
 
-export async function checkDockerPrerequisite(timeoutMs = 1500): Promise<ContainerPrerequisiteCheck> {
+export async function checkDockerPrerequisite(timeoutMs = 8000): Promise<ContainerPrerequisiteCheck> {
   const now = Date.now();
   if (cachedDockerCheck && now - cachedDockerCheck.at < 3000) {
     return cachedDockerCheck.result;

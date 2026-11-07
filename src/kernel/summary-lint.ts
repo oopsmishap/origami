@@ -14,8 +14,18 @@ const LINTED_ERRORS = 3;
 
 function mentionsPath(text: string, path: string): boolean {
   if (text.includes(path)) return true;
-  const segments = path.split("/").filter(Boolean);
-  return segments.length >= 2 && text.includes(segments.slice(-2).join("/"));
+  const normalized = path.replace(/\\/g, "/");
+  if (text.includes(normalized)) return true;
+  const stripped = normalized.replace(/^(\.\.\/|\.\/)+/, "");
+  if (stripped && text.includes(stripped)) return true;
+  const segments = stripped.split("/").filter((s) => s && s !== "." && s !== "..");
+  if (segments.length >= 2) {
+    return text.includes(segments.slice(-2).join("/"));
+  }
+  if (segments.length === 1) {
+    return text.includes(segments[0]!);
+  }
+  return false;
 }
 
 export function lintSummary(text: string, manifest: BlockManifest): SummaryLint {

@@ -19,6 +19,8 @@ export interface OrigamiConfig {
   minFoldBenefitTokens: number;
   /** ...raised to this fraction of the context window when that is larger (0 disables). */
   minFoldBenefitWindowPct: number;
+  /** Maximum ceiling on the window-proportional fold benefit floor; 0 = uncapped. */
+  minFoldBenefitCapTokens: number;
   /** Fold events a block must survive before it is "old" and offered for tier promotion. */
   blockMatureFolds: number;
   /** Delete archived DB rows older than this many days on startup; 0 keeps everything. */
@@ -71,6 +73,7 @@ type PresetKeys =
   | "tier3MassTokens"
   | "minFoldBenefitTokens"
   | "minFoldBenefitWindowPct"
+  | "minFoldBenefitCapTokens"
   | "blockMatureFolds"
   | "minFoldFillPct"
   | "minFoldFillCapTokens"
@@ -89,9 +92,10 @@ export const PRESETS: Record<Preset, Pick<OrigamiConfig, PresetKeys>> = {
     tier3MassTokens: 22500,
     minFoldBenefitTokens: 5000,
     minFoldBenefitWindowPct: 0.01,
+    minFoldBenefitCapTokens: 8000,
     blockMatureFolds: 2,
     minFoldFillPct: 0.45,
-    minFoldFillCapTokens: 160000,
+    minFoldFillCapTokens: 80000,
     macroCompaction: "review",
     macroCompactionMinBlocks: 3,
   },
@@ -106,9 +110,10 @@ export const PRESETS: Record<Preset, Pick<OrigamiConfig, PresetKeys>> = {
     tier3MassTokens: 12000,
     minFoldBenefitTokens: 2000,
     minFoldBenefitWindowPct: 0.005,
+    minFoldBenefitCapTokens: 4000,
     blockMatureFolds: 1,
     minFoldFillPct: 0.3,
-    minFoldFillCapTokens: 100000,
+    minFoldFillCapTokens: 40000,
     macroCompaction: "review",
     macroCompactionMinBlocks: 2,
   },
@@ -123,9 +128,10 @@ export const PRESETS: Record<Preset, Pick<OrigamiConfig, PresetKeys>> = {
     tier3MassTokens: 45000,
     minFoldBenefitTokens: 10000,
     minFoldBenefitWindowPct: 0.01,
+    minFoldBenefitCapTokens: 15000,
     blockMatureFolds: 3,
     minFoldFillPct: 0.55,
-    minFoldFillCapTokens: 200000,
+    minFoldFillCapTokens: 120000,
     macroCompaction: "review",
     macroCompactionMinBlocks: 4,
   },
@@ -177,6 +183,7 @@ const NON_NEGATIVE_INT_KEYS: Record<string, true> = {
   retentionDays: true,
   minFoldBenefitTokens: true,
   blockMatureFolds: true,
+  minFoldBenefitCapTokens: true,
   minFoldFillCapTokens: true,
   cacheTtlMs: true,
   paybackHorizonTurns: true,

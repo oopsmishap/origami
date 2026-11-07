@@ -11,7 +11,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateText, stepCountIs } from "ai";
-import { createNativeOllamaModel, isTimeoutError, type NativeOllamaLanguageModel } from "./ollama-model.ts";
+import type { LanguageModelV4 } from "@ai-sdk/provider";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { createNativeOllamaModel, createBunSafeFetch, isTimeoutError, isTruncatedToolCallError, type NativeOllamaLanguageModel } from "./ollama-model.ts";
 import { Sandbox } from "./sandbox.ts";
 import {
   cacheAccounting,
@@ -48,9 +50,9 @@ import {
   type ScenarioMode,
   type ScenarioTurn
 } from "./scenarios.ts";
-import type { Preset } from "../../src/config.ts";
+import type { OrigamiConfig, Preset } from "../../src/config.ts";
 import { generateCodebaseCorpus } from "./codebase-corpus.ts";
-import { estimateLlmCost, GPT_5_6_SOL_PRICING } from "./pricing.ts";
+import { estimateLlmCost, getPricingProfile, GPT_5_6_SOL_PRICING, DEEPSEEK_V4_1_FLASH_PRICING } from "./pricing.ts";
 
 export interface ProbeOutcome {
   probeId: string;
@@ -189,6 +191,8 @@ export interface AgentRunOptions {
   prefillTokens?: number;
   maxTurns?: number;
   compactEvery?: number;
+  origamiOverrides?: Partial<OrigamiConfig>;
+  disableRecallDefense?: boolean;
 }
 
 function countFreshMessageTokens(message: ChatMessageRecord, includeReasoning: boolean, tokenizer: BenchmarkTokenizer): number {
@@ -209,8 +213,40 @@ function ollamaBaseUrl(): string {
     .replace(/\/+$/, "");
 }
 
-function modelId(model: string): string {
-  return model.replace(/^ollama\//, "");
+export interface ModelTarget {
+  provider: "ollama" | "deepinfra";
+  modelId: string;
+  isDeepSeek: boolean;
+  isGemma4: boolean;
+  isLfm3: boolean;
+}
+
+export function parseModelTarget(raw: string): ModelTarget {
+  const trimmed = raw.trim();
+  let provider: "ollama" | "deepinfra" = "ollama";
+  let id = trimmed;
+
+  if (/^deepinfra[:/]/i.test(trimmed)) {
+    provider = "deepinfra";
+    id = trimmed.replace(/^deepinfra[:/]/i, "").trim();
+  } else if (/^deepseek-ai\/|^deepseek-v/i.test(trimmed)) {
+    provider = "deepinfra";
+  }
+
+  if (/^deepseek-v4\.1-flash(?:-1017)?$/i.test(id)) {
+    id = "deepseek-ai/DeepSeek-V4.1-Flash-1017";
+    provider = "deepinfra";
+  } else if (provider === "deepinfra" && !id.includes("/")) {
+    id = `deepseek-ai/${id}`;
+  } else if (provider === "ollama") {
+    id = id.replace(/^ollama\//i, "");
+  }
+
+  const isDeepSeek = /deepseek/i.test(id);
+  const isGemma4 = /^gemma4(?::|$)/i.test(id);
+  const isLfm3 = /^lfm3(?::|$)/i.test(id);
+
+  return { provider, modelId: id, isDeepSeek, isGemma4, isLfm3 };
 }
 
 function chatRecordsFor(messages: LlmMessage[], turnIndex: number): ChatMessageRecord[] {
@@ -303,23 +339,42 @@ export function buildTurnTimeout(stepTimeoutMs = 600_000): { stepMs: number; tot
  * extraction; live runs always call the model and its tokens/cost are counted
  * against the run (the real overhead of model-driven compaction).
  */
+function clampPromptToTokens(prompt: string, maxPromptTokens: number, tokenizer: BenchmarkTokenizer): string {
+  const current = tokenizer.countText(prompt);
+  if (current <= maxPromptTokens) return prompt;
+  const ratio = Math.max(0.15, (maxPromptTokens - 256) / Math.max(1, current));
+  const charBudget = Math.max(2_000, Math.floor(prompt.length * ratio));
+  const headChars = Math.floor(charBudget * 0.45);
+  const tailChars = Math.floor(charBudget * 0.50);
+  return [
+    prompt.slice(0, headChars),
+    "\n\n[… middle transcript truncated to fit model context window …]\n\n",
+    prompt.slice(-tailChars)
+  ].join("");
+}
+
 function createSummarizer(opts: {
-  model: NativeOllamaLanguageModel | undefined;
+  model: LanguageModelV4 | undefined;
   tokenizer: BenchmarkTokenizer;
   usage: SummaryUsage;
+  windowTokens: number;
 }): SummaryFn | undefined {
-  const { model, tokenizer } = opts;
+  const { model, tokenizer, windowTokens } = opts;
   if (!model) return undefined;
   return async (request: SummaryRequest): Promise<{ text: string; usage: SummaryUsage }> => {
+    const maxOut = request.maxOutputTokens ?? 4_096;
+    const maxPromptBudget = Math.max(4_096, windowTokens - maxOut - 1_024);
+    const boundedPrompt = clampPromptToTokens(request.prompt, maxPromptBudget, tokenizer);
     const result = await generateText({
       model,
       system: request.system,
-      prompt: request.prompt,
-      maxOutputTokens: request.maxOutputTokens ?? 4_096,
+      prompt: boundedPrompt,
+      maxOutputTokens: maxOut,
       temperature: 0.2,
-      maxRetries: 3
+      maxRetries: 3,
+      providerOptions: { ollama: { think: false } }
     });
-    const inputTokens = tokenizer.countText(request.system + "\n" + request.prompt);
+    const inputTokens = tokenizer.countText(request.system + "\n" + boundedPrompt);
     const outputTokens = Math.max(1, tokenizer.countText(result.text));
     opts.usage.inputTokens += inputTokens;
     opts.usage.outputTokens += outputTokens;
@@ -424,26 +479,50 @@ export class AgentRunner {
 
     const tokenizer: BenchmarkTokenizer = await getBenchmarkTokenizer(opts.model, { mock: isMock });
 
-    const id = modelId(opts.model);
-    const isGemma4 = /^gemma4(?::|$)/i.test(id);
-    const isLfm3 = /^lfm3(?::|$)/i.test(id);
-    const effectiveMaxOutputTokens = opts.maxOutputTokens ?? (isGemma4 || isLfm3 ? 8_192 : 4_096);
+    const target = parseModelTarget(opts.model);
+    const isGemma4 = target.isGemma4;
+    const isLfm3 = target.isLfm3;
+    const isDeepSeek = target.isDeepSeek;
+    const effectiveMaxOutputTokens = opts.maxOutputTokens ?? 8_192;
     const turnTimeout = buildTurnTimeout(opts.timeoutMs ?? 600_000);
-    const model = isMock ? undefined : createNativeOllamaModel(id, ollamaBaseUrl(), true, isGemma4 ? windowTokens : undefined);
+    const pricingProfile = getPricingProfile(opts.pricingModel ?? (target.provider === "deepinfra" ? DEEPSEEK_V4_1_FLASH_PRICING.id : GPT_5_6_SOL_PRICING.id));
 
+    let model: LanguageModelV4 | undefined;
+    if (!isMock) {
+      if (target.provider === "deepinfra") {
+        const apiKey = process.env.DEEPINFRA_API_KEY ?? process.env.DEEPINFRA_TOKEN;
+        if (!apiKey) {
+          throw new Error(
+            `DeepInfra model '${target.modelId}' requested, but DEEPINFRA_API_KEY (or DEEPINFRA_TOKEN) environment variable is not set.\n` +
+            `Please export DEEPINFRA_API_KEY="your-deepinfra-token" before running the benchmark.`
+          );
+        }
+        const deepinfra = createOpenAICompatible({
+          name: "deepinfra",
+          baseURL: (process.env.DEEPINFRA_BASE_URL ?? "https://api.deepinfra.com/v1/openai").replace(/\/+$/, ""),
+          apiKey,
+          fetch: createBunSafeFetch()
+        });
+        model = deepinfra(target.modelId);
+      } else {
+        model = createNativeOllamaModel(target.modelId, ollamaBaseUrl(), true, Math.min(windowTokens, 131_072));
+      }
+    }
     // omp's soft/handoff write their compaction summary with the active model.
     // Mock runs omit it and fall back to deterministic extraction; live runs count
     // the summarizer's tokens/cost like any other model call (folded into totals
     // after the loop).
     const summaryUsage: SummaryUsage = { inputTokens: 0, outputTokens: 0 };
-    const summaryFn = createSummarizer({ model, tokenizer, usage: summaryUsage });
+    const summaryFn = createSummarizer({ model, tokenizer, usage: summaryUsage, windowTokens });
 
     const runtime: CompactionRuntime = createCompactionRuntime(opts.strategy, {
       preset: opts.preset ?? "balanced",
       windowTokens,
       forceThresholds: Boolean(opts.compactEvery && opts.compactEvery > 0),
       tokenizer,
-      summaryFn
+      summaryFn,
+      origamiOverrides: opts.origamiOverrides,
+      disableRecallDefense: opts.disableRecallDefense
     });
     const toolContext = {
       sandbox,
@@ -553,7 +632,7 @@ export class AgentRunner {
         // then guarantees at most one note per distinct compaction. Mid-turn growth stays
         // bounded by prepareOutbound, so no request can overflow the window.
         const stripReasoning = (m: LlmMessage): LlmMessage => {
-          if (!isGemma4 || !m.reasoning) return m;
+          if (isLfm3 || !m.reasoning) return m;
           const { reasoning: _, ...rest } = m;
           return rest;
         };
@@ -587,10 +666,26 @@ export class AgentRunner {
           responseMessages = fromModelMessages(result.responseMessages as never).map(stripReasoning);
           const allSteps = [...result.steps];
 
-          // If maxToolSteps terminated right after a tool result before the model could emit a text reply,
+          // If maxToolSteps terminated right after a tool result, or if a probe turn yielded an empty assistant response,
           // run one tool-free synthesis pass so the turn always produces a final answer.
-          if (responseMessages.at(-1)?.role === "tool" && !opts.signal?.aborted) {
+          const endsWithTool = responseMessages.at(-1)?.role === "tool";
+          const lastAsst = responseMessages.findLast((m) => m.role === "assistant");
+          const emptyAssistant = !lastAsst || lastAsst.content.trim() === "";
+          const needsSynthesis = (endsWithTool || (turn.isProbe && emptyAssistant)) && !opts.signal?.aborted;
+
+          if (needsSynthesis) {
             const synthView = [...messages, ...responseMessages];
+            if (endsWithTool) {
+              synthView.push({
+                role: "user",
+                content: "Summarize your completed actions concisely without calling any tools."
+              });
+            } else if (turn.isProbe && emptyAssistant) {
+              synthView.push({
+                role: "user",
+                content: "Please provide your direct answer to the recall question above based on session memory. Do not call any tools."
+              });
+            }
             const synthOutbound = runtime.prepareOutbound(synthView, windowTokens);
             const synthResult = await generateText({
               model: model!,
@@ -625,7 +720,7 @@ export class AgentRunner {
             const completionTokens = step.usage.outputTokens ?? 0;
             const cache = cacheAccounting(requestMessages, contextPromptTokens, cacheState, tokenizer);
             const cost = estimateLlmCost(
-              GPT_5_6_SOL_PRICING,
+              pricingProfile,
               billedPromptTokens,
               cache.cachedTokens,
               cache.cacheWriteTokens,
@@ -639,18 +734,19 @@ export class AgentRunner {
             turnContextTokens = Math.max(turnContextTokens, logicalTokens, contextPromptTokens);
           }
         } catch (err) {
-          if (opts.signal?.aborted || !isTimeoutError(err)) {
+          if (opts.signal?.aborted || (!isTimeoutError(err) && !isTruncatedToolCallError(err))) {
             throw err;
           }
           turnLatency = Math.round(performance.now() - startedAt);
           turnContextTokens = tokenizer.countMessages(initialOutbound);
-          const recoveryNote = `Turn ${turn.turnIndex} timed out after retries; recovered to preserve benchmark run`;
+          const reason = isTruncatedToolCallError(err) ? "hit truncated tool-call JSON" : "timed out";
+          const recoveryNote = `Turn ${turn.turnIndex} ${reason} after retries; recovered to preserve benchmark run`;
           maintenanceNotes.push(recoveryNote);
           opts.onMaintenance?.(recoveryNote);
           responseMessages = [
             {
               role: "assistant",
-              content: "[Turn timed out waiting for model response; continuing session.]"
+              content: `[Turn ${reason}; continuing session.]`
             }
           ];
         }
@@ -658,7 +754,7 @@ export class AgentRunner {
 
       turnMessages.push(...chatRecordsFor(responseMessages, turn.turnIndex));
       messages.push(...responseMessages.map((message) => {
-        if (!isGemma4 || !message.reasoning) return message;
+        if (isLfm3 || !message.reasoning) return message;
         const { reasoning: _, ...withoutReasoning } = message;
         return withoutReasoning;
       }));
@@ -754,7 +850,7 @@ export class AgentRunner {
     // continuation of the task loop's prefix.
     if (summaryUsage.inputTokens > 0 || summaryUsage.outputTokens > 0) {
       const summaryCost = estimateLlmCost(
-        GPT_5_6_SOL_PRICING,
+        pricingProfile,
         summaryUsage.inputTokens,
         0,
         0,

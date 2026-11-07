@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { Tokenizer } from "@huggingface/tokenizers";
 import type { LlmMessage } from "./llm.ts";
 
-export type ModelFamily = "gemma4" | "lfm3" | "fallback";
+export type ModelFamily = "gemma4" | "lfm3" | "deepseek" | "qwen3" | "fallback";
 
 export interface TokenizerTelemetry {
   model: string;
@@ -56,7 +56,7 @@ interface PinnedModelAsset {
   subDir: string;
 }
 
-const PINNED_ASSETS: Record<"gemma4" | "lfm3", PinnedModelAsset> = {
+const PINNED_ASSETS: Record<"gemma4" | "lfm3" | "deepseek" | "qwen3", PinnedModelAsset> = {
   gemma4: {
     family: "gemma4",
     hfRepo: "google/gemma-4-E4B-it",
@@ -72,6 +72,22 @@ const PINNED_ASSETS: Record<"gemma4" | "lfm3", PinnedModelAsset> = {
     configUrl: "https://huggingface.co/LiquidAI/LFM3-1.7B/raw/ac2586a34f1a1c03329dbdcdefabd8b6478ddaa7/tokenizer_config.json",
     tokenizerUrl: "https://huggingface.co/LiquidAI/LFM3-1.7B/resolve/ac2586a34f1a1c03329dbdcdefabd8b6478ddaa7/tokenizer.json",
     subDir: "lfm3-ac2586a34f1a1c03329dbdcdefabd8b6478ddaa7"
+  },
+  deepseek: {
+    family: "deepseek",
+    hfRepo: "deepseek-ai/DeepSeek-V3",
+    revision: "e815299b0bcbac849fa540c768ef21845365c9eb",
+    configUrl: "https://huggingface.co/deepseek-ai/DeepSeek-V3/raw/e815299b0bcbac849fa540c768ef21845365c9eb/tokenizer_config.json",
+    tokenizerUrl: "https://huggingface.co/deepseek-ai/DeepSeek-V3/resolve/e815299b0bcbac849fa540c768ef21845365c9eb/tokenizer.json",
+    subDir: "deepseek-v3-e815299b0bcbac849fa540c768ef21845365c9eb"
+  },
+  qwen3: {
+    family: "qwen3",
+    hfRepo: "Qwen/Qwen2.5-7B-Instruct",
+    revision: "a09a35458c702b33eeacc393d103063234e8bc28",
+    configUrl: "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/raw/a09a35458c702b33eeacc393d103063234e8bc28/tokenizer_config.json",
+    tokenizerUrl: "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/resolve/a09a35458c702b33eeacc393d103063234e8bc28/tokenizer.json",
+    subDir: "qwen3-a09a35458c702b33eeacc393d103063234e8bc28"
   }
 };
 
@@ -90,13 +106,15 @@ const REASONING_FRAMING_TOKENS = 2;
 const MAX_MESSAGE_CACHE_SIZE = 5_000;
 
 export function normalizeModelName(modelId: string): string {
-  return modelId.trim().replace(/^ollama\//i, "").toLowerCase();
+  return modelId.trim().replace(/^(?:ollama|deepinfra)[:/]/i, "").toLowerCase();
 }
 
 export function resolveModelFamily(modelId: string): ModelFamily {
   const normalized = normalizeModelName(modelId);
   if (/^gemma4(?::|$)/i.test(normalized)) return "gemma4";
   if (/^lfm3(?::|$)/i.test(normalized)) return "lfm3";
+  if (/deepseek/i.test(normalized)) return "deepseek";
+  if (/^qwen3(?:\.\d+)?/i.test(normalized)) return "qwen3";
   return "fallback";
 }
 
@@ -399,7 +417,7 @@ async function ensureModelAssets(
 }
 
 async function loadHfEngine(
-  family: "gemma4" | "lfm3",
+  family: Exclude<ModelFamily, "fallback">,
   baseDir: string,
   options?: TokenizerInitOptions
 ): Promise<{ tokenizer: Tokenizer; assetSource: "pinned-disk" | "downloaded" }> {

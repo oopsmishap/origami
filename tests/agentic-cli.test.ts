@@ -113,6 +113,13 @@ describe("Agentic Benchmark CLI & Orchestrator Suite", () => {
       expect(parseCliArgs(["--model", "lfm3:256k"]).model).toBe("lfm3:256k");
     });
 
+    it("maps DeepSeek-V4.1-Flash aliases to deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017", () => {
+      expect(parseCliArgs(["--model", "deepinfra:DeepSeek-V4.1-Flash-1017"]).model).toBe("deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017");
+      expect(parseCliArgs(["--model", "deepinfra: DeepSeek-V4.1-Flash-1017"]).model).toBe("deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017");
+      expect(parseCliArgs(["--model", "DeepSeek-V4.1-Flash-1017"]).model).toBe("deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017");
+      expect(parseCliArgs(["--model", "deepseek-v4.1-flash"]).model).toBe("deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017");
+    });
+
     it("preserves explicit model identifiers", () => {
       expect(parseCliArgs(["--model", "gemma4:latest"]).model).toBe("gemma4:latest");
       expect(parseCliArgs(["--model", "custom-org/special-model:v2"]).model).toBe("custom-org/special-model:v2");

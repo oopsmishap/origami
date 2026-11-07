@@ -55,6 +55,36 @@ export const GPT_5_6_SOL_PRICING: BenchmarkPricingProfile = {
   }
 };
 
+export const DEEPSEEK_V4_1_FLASH_PRICING: BenchmarkPricingProfile = {
+  id: "deepinfra/deepseek-v4.1-flash",
+  source: "modeled",
+  shortContextLimit: 1_048_576,
+  short: {
+    inputPerMillion: 0.098,
+    outputPerMillion: 0.294,
+    cacheReadPerMillion: 0.0029,
+    cacheWritePerMillion: 0.098
+  },
+  long: {
+    inputPerMillion: 0.098,
+    outputPerMillion: 0.294,
+    cacheReadPerMillion: 0.0029,
+    cacheWritePerMillion: 0.098
+  }
+};
+
+export const PRICING_PROFILES: Record<string, BenchmarkPricingProfile> = {
+  [GPT_5_6_SOL_PRICING.id]: GPT_5_6_SOL_PRICING,
+  [DEEPSEEK_V4_1_FLASH_PRICING.id]: DEEPSEEK_V4_1_FLASH_PRICING,
+  "deepinfra": DEEPSEEK_V4_1_FLASH_PRICING,
+  "deepseek": DEEPSEEK_V4_1_FLASH_PRICING
+};
+
+export function getPricingProfile(id: string): BenchmarkPricingProfile {
+  const key = id.trim().toLowerCase();
+  return PRICING_PROFILES[key] ?? PRICING_PROFILES[GPT_5_6_SOL_PRICING.id]!;
+}
+
 export const MIN_CACHEABLE_INPUT_TOKENS = 1_024;
 
 export function estimateLlmCost(

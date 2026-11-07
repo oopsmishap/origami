@@ -71,7 +71,18 @@ export function assessFoldTiming(i: FoldTimingInput): FoldTiming {
     // Candidate source tokens are S; sigma replaces them and is added exactly once here.
     const T = i.cacheCold ? 0 : i.estimatedRewriteTokens + sigma;
     breakevenTurns = foldBreakeven(S, sigma, T, i.price).breakevenTurns;
-    if (breakevenTurns === null || breakevenTurns > i.paybackHorizonTurns) return blocked("cost", boundary, breakevenTurns);
+    // Scale payback horizon adaptively when accumulated growth debt is high,
+    // preventing the absorbing cost trap where older tasks can never break even.
+    const growthOverage = Math.max(0, i.growthSinceFoldTokens - 2 * i.growthStep);
+    const growthFactor = 1 + Math.min(3, growthOverage / Math.max(1, i.growthStep));
+    const effectiveHorizon = Math.round(i.paybackHorizonTurns * growthFactor);
+
+    // If accumulated growth is massive (>= 4x growthStep) and fold yields positive per-turn savings,
+    // growth debt overrides suffix rewrite cost to prevent unbounded context bloating.
+    const growthOverride = i.growthSinceFoldTokens >= 4 * i.growthStep && breakevenTurns !== null;
+    if (!growthOverride && (breakevenTurns === null || breakevenTurns > effectiveHorizon)) {
+      return blocked("cost", boundary, breakevenTurns);
+    }
   }
   return { allowed: true, blockedBy: null, boundary, fillFloorTokens, breakevenTurns };
 }

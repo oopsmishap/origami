@@ -11,3 +11,9 @@ node_modules
 conversations/
 results/
 bench/results/
+
+# Agent skill bundle installed from npm (latex-paper-skills)
+.agents/skills/latex-paper-skills/
+
+# Benchmark result reports (kept local; not published)
+docs/benchmark.md

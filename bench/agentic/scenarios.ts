@@ -893,7 +893,7 @@ function buildResearchWorkPrompt(workIndex: number): string {
   if (phase === 2) {
     return `Threat Model & Advisory [#${tag} · ${ctrl.cwe}]: Author \`docs/advisories/ADV-${tag}-${modId}.md\` documenting threat actor preconditions, trust boundaries, STRIDE classification, and residual risk controls for \`src/security/${modId}.js\`.`;
   }
-  return `Policy Scanner Rule [#${tag} · ${ctrl.cwe}]: Implement static-check helper \`src/scanners/rule-${tag}-${modId}.js\` exporting \`scanFor${ctrl.exportFn[0]!.toUpperCase()}${ctrl.exportFn.slice(1)}Bypass(sourceText, filePath)\` to flag unsafe patterns across JS files and append a summary row to \`AUDIT_REPORT.md\`.`;
+  return `Policy Scanner Rule [#${tag} · ${ctrl.cwe}]: Implement static-check helper \`src/scanners/rule-${tag}-${modId}.js\` exporting \`scanFor${ctrl.exportFn[0]!.toUpperCase()}${ctrl.exportFn.slice(1)}Bypass(sourceText, filePath)\` to flag unsafe patterns across JS files and append a summary row under '## Security Scanners' in \`AUDIT_REPORT.md\` using \`edit_file\` (preserving all initial vulnerability findings in \`AUDIT_REPORT.md\`).`;
 }
 
 export const researchScenario: ScenarioDefinition = {
@@ -901,7 +901,7 @@ export const researchScenario: ScenarioDefinition = {
   title: "Application Security Vulnerability Audit",
   systemTaskBrief: [
     "You are a principal security engineer conducting a thorough code audit and progressive security hardening of a web application in the workspace.",
-    "Examine all source files in `src/`, identify planted vulnerabilities, maintain `AUDIT_REPORT.md` with root causes and remediations, retain session-only governance briefings in memory, and build defense-in-depth security modules on each turn."
+    "Examine all source files in `src/`, identify planted vulnerabilities, maintain `AUDIT_REPORT.md` with root causes and remediations (preserving all initial vulnerability findings as new scanner rules are added), retain session-only governance briefings in memory, and build defense-in-depth security modules on each turn."
   ].join(" "),
 
   seedWorkspace(sandbox: Sandbox): void {

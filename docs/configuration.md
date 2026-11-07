@@ -26,6 +26,7 @@ Origami works without configuration. To customize it, create `origami.yml` globa
 | `tier3MassTokens` | number | Preset | Active Tier 2 summary mass before a Tier 3 merge is suggested. |
 | `minFoldBenefitTokens` | integer ≥ 0 | Preset | Minimum Tier 1 token reclaim outside emergencies. |
 | `minFoldBenefitWindowPct` | number `[0,1)` | Preset | Minimum reclaim as a window fraction; the larger floor applies. |
+| `minFoldBenefitCapTokens` | integer ≥ 0 | Preset | Ceiling on the window-proportional floor above; `0` leaves it uncapped. Without a cap the floor grows with the window, so large-context models reject subtasks smaller ones accept. |
 | `blockMatureFolds` | integer ≥ 0 | Preset | Later folds a block must survive before merge eligibility. |
 | `minFoldFillPct` | number `[0,1)` | Preset | Advisory folds wait until context reaches this window fraction (capped by `minFoldFillCapTokens`); must be below `emergencyFillPct`. |
 | `minFoldFillCapTokens` | integer ≥ 0 | Preset | Cap on the fill floor in tokens; `0` leaves it uncapped. |

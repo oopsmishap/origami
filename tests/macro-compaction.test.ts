@@ -277,4 +277,17 @@ describe("autonomous macro-compaction", () => {
     engine.executeFold({ folds: [{ range: "m00015..m00018", topic: "B4", summary: "Summary of b4" }], tier: 1 });
     expect(candidateWork(engine, store, "settled")?.kind).toBe("consolidation");
   });
+
+  it("formats non-contiguous consolidation blocks as comma-separated list instead of .. range", () => {
+    const prompt = consolidationPrompt({
+      fromTier: 1,
+      toTier: 2,
+      blocks: [
+        { id: "b1", topic: "B1", summary: "S1", tier: 1, ranges: [], status: "active", consumedBy: null, anchorRef: null, tokensBefore: 100, tokensAfter: 10, createdAt: 1, children: [] },
+        { id: "b3", topic: "B3", summary: "S3", tier: 1, ranges: [], status: "active", consumedBy: null, anchorRef: null, tokensBefore: 100, tokensAfter: 10, createdAt: 3, children: [] },
+      ],
+    });
+    expect(prompt).toContain('covering b1,b3');
+    expect(prompt).not.toContain('covering b1..b3');
+  });
 });

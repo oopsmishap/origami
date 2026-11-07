@@ -68,6 +68,15 @@ describe("Agentic Benchmark Tokenizer", () => {
       expect(normalizeModelName("ollama/lfm3:256k")).toBe("lfm3:256k");
     });
 
+    it("resolves and normalizes deepseek model identifiers and deepinfra/ aliases", () => {
+      expect(resolveModelFamily("deepseek")).toBe("deepseek");
+      expect(resolveModelFamily("deepseek-ai/DeepSeek-V4.1-Flash-1017")).toBe("deepseek");
+      expect(resolveModelFamily("deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017")).toBe("deepseek");
+      expect(resolveModelFamily("deepinfra:DeepSeek-V4.1-Flash-1017")).toBe("deepseek");
+      expect(normalizeModelName("deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017")).toBe("deepseek-ai/deepseek-v4.1-flash-1017");
+      expect(normalizeModelName("deepinfra:DeepSeek-V4.1-Flash-1017")).toBe("deepseek-v4.1-flash-1017");
+    });
+
     it("resolves unsupported models to fallback", () => {
       expect(resolveModelFamily("gpt-4o")).toBe("fallback");
       expect(resolveModelFamily("claude-3-5-sonnet")).toBe("fallback");
@@ -86,6 +95,10 @@ describe("Agentic Benchmark Tokenizer", () => {
       expect(
         getBenchmarkTokenizer("lfm3:latest", { offline: true, assetDir: offlineNonExistentDir })
       ).rejects.toThrow("Failed to load pinned HuggingFace tokenizer for lfm3");
+
+      expect(
+        getBenchmarkTokenizer("deepinfra:DeepSeek-V4.1-Flash-1017", { offline: true, assetDir: offlineNonExistentDir })
+      ).rejects.toThrow("Failed to load pinned HuggingFace tokenizer for deepseek");
     });
 
     it("falls back gracefully in mock mode when assets are not available", async () => {

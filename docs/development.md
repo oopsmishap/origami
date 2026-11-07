@@ -30,11 +30,9 @@ Metrics include peak and mean context, constraint survival, fact recall, cache h
 
 `--assert` fails when invariants or facts are lost, no Tier 1 fold occurs, or input cost exceeds 70% of the uncompressed baseline. CI uploads the JSON result.
 
-Reference result: lean preset, 1,200 turns, 64K window, seed 7. Mass promotion peaked at 33.5K context and 8.7% of baseline input cost with two Tier 2 merges. Growth promotion peaked at 41.9K and 10.4% with no merge. Both retained all constraints with zero lost facts and zero invariant violations.
-
 ## Real-world long-context benchmark
 
-`bun run bench:real-world` evaluates Origami against an uncompressed baseline on authentic session history using live model APIs. See [Real-world benchmark report](benchmark.md) for methodology and empirical results.
+`bun run bench:real-world` evaluates Origami against an uncompressed baseline on authentic session history using live model APIs.
 
 ```bash
 bun bench/web-server.ts --port 4142

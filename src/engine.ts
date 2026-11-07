@@ -250,7 +250,10 @@ export class OrigamiEngine {
   /** Smallest reclaim worth a fold call: below this, the cache rewrite costs more than it saves. */
   minFoldBenefit(): number {
     const window = this.host.windowTokens();
-    return Math.max(this.config.minFoldBenefitTokens, Math.round(this.config.minFoldBenefitWindowPct * Math.max(0, window)));
+    const pctFloor = Math.round(this.config.minFoldBenefitWindowPct * Math.max(0, window));
+    const cap = this.config.minFoldBenefitCapTokens ?? 8000;
+    const boundedPct = cap > 0 ? Math.min(cap, pctFloor) : pctFloor;
+    return Math.max(this.config.minFoldBenefitTokens, boundedPct);
   }
 
   /** Whether an advisory fold of `ranges` is timely: fill floor, task boundary, cache payback. */
@@ -527,6 +530,18 @@ export class OrigamiEngine {
       block.tokensAfter = this.state.ledger.countText(renderBlockText(block));
       if (block.tokensAfter >= replacedTokens) {
         return fail(`summary (${block.tokensAfter}t) is not smaller than what it replaces (${replacedTokens}t)`);
+      }
+      if (specTier > 1 && !params.force) {
+        const kids = children.map((c) => tree.get(c)!);
+        const kidsSummaryTokens = kids.reduce((s, b) => s + this.state.ledger.countText(b.summary), 0);
+        const newSummaryTokens = this.state.ledger.countText(block.summary);
+        if (kidsSummaryTokens >= 200) {
+          const maxRatio = specTier === 2 ? 0.80 : 0.65;
+          const maxAllowed = Math.round(kidsSummaryTokens * maxRatio);
+          if (newSummaryTokens > maxAllowed) {
+            return fail(`tier-${specTier} distillation summary (${newSummaryTokens}t) does not achieve required compression against replaced summaries (${kidsSummaryTokens}t); maximum allowed is ${maxAllowed}t (${Math.round((1 - maxRatio) * 100)}% minimum shrinkage)`);
+          }
+        }
       }
 
       for (const ref of refs) claimedRefs.set(ref, i);

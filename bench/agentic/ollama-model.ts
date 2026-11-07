@@ -31,7 +31,20 @@ export function isTimeoutError(err: unknown): boolean {
   return e.cause ? isTimeoutError(e.cause) : false;
 }
 
-function createBunSafeFetch(): typeof fetch {
+export function isTruncatedToolCallError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { message?: string; responseBody?: string; cause?: unknown; errors?: unknown[] };
+  const text = `${e.message ?? ""} ${e.responseBody ?? ""}`;
+  if (/invalid tool call arguments|unexpected end of JSON input/i.test(text)) {
+    return true;
+  }
+  if (Array.isArray(e.errors) && e.errors.some((sub) => isTruncatedToolCallError(sub))) {
+    return true;
+  }
+  return e.cause ? isTruncatedToolCallError(e.cause) : false;
+}
+
+export function createBunSafeFetch(): typeof fetch {
   const wrapped = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
     globalThis.fetch(input, { ...(init ?? {}), timeout: false } as RequestInit)) as typeof fetch;
   return Object.assign(wrapped, globalThis.fetch);
@@ -311,12 +324,14 @@ export class NativeOllamaLanguageModel implements LanguageModelV4 {
     try {
       result1 = await this.underlyingModel.doGenerate(adaptedOptions);
     } catch (err) {
-      // If a thinking call hung (e.g. runaway deliberation loop) while user did not abort,
-      // retry immediately with `think: false` using the warm prompt KV cache.
-      if (thinkEnabled && isTimeoutError(err) && !options.abortSignal?.aborted) {
+      // If a thinking call hung OR truncated mid-tool-JSON (`unexpected end of JSON input` after long thinking),
+      // retry immediately with `think: false` and boosted `maxOutputTokens` using the warm prompt KV cache.
+      const truncatedTool = isTruncatedToolCallError(err);
+      if (thinkEnabled && (isTimeoutError(err) || truncatedTool) && !options.abortSignal?.aborted) {
         const nonThinkingRetry = this.buildAdaptedOptions(
           {
             ...options,
+            maxOutputTokens: Math.max(options.maxOutputTokens ?? 4_096, 8_192),
             abortSignal: withCallTimeout(options.abortSignal, perCallMs)
           },
           false
