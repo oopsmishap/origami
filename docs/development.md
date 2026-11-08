@@ -30,6 +30,8 @@ Metrics include peak and mean context, constraint survival, fact recall, cache h
 
 `--assert` fails when invariants or facts are lost, no Tier 1 fold occurs, or input cost exceeds 70% of the uncompressed baseline. CI uploads the JSON result.
 
+`bun run bench:hot-path` measures the three costs that scale with session length: an incremental journal append, one render plan, and one cache report. Run it before and after touching `src/kernel/state.ts`, `src/kernel/render.ts`, or `src/kernel/cache-report.ts`; the numbers are quoted in the changelog.
+
 ## Real-world long-context benchmark
 
 `bun run bench:real-world` evaluates Origami against an uncompressed baseline on authentic session history using live model APIs.

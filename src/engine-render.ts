@@ -16,14 +16,7 @@ export interface RenderOutboundInput<T> {
 
 export function renderOutbound<T>(input: RenderOutboundInput<T>): { messages: T[]; hostRewrite: boolean } {
   const { context } = input;
-  const facts: KernelMessage[] = [];
-  for (const m of input.messages) {
-    const f = messageFacts(m);
-    if (!f) break;
-    facts.push(f);
-  }
-  const aligned = facts.length === input.messages.length;
-  const bound = aligned ? context.state.bindOutbound(facts) : context.state.bound;
+  const { aligned, bound } = context.state.bindRequest(input.messages);
   let hostRewrite = input.pendingHostRewrite;
   if (aligned) {
     for (const m of bound) {
@@ -37,13 +30,21 @@ export function renderOutbound<T>(input: RenderOutboundInput<T>): { messages: T[
   const pinnedHeadIndex = headIndex < 0 ? 0 : headIndex;
   const initialUserIndex = bound.findIndex((m) => !m.ephemeral && m.role === "user");
   const window = context.host.windowTokens();
-  const projected = input.projectedTokensOverride ?? context.host.projectedTokens();
+  // The host anchor is still anchored on the last provider round, so it contains history that
+  // was folded since. Gate on the corrected fill, or the first request after a fold elides
+  // live work while real occupancy is far below the threshold.
+  const projected = input.projectedTokensOverride ?? Math.max(0, context.host.projectedTokens() - context.reclaimedSinceRound);
   let source: readonly T[] = input.messages;
   const elided = new Set<number>();
   if (window > 0 && projected >= window * context.config.elideFillPct && aligned) {
     const candidates: ElideCandidate[] = selectElideCandidates(bound.map((m) => ({
       ref: m.ref, index: m.index, role: m.role, tokens: context.state.ledger.countMessage(m), ephemeral: m.ephemeral, turn: m.turn,
-    })));
+    })), {
+      foldedRefs: context.state.foldedRefs(),
+      bookkeepingRefs: context.bookkeepingRefs,
+      protectedFromTurn: context.protectedFromTurn,
+      activeTurn: context.activeTurn,
+    });
     const plan = planElision({ projectedTokens: projected, windowTokens: window, candidates, thresholds: { elideFillPct: context.config.elideFillPct, targetFillPct: 0.7 } });
     if (plan.elided.length > 0) {
       const elideAt = new Map(plan.elided.map((e) => [e.index, e]));

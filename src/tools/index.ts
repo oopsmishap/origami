@@ -146,11 +146,18 @@ export function registerTools(
       }
       const { folds, tier } = salvaged.params;
       const inputSummary = `${folds.length} range(s) · T${tier ?? 1}`;
-      const result = rt.engine.executeFold({ folds, tier });
+      const result = (() => {
+        try {
+          return rt.engine.executeFold({ folds, tier });
+        } catch (error) {
+          return { ok: false as const, error: error instanceof Error ? error.message : String(error), foldIndex: 0 };
+        }
+      })();
       const durationMs = performance.now() - t0;
       if (!result.ok) {
+        const committed = result.committed && result.committed.length > 0 ? `; committed ${result.committed.join(", ")}` : "";
         const failStreak = recordFoldFailure(rt.sessionId);
-        let errorMsg = `error: ${result.error} (fold ${result.foldIndex})`;
+        let errorMsg = `error: ${result.error} (fold ${result.foldIndex})${committed}`;
         if (failStreak.streak === CIRCUIT_BREAKER_FAIL_THRESHOLD) {
           errorMsg += `\n\n⚠️ COMPRESS CIRCUIT BREAKER: 3 consecutive fold failures. STOP calling fold immediately. Disarms on 1 successful fold or 10 minutes quiet.`;
         }
@@ -158,9 +165,9 @@ export function registerTools(
           tool: "fold",
           durationMs,
           ok: false,
-          error: `${result.error} (fold ${result.foldIndex})`,
+          error: `${result.error} (fold ${result.foldIndex})${committed}`,
           inputSummary,
-          outputSummary: `Fold rejected at index ${result.foldIndex}`,
+          outputSummary: `Fold rejected at index ${result.foldIndex}${committed}`,
           metrics: { tier: tier ?? 1, requestedFolds: folds.length, foldIndex: result.foldIndex, failStreak: failStreak.streak },
         });
         if (row) onMutation?.("telemetry", row, ctx);
@@ -231,7 +238,7 @@ export function registerTools(
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const t0 = performance.now();
       const rt = getRuntime(ctx);
-      rt.sync();
+      rt.sync(true);
       const store = rt.candidates;
       const report = (text: string, ok: boolean, outputSummary: string) => {
         const row = recordToolTelemetry(rt, {

@@ -13,7 +13,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import { configFromPreset, type Preset } from "../src/config.ts";
 import { OrigamiEngine } from "../src/engine.ts";
-import { JOURNAL_ENTRY_TYPE } from "../src/persist/journal.ts";
+import { JOURNAL_ENTRY_TYPE } from "../src/kernel/journal.ts";
 import { entryMessage } from "../src/kernel/registry.ts";
 import { kernelMessagesFromEntries } from "../src/runtime.ts";
 import type { SessionEntryLike } from "../src/kernel/state.ts";

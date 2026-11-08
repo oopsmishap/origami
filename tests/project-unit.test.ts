@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { projectUnit, protectedZoneMap } from "../src/kernel/project-unit.ts";
+import { ALREADY_FOLDED, projectUnit, protectedZoneMap } from "../src/kernel/project-unit.ts";
 import type { BoundMessage } from "../src/kernel/types.ts";
 
 function msg(ref: string, turn: number, role: BoundMessage["role"] = "user", extra: Partial<BoundMessage> = {}): BoundMessage {
@@ -45,7 +45,7 @@ describe("projectUnit", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("is above this session's highest ref");
 
-    // An in-frontier range where all messages are already folded matches no messages
+    // An in-frontier range where all messages are already folded is reported distinctly
     const r2 = projectUnit({
       bound: makeBound(),
       ranges: [{ start: "m00004", end: "m00006" }],
@@ -53,7 +53,7 @@ describe("projectUnit", () => {
       foldedRefs: new Set(["m00004", "m00005", "m00006"]),
     });
     expect(r2.ok).toBe(false);
-    if (!r2.ok) expect(r2.error).toBe("range matches no messages");
+    if (!r2.ok) expect(r2.error).toBe(ALREADY_FOLDED);
   });
 
   it("accepts a whole turn and keeps its single span", () => {
@@ -158,7 +158,7 @@ describe("projectUnit", () => {
     }
   });
 
-  it("skips already-folded refs and reports no messages", () => {
+  it("skips already-folded refs and reports the range as fully folded", () => {
     const r = projectUnit({
       bound: makeBound(),
       ranges: [{ start: "m00004", end: "m00006" }],
@@ -166,7 +166,7 @@ describe("projectUnit", () => {
       foldedRefs: new Set(["m00004", "m00005", "m00006"]),
     });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toBe("range matches no messages");
+    if (!r.ok) expect(r.error).toBe(ALREADY_FOLDED);
   });
 
   it("never pulls ephemeral messages into the projection", () => {

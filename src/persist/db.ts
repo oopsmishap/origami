@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import type { Block } from "../kernel/types.ts";
 import { EMPTY_MANIFEST, manifestTerms } from "../kernel/manifest.ts";
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 export const MAX_SEARCH_HITS = 50;
 
 export interface DbBlockRow {
@@ -26,6 +26,8 @@ export interface DbBlockRow {
   ledger?: string;
   /** Searchable deterministic facts: manifest terms, missing items, ledger texts (v6+). */
   facts?: string;
+  /** Commit batch (v8+); folds sharing it share one prefix invalidation. */
+  batch_id?: string | null;
 }
 
 export interface DbRoundRow {
@@ -322,6 +324,11 @@ function MIGRATION_7(sqlite: Database): void {
   });
 }
 
+function MIGRATION_8(sqlite: Database): void {
+  // Nullable and ignored by v7 readers, so minimum_reader_schema stays at 7.
+  addColumnsIfMissing(sqlite, "blocks", { batch_id: "TEXT" });
+}
+
 interface ParsedQuery {
   terms: string[];
   tier: number | null;
@@ -374,18 +381,18 @@ function transaction(sqlite: Database, fn: () => void): void {
 function blockWriter(sqlite: Database): (row: DbBlockRow) => void {
   const statement = sqlite.query(
     `INSERT INTO blocks
-       (session_id, block_id, tier, topic, summary, body, tokens_before, tokens_after, created_at, status, consumed_by, ranges, children, manifest, ledger, facts)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (session_id, block_id, tier, topic, summary, body, tokens_before, tokens_after, created_at, status, consumed_by, ranges, children, manifest, ledger, facts, batch_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(session_id, block_id) DO UPDATE SET
        tier=excluded.tier, topic=excluded.topic, summary=excluded.summary, body=excluded.body,
        tokens_before=excluded.tokens_before, tokens_after=excluded.tokens_after, created_at=excluded.created_at,
        status=excluded.status, consumed_by=excluded.consumed_by, ranges=excluded.ranges, children=excluded.children,
-       manifest=excluded.manifest, ledger=excluded.ledger, facts=excluded.facts`,
+       manifest=excluded.manifest, ledger=excluded.ledger, facts=excluded.facts, batch_id=excluded.batch_id`,
   );
   return (row) => {
     statement.run(
       row.session_id, row.block_id, row.tier, row.topic, row.summary, row.body, row.tokens_before, row.tokens_after, row.created_at,
-      row.status, row.consumed_by, row.ranges, row.children, row.manifest ?? "{}", row.ledger ?? "[]", row.facts ?? "",
+      row.status, row.consumed_by, row.ranges, row.children, row.manifest ?? "{}", row.ledger ?? "[]", row.facts ?? "", row.batch_id ?? null,
     );
   };
 }
@@ -467,7 +474,7 @@ export function openDb(path: string): OrigamiDb {
     minimumReaderSchema = minimum;
     forwardCompatible = true;
   } else {
-    const migrations: readonly (string | ((db: Database) => void))[] = [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7];
+    const migrations: readonly (string | ((db: Database) => void))[] = [MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8];
     while (version < SCHEMA_VERSION) {
       const next = version + 1;
       transaction(sqlite, () => {

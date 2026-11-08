@@ -4,7 +4,7 @@ import { OrigamiRuntime } from "../src/runtime.ts";
 import { openDb } from "../src/persist/db.ts";
 import { configFromPreset } from "../src/config.ts";
 import { registerTools } from "../src/tools/index.ts";
-import type { JournalOp } from "../src/persist/journal.ts";
+import type { JournalOp } from "../src/kernel/journal.ts";
 import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 
 describe("Real-session smoke (tools + SQLite)", () => {

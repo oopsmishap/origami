@@ -2,7 +2,7 @@ import type { Block, KernelMessage, LedgerKind, LedgerRecord, RefRange } from ".
 import { formatRef, parseRef } from "./kernel/types.ts";
 import { SessionState } from "./kernel/state.ts";
 import type { SessionEntryLike } from "./kernel/state.ts";
-import { detectUncoveredRuns, isEphemeralFolded, projectUnit, protectedTailTurn, protectedZoneMap, spanHits } from "./kernel/project-unit.ts";
+import { ALREADY_FOLDED, detectUncoveredRuns, isEphemeralFolded, projectUnit, protectedTailTurn, protectedZoneMap, spanHits } from "./kernel/project-unit.ts";
 import { checkInvariants } from "./kernel/invariants.ts";
 import type { InvariantViolation } from "./kernel/invariants.ts";
 import { historicalFoldCallRefs } from "./kernel/fold-calls.ts";
@@ -18,14 +18,14 @@ import { formatRecallHints, matchRecallHints } from "./kernel/recall-hints.ts";
 import { ledgerSemanticKey, normalizeInheritedLedger, normalizedLedgerText } from "./kernel/ledger.ts";
 import { estimateOutboundTokens, type OutboundEstimate } from "./engine-status.ts";
 import { lintSummary } from "./kernel/summary-lint.ts";
-import { makeFoldOp, makeUnfoldOp, makeTierOp } from "./persist/journal.ts";
+import { makeFoldOp, makeUnfoldOp } from "./kernel/journal.ts";
 import type { OrigamiDb } from "./persist/db.ts";
 import { blockBodyForIndex, blockFactsForIndex } from "./persist/db.ts";
 import type { OrigamiConfig } from "./config.ts";
 import { configFromPreset } from "./config.ts";
 import { evaluateCacheRound, getCacheCollapseStatus } from "./telemetry.ts";
 import { extractPlanTerms, rerankHitsWithPlan } from "./kernel/plan-search.ts";
-import { buildCacheReport, foldEventsFromBlocks, resolveEconomicsPrice, type CacheReport, type CacheSample, type FoldBlockInfo, type PriceProfile } from "./kernel/cache-report.ts";
+import { buildCacheReport, foldEventsFromBlocks, resolveEconomicsPrice, type CacheReport, type CacheSample, type FoldBlockInfo, type PriceProfile, type PriceSource } from "./kernel/cache-report.ts";
 import { formatCoverage, mergeRanges, parseBlockRangeList, parseRangeList, rangesFromRefs } from "./engine-ranges.ts";
 import { renderOutbound } from "./engine-render.ts";
 import { foldTiming as buildFoldTiming, recommendedRanges as buildRecommendedRanges } from "./engine-timing.ts";
@@ -113,6 +113,14 @@ export class OrigamiEngine {
   private seenHashes = new Map<string, string>();
   private emergencyWarningsIgnored = 0;
   private emergencyOutstanding = false;
+  /** Journal version the bound message list was derived from. */
+  private boundVersion = -1;
+  /** Bumped by anything that changes rounds or blocks, so telemetry caches invalidate. */
+  private dataVersion = 0;
+  private roundsCache: { version: number; rounds: CacheRound[] } | null = null;
+  private reportCache: { version: number; priceKey: string; report: CacheReport } | null = null;
+  /** The DB block mirror disagrees with the journal tree; economics used the union. */
+  private blockMirrorMismatch = false;
   get sessionId(): string {
     return this.host.sessionId();
   }
@@ -143,16 +151,32 @@ export class OrigamiEngine {
   attachDb(db: OrigamiDb | null, onPersistenceError?: (error: unknown) => void): void {
     this.db = db;
     this.onPersistenceError = onPersistenceError ?? null;
+    this.invalidateData();
   }
 
-  refresh(entries: readonly SessionEntryLike[]): void {
-    this.state.refresh(entries);
+  refresh(entries: readonly SessionEntryLike[], verify = false): void {
+    this.state.refresh(entries, verify);
+    this.syncFromState();
+  }
+
+  /** Re-bind the journal-derived message list when the journal changed. */
+  syncFromState(): void {
+    if (this.state.version === this.boundVersion) return;
+    this.ingest(this.state.messages);
+    this.boundVersion = this.state.version;
+  }
+
+  private invalidateData(): void {
+    this.dataVersion++;
+    this.roundsCache = null;
+    this.reportCache = null;
   }
 
   ingest(messages: readonly KernelMessage[]): void {
     const bound = this.state.bind(messages);
-    const turns = bound.map((m) => m.turn);
-    this.activeTurn = turns.length > 0 ? Math.max(...turns) : 1;
+    let maxTurn = 0;
+    for (const m of bound) if (m.turn > maxTurn) maxTurn = m.turn;
+    this.activeTurn = bound.length > 0 ? maxTurn : 1;
     const head = bound.find((m) => !m.ephemeral);
     this.pinnedHeadRef = head ? head.ref : null;
     const tailTurn = protectedTailTurn(
@@ -220,11 +244,11 @@ export class OrigamiEngine {
   }
 
   outboundEstimateTokens(messages: readonly unknown[]): OutboundEstimate {
-    return estimateOutboundTokens(messages, this.context(), this.reclaimedSinceRound);
+    return estimateOutboundTokens(messages, this.context());
   }
 
   private context(): EngineContext {
-    return { state: this.state, config: this.config, host: this.host, db: this.db, now: this.now, activeTurn: this.activeTurn, protectedFromTurn: this.protectedFromTurn, bookkeepingRefs: this.bookkeepingRefs, pinnedHeadRef: this.pinnedHeadRef };
+    return { state: this.state, config: this.config, host: this.host, db: this.db, now: this.now, activeTurn: this.activeTurn, protectedFromTurn: this.protectedFromTurn, bookkeepingRefs: this.bookkeepingRefs, pinnedHeadRef: this.pinnedHeadRef, reclaimedSinceRound: this.reclaimedSinceRound };
   }
 
   onTurnEnd(): void {
@@ -439,7 +463,13 @@ export class OrigamiEngine {
       } catch (e) {
         return fail(e instanceof Error ? e.message : String(e));
       }
-      if (!projection.ok) return fail(projection.error);
+      if (!projection.ok) {
+        if (projection.error === ALREADY_FOLDED) {
+          const covering = this.coveringBlock(parseRangeList(spec.range)[0]?.start);
+          if (covering) return fail(`range is already covered by block ${covering}; unfold it first or fold a different range`);
+        }
+        return fail(projection.error);
+      }
 
       let refs: string[];
       let ranges: RefRange[];
@@ -465,7 +495,12 @@ export class OrigamiEngine {
             return fail(`overlaps fold ${prior} in this batch at ${r}; fold ranges in one call must be disjoint`);
           }
         }
-        if (refs.length === 0) return fail("range covers only messages already folded or claimed by an earlier fold in this batch");
+        if (refs.length === 0) {
+          const covering = this.coveringBlock(projection.projected.refs[0]);
+          return fail(covering
+            ? `range is already covered by block ${covering}; unfold it first or fold a different range`
+            : "range covers only messages already folded or claimed by an earlier fold in this batch");
+        }
         ranges = rangesFromRefs(refs);
         tokensBefore = this.state.tokensFor(refs.filter((r) => !this.bookkeepingRefs.has(r)));
         replacedTokens = tokensBefore;
@@ -630,17 +665,43 @@ export class OrigamiEngine {
     return { ok: true, planned };
   }
 
-  /** Apply a validated batch: journal, tree, persistence, and nudge bookkeeping. */
+  /**
+   * Apply a validated batch: journal, tree, persistence, and nudge bookkeeping.
+   *
+   * The journal append is the commit point for each fold. Validation is already all-or-nothing
+   * (`planFoldBatch`), so a host write failure can only truncate the batch: every fold whose op
+   * was recorded is applied, persisted, and accounted for, and the caller is told which ones
+   * committed instead of seeing an exception for a fold that partially happened.
+   */
   commitFoldBatch(planned: readonly PlannedFold[]): FoldResult {
     const tree = this.state.tree;
     const created: FoldCreatedBlock[] = [];
     const snapped: string[] = [];
     let reclaimed = 0;
-    for (const p of planned) {
+
+    // One batch per commit: its folds share a single prefix invalidation, so the cache report
+    // splits the measured re-pay across them instead of crediting the first and last only.
+    const batchId = planned[0]?.block.id;
+    const at = Date.now();
+    if (batchId) for (const p of planned) p.block.batchId = batchId;
+    const ops = planned.map((p) => makeFoldOp(p.block, at, batchId));
+    let committed = 0;
+    let journalError: string | null = null;
+    for (const op of ops) {
+      try {
+        this.host.appendEvent(op);
+        committed++;
+      } catch (error) {
+        journalError = error instanceof Error ? error.message : String(error);
+        break;
+      }
+    }
+
+    for (let i = 0; i < committed; i++) {
+      const p = planned[i]!;
       if (p.snapped) snapped.push(...p.snapped);
       const replaced = p.block.tier === 1 ? p.block.tokensBefore : p.block.children.reduce((s, c) => s + (tree.get(c)?.tokensAfter ?? 0), 0);
-      this.host.appendEvent(makeFoldOp(p.block));
-      tree.apply({ op: "fold", block: p.block });
+      tree.apply(ops[i]!);
       created.push({
         id: p.block.id,
         tier: p.block.tier,
@@ -652,22 +713,37 @@ export class OrigamiEngine {
       });
       reclaimed += Math.max(0, replaced - p.block.tokensAfter);
     }
-    this.persistFoldBatch(planned);
+    if (committed > 0) {
+      this.persistFoldBatch(planned.slice(0, committed));
+      this.invalidateData();
+    }
+
     // A block just folded must not be "recalled" into the turn that folded it.
     for (const c of created) {
       this.foldedInTurn.set(c.id, this.activeTurn);
     }
     this.reclaimedSinceRound += reclaimed;
 
-    this.pendingFoldAttribution = created[created.length - 1]!.id;
-    this.activeNudge = null;
-    this.emergencyWarningsIgnored = 0;
-    this.emergencyOutstanding = false;
-    // A fold answers the outstanding nudge: growth re-anchors, and a merge resets its tier's mass backoff.
-    this.lastEfficiencyAtGrowth = null;
-    this.lastFoldTurn = this.activeTurn;
-    for (const p of planned) {
-      if (p.block.tier > 1) this.lastPromotionAtMass[(p.block.tier - 1) as 1 | 2] = null;
+    if (created.length > 0) {
+      this.pendingFoldAttribution = created[created.length - 1]!.id;
+      this.activeNudge = null;
+      this.emergencyWarningsIgnored = 0;
+      this.emergencyOutstanding = false;
+      // A fold answers the outstanding nudge: growth re-anchors, and a merge resets its tier's mass backoff.
+      this.lastEfficiencyAtGrowth = null;
+      this.lastFoldTurn = this.activeTurn;
+      for (const p of planned.slice(0, committed)) {
+        if (p.block.tier > 1) this.lastPromotionAtMass[(p.block.tier - 1) as 1 | 2] = null;
+      }
+    }
+
+    if (journalError !== null) {
+      return {
+        ok: false,
+        error: `journal write failed after ${committed}/${planned.length} folds: ${journalError}`,
+        foldIndex: committed,
+        ...(created.length > 0 ? { committed: created.map((c) => c.id) } : {}),
+      };
     }
     return {
       ok: true,
@@ -745,6 +821,18 @@ export class OrigamiEngine {
     return [...inherited, ...fresh];
   }
 
+  /** Id of the live block whose coverage includes `ref`, if any. */
+  private coveringBlock(ref: string | undefined): string | null {
+    if (!ref) return null;
+    const n = parseRef(ref);
+    for (const b of this.state.tree.live()) {
+      for (const r of b.ranges) {
+        if (n >= parseRef(r.start) && n <= parseRef(r.end)) return b.id;
+      }
+    }
+    return null;
+  }
+
   /** Newest non-ephemeral ref currently bound (the fold-time anchor for growth). */
   private newestRef(): string | null {
     let best = 0;
@@ -787,6 +875,7 @@ export class OrigamiEngine {
       manifest: JSON.stringify(b.manifest ?? EMPTY_MANIFEST),
       ledger: JSON.stringify(b.ledger ?? []),
       facts: blockFactsForIndex(b),
+      batch_id: b.batchId ?? null,
     };
   }
 
@@ -802,6 +891,7 @@ export class OrigamiEngine {
   private disablePersistence(error: unknown): void {
     if (!this.db) return;
     this.db = null;
+    this.invalidateData();
     this.onPersistenceError?.(error);
   }
 
@@ -883,20 +973,27 @@ export class OrigamiEngine {
     for (const r of block.ranges) refs.push(...expandRefRange(r.start, r.end));
     const unfolded: string[] = [];
     const queue = [id];
-    while (queue.length > 0) {
-      const next = tree.get(queue.shift()!)!;
-      this.host.appendEvent(makeUnfoldOp(next.id));
-      tree.apply({ op: "unfold", id: next.id });
-      unfolded.push(next.id);
-      const changed = [next.id];
-      for (const c of next.children) {
-        const child = tree.get(c);
-        if (!child) continue;
-        changed.push(c);
-        if (opts.deep && child.status === "active") queue.push(c);
+    try {
+      while (queue.length > 0) {
+        const next = tree.get(queue.shift()!)!;
+        const op = makeUnfoldOp(next.id);
+        this.host.appendEvent(op);
+        tree.apply(op);
+        unfolded.push(next.id);
+        const changed = [next.id];
+        for (const c of next.children) {
+          const child = tree.get(c);
+          if (!child) continue;
+          changed.push(c);
+          if (opts.deep && child.status === "active") queue.push(c);
+        }
+        this.persistStatuses(changed);
       }
-      this.persistStatuses(changed);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: `journal write failed after ${unfolded.length} unfold(s): ${message}` };
     }
+    if (unfolded.length > 0) this.invalidateData();
     return { ok: true, block, refs, unfolded };
   }
 
@@ -909,15 +1006,6 @@ export class OrigamiEngine {
   invariants(): InvariantViolation[] {
     const bound = this.state.bound;
     return checkInvariants(this.state.tree.all(), bound.length > 0 ? new Set(bound.map((m) => m.ref)) : undefined);
-  }
-
-  executeTier(id: string, tier: 1 | 2 | 3, topic: string, summary: string): { ok: true; block: Block } | { ok: false; error: string } {
-    const block = this.state.tree.get(id);
-    if (!block) return { ok: false, error: `unknown block: ${id}` };
-    const op = makeTierOp(id, tier, topic, summary, block.tokensBefore, block.tokensAfter);
-    this.host.appendEvent(op);
-    this.state.tree.apply(op);
-    return { ok: true, block: this.state.tree.get(id)! };
   }
 
   status(): StatusReport {
@@ -1153,12 +1241,14 @@ export class OrigamiEngine {
         this.recommendedRanges().map((r) => ({ start: r.start, end: r.end })),
       ),
       foldGate: { ...(this.lastFoldTiming ?? this.foldTiming(this.recommendedRanges())), paybackHorizonTurns: this.config.paybackHorizonTurns },
+      ...(this.blockMirrorMismatch ? { blockMirrorMismatch: true } : {}),
     };
   }
 
   cacheRounds(): CacheRound[] {
     if (!this.db) return [];
-    return this.db.roundsForSession(this.host.sessionId()).map((r) => ({
+    if (this.roundsCache?.version === this.dataVersion) return this.roundsCache.rounds;
+    const rounds = this.db.roundsForSession(this.host.sessionId()).map((r) => ({
       ts: r.ts,
       totalIn: r.total_in,
       cacheRead: r.cache_read,
@@ -1166,8 +1256,10 @@ export class OrigamiEngine {
       foldEventId: r.fold_event_id,
       hostRewrite: r.host_rewrite === 1,
       price: { cacheRead: r.cache_read_price ?? 0.1, output: r.output_price ?? 4, cacheWrite: r.cache_write_price ?? 1 },
-      priceSource: (r.price_source ?? "fallback") as import("./kernel/cache-report.ts").PriceSource,
+      priceSource: (r.price_source ?? "fallback") as PriceSource,
     }));
+    this.roundsCache = { version: this.dataVersion, rounds };
+    return rounds;
   }
 
   recordRound(round: CacheRound): void {
@@ -1200,12 +1292,16 @@ export class OrigamiEngine {
       });
       this.pendingHostRewrite = false;
       this.pendingFoldAttribution = null;
+      this.invalidateData();
     } catch (error) {
       this.disablePersistence(error);
     }
   }
 
   cacheReport(): CacheReport {
+    const price = this.price();
+    const priceKey = `${price.cacheRead}:${price.output}:${price.cacheWrite}`;
+    if (this.reportCache?.version === this.dataVersion && this.reportCache.priceKey === priceKey) return this.reportCache.report;
     const samples: CacheSample[] = this.cacheRounds().map((r) => ({
       at: r.ts,
       input: r.totalIn,
@@ -1216,28 +1312,42 @@ export class OrigamiEngine {
       price: r.price,
       priceSource: r.priceSource,
     }));
+    // The journal-derived tree is authoritative; the DB is a mirror. Merge by id with the tree
+    // winning instead of preferring whichever source happens to be non-empty: after a partial
+    // commit or a disabled persistence session, a DB prefix would otherwise silently replace
+    // the complete block set and corrupt the economics.
+    const treeBlocks = this.state.tree.all();
     const dbBlocks = this.db ? this.db.blocksForSession(this.host.sessionId()) : [];
-    const infos: FoldBlockInfo[] =
-      dbBlocks.length > 0
-        ? dbBlocks.map((b) => ({
-            id: b.block_id,
-            createdAt: b.created_at,
-            tier: (b.tier === 2 || b.tier === 3 ? b.tier : 1) as 1 | 2 | 3,
-            tokensBefore: b.tokens_before,
-            tokensAfter: b.tokens_after,
-            children: parseChildIds(b.children),
-            topic: b.topic,
-          }))
-        : this.state.tree.all().map((b) => ({
-            id: b.id,
-            createdAt: b.createdAt,
-            tier: b.tier,
-            tokensBefore: b.tokensBefore,
-            tokensAfter: b.tokensAfter,
-            children: b.children,
-            topic: b.topic,
-          }));
-    return buildCacheReport(samples, foldEventsFromBlocks(infos), this.price());
+    const byId = new Map<string, FoldBlockInfo>();
+    for (const b of dbBlocks) {
+      byId.set(b.block_id, {
+        id: b.block_id,
+        createdAt: b.created_at,
+        tier: (b.tier === 2 || b.tier === 3 ? b.tier : 1) as 1 | 2 | 3,
+        tokensBefore: b.tokens_before,
+        tokensAfter: b.tokens_after,
+        children: parseChildIds(b.children),
+        topic: b.topic,
+        batchId: b.batch_id ?? null,
+      });
+    }
+    for (const b of treeBlocks) {
+      byId.set(b.id, {
+        id: b.id,
+        createdAt: b.createdAt,
+        tier: b.tier,
+        tokensBefore: b.tokensBefore,
+        tokensAfter: b.tokensAfter,
+        children: b.children,
+        topic: b.topic,
+        batchId: b.batchId ?? null,
+      });
+    }
+    const infos = [...byId.values()].sort((a, b) => a.createdAt - b.createdAt);
+    this.blockMirrorMismatch = dbBlocks.length > 0 && byId.size !== treeBlocks.length;
+    const report = buildCacheReport(samples, foldEventsFromBlocks(infos), price);
+    this.reportCache = { version: this.dataVersion, priceKey, report };
+    return report;
   }
 
   private price(): PriceProfile {

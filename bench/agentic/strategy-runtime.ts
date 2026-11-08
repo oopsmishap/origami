@@ -15,7 +15,7 @@ import { OrigamiEngine } from "../../src/engine.ts";
 import { parseRangeList } from "../../src/engine-ranges.ts";
 import { configFromPreset, type OrigamiConfig, type Preset } from "../../src/config.ts";
 import { openDb, type OrigamiDb } from "../../src/persist/db.ts";
-import { JOURNAL_ENTRY_TYPE } from "../../src/persist/journal.ts";
+import { JOURNAL_ENTRY_TYPE } from "../../src/kernel/journal.ts";
 import { expandRefRange } from "../../src/kernel/render.ts";
 import { entryMessage } from "../../src/kernel/registry.ts";
 import type { KernelMessage } from "../../src/kernel/types.ts";

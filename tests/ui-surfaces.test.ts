@@ -9,7 +9,7 @@ import type { TspChartProps } from "@oh-my-pi/pi-wire";
 import origamiExtension from "../src/index.ts";
 import { configFromPreset } from "../src/config.ts";
 import { openDb } from "../src/persist/db.ts";
-import type { JournalOp } from "../src/persist/journal.ts";
+import type { JournalOp } from "../src/kernel/journal.ts";
 import { OrigamiRuntime } from "../src/runtime.ts";
 import { SessionRegistry, sessionRegistry } from "../src/sessions.ts";
 import { OrigamiFoldMessageComponent } from "../src/tools/display.ts";

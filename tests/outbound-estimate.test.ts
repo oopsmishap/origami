@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { OrigamiEngine } from "../src/engine.ts";
 import { configFromPreset } from "../src/config.ts";
 import { messageFacts } from "../src/kernel/message-facts.ts";
-import { JOURNAL_ENTRY_TYPE } from "../src/persist/journal.ts";
+import { JOURNAL_ENTRY_TYPE } from "../src/kernel/journal.ts";
 import type { KernelMessage } from "../src/kernel/types.ts";
 
 describe("outbound estimate after a fold", () => {

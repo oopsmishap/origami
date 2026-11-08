@@ -4,7 +4,7 @@ import type { FoldTiming } from "./kernel/fold-timing.ts";
 import type { InvariantViolation } from "./kernel/invariants.ts";
 import type { SessionState } from "./kernel/state.ts";
 import type { OrigamiDb } from "./persist/db.ts";
-import type { JournalOp } from "./persist/journal.ts";
+import type { JournalOp } from "./kernel/journal.ts";
 
 export interface HostPort {
   sessionId(): string;
@@ -25,6 +25,8 @@ export interface EngineContext {
   protectedFromTurn: number;
   bookkeepingRefs: ReadonlySet<string>;
   pinnedHeadRef: string | null;
+  /** Tokens reclaimed by folds since the host's last provider round. */
+  reclaimedSinceRound: number;
 }
 
 export interface FoldSpec {
@@ -41,7 +43,7 @@ export interface FoldKeep { kind: "constraint" | "decision" | "objective"; text:
 export interface FoldParams { folds: FoldSpec[]; tier?: 1 | 2 | 3; force?: boolean }
 export interface FoldCreatedBlock { id: string; tier: 1 | 2 | 3; refs: string[]; tokensBefore: number; tokensAfter: number; topic: string; missing: string[] }
 export interface FoldOutcome { blocks: FoldCreatedBlock[]; tokensReclaimed: number; foldCount: number; snapped?: string[] }
-export type FoldError = { ok: false; error: string; foldIndex: number };
+export type FoldError = { ok: false; error: string; foldIndex: number; /** Block ids committed before a host write failure. */ committed?: string[] };
 export type FoldResult = { ok: true; outcome: FoldOutcome } | FoldError;
 export interface PlannedFold { block: Block; refs: string[]; snapped?: string[] }
 
@@ -53,6 +55,8 @@ export interface StatusReport {
   tokenSplit: { overhead: number; system: number; conversation: number; tools: number; summaries: number; live: number; foldedSavings: number };
   growthSinceFold: number; growthStep: number; compressibleTokens: number; compressibleFloor: number;
   blocks: StatusBlockRow[]; zones: StatusZoneRow[]; folded: number; live: number; nudgeKind: string; protectedFromTurn: number;
+  /** The persisted block mirror disagrees with the journal-derived tree. */
+  blockMirrorMismatch?: boolean;
   invariantViolations: InvariantViolation[]; vault: StatusVaultReport;
   cacheCollapse?: { collapsed: boolean; reason: string | null }; uncoveredRuns?: import("./kernel/project-unit.ts").UncoveredRun[];
   foldGate: FoldTiming & { paybackHorizonTurns: number };

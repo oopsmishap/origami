@@ -170,4 +170,29 @@ describe("Prompt Cache Reconciliation & Economics Engine (#800)", () => {
     expect(report.summary).toBeDefined();
     expect(Array.isArray(report.folds)).toBe(true);
   });
+
+  it("splits one batch's measured re-pay across its folds by replaced mass", () => {
+    const folds: FoldEvent[] = [
+      { id: "b1", at: 1000, tier: 1, replacedTokens: 40_000, summaryTokens: 500, batchId: "b1" },
+      { id: "b2", at: 1000, tier: 1, replacedTokens: 20_000, summaryTokens: 500, batchId: "b1" },
+      { id: "b3", at: 1000, tier: 1, replacedTokens: 20_000, summaryTokens: 500, batchId: "b1" },
+    ];
+    const samples: CacheSample[] = [
+      { at: 900, input: 100_000, cached: 95_000 },
+      // One cold round after the batch: 60K growth, 140K missed, 80K fold re-pay.
+      { at: 1100, input: 160_000, cached: 20_000, foldEventId: "b3" },
+      { at: 1200, input: 160_000, cached: 155_000 },
+    ];
+
+    const report = buildCacheReport(samples, folds);
+    const byId = new Map(report.folds.map((f) => [f.id, f]));
+    const total = report.folds.reduce((sum, f) => sum + f.T, 0);
+
+    expect(report.summary.compRepay).toBe(80_000);
+    expect(total).toBeCloseTo(report.summary.compRepay, 6);
+    for (const f of report.folds) expect(f.T).toBeGreaterThan(0);
+    expect(byId.get("b1")!.T).toBeCloseTo(40_000, 6);
+    expect(byId.get("b2")!.T).toBeCloseTo(20_000, 6);
+    expect(byId.get("b3")!.T).toBeCloseTo(20_000, 6);
+  });
 });

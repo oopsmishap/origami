@@ -4,7 +4,7 @@ import { SessionRegistry } from "../src/sessions.ts";
 import { OrigamiRuntime } from "../src/runtime.ts";
 import { openDb } from "../src/persist/db.ts";
 import { configFromPreset } from "../src/config.ts";
-import type { JournalOp } from "../src/persist/journal.ts";
+import type { JournalOp } from "../src/kernel/journal.ts";
 import { digestRefs } from "../src/candidates.ts";
 import { unlinkSync } from "node:fs";
 
@@ -274,6 +274,8 @@ describe("Standalone Web Dashboard Server", () => {
       // 6. POST /api/unfold (artifact file mode)
       // First ensure block is registered in engine fold tree for unfold
       runtime.engine.state.tree.apply({
+        v: 1,
+        at: Date.now(),
         op: "fold",
         block: {
           id: "b1",

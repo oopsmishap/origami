@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { planElision, selectElideCandidates, applyElision, elideLabel } from "../src/kernel/guard.ts";
 import { OrigamiEngine } from "../src/engine.ts";
 import { configFromPreset } from "../src/config.ts";
-import type { JournalOp } from "../src/persist/journal.ts";
+import type { JournalOp } from "../src/kernel/journal.ts";
 import type { KernelMessage } from "../src/kernel/types.ts";
 import { messageFacts } from "../src/kernel/message-facts.ts";
 
@@ -53,10 +53,34 @@ describe("Emergency guard test (overflow elision)", () => {
       { ref: "m00005", index: 4, role: "assistant", tokens: 6_000, ephemeral: false, turn: 2 },
     ];
 
-    const candidates = selectElideCandidates(bound);
+    const candidates = selectElideCandidates(bound, {
+      foldedRefs: new Set<string>(),
+      bookkeepingRefs: new Set<string>(),
+      protectedFromTurn: 99,
+      activeTurn: 0,
+    });
     // ONLY the toolResult is selected! Assistant and user are excluded.
     expect(candidates.length).toBe(1);
     expect(candidates[0]!.ref).toBe("m00004");
+  });
+
+  it("excludes folded, bookkeeping, protected-tail and active-turn tool results", () => {
+    const bound = [
+      { ref: "m00003", index: 2, role: "toolResult", tokens: 900, ephemeral: false, turn: 2 },
+      { ref: "m00004", index: 3, role: "toolResult", tokens: 900, ephemeral: false, turn: 3 },
+      { ref: "m00005", index: 4, role: "toolResult", tokens: 900, ephemeral: false, turn: 4 },
+      { ref: "m00006", index: 5, role: "toolResult", tokens: 900, ephemeral: false, turn: 5 },
+      { ref: "m00007", index: 6, role: "toolResult", tokens: 900, ephemeral: false, turn: 6 },
+    ];
+
+    const candidates = selectElideCandidates(bound, {
+      foldedRefs: new Set(["m00004"]),
+      bookkeepingRefs: new Set(["m00005"]),
+      protectedFromTurn: 5,
+      activeTurn: 6,
+    });
+
+    expect(candidates.map((c) => c.ref)).toEqual(["m00003"]);
   });
 
   it("applies elision labels cleanly to tool results while preserving assistant signed thinking", () => {
@@ -99,7 +123,7 @@ describe("Emergency guard test (overflow elision)", () => {
     expect(out[2]!.content).toBe("[#m00003 · 20,000t · elided]");
   });
 
-  it("engine render integrates emergency elision when projected tokens exceed threshold", () => {
+  it("engine render integrates emergency elision without touching the protected tail", () => {
     const journal: JournalOp[] = [];
     const entries = [
       { type: "message", id: "m0", message: { role: "system", content: "system prompt" } },
@@ -107,9 +131,14 @@ describe("Emergency guard test (overflow elision)", () => {
       { type: "message", id: "m2", message: { role: "assistant", content: "prepared" } },
       { type: "message", id: "m3", message: { role: "user", content: "run command" } },
       { type: "message", id: "m4", message: { role: "assistant", content: "running..." } },
-      { type: "message", id: "m5", message: { role: "toolResult", content: "output line 1\noutput line 2\n" + "X".repeat(5000) } },
+      { type: "message", id: "m5", message: { role: "toolResult", content: "old output\n" + "X".repeat(5000) } },
       { type: "message", id: "m6", message: { role: "assistant", content: "done" } },
       { type: "message", id: "m7", message: { role: "user", content: "next prompt" } },
+      { type: "message", id: "m8", message: { role: "toolResult", content: "recent output\n" + "Y".repeat(6000) } },
+      { type: "message", id: "m9", message: { role: "assistant", content: "a" } },
+      { type: "message", id: "m10", message: { role: "assistant", content: "b" } },
+      { type: "message", id: "m11", message: { role: "assistant", content: "c" } },
+      { type: "message", id: "m12", message: { role: "user", content: "latest prompt" } },
     ];
 
     let projected = 96_000;
@@ -150,16 +179,85 @@ describe("Emergency guard test (overflow elision)", () => {
       text,
     });
 
-    // 1. With projectedTokens at 96K (>= 95K elideFillPct): emergency elision fires
+    // 1. With projectedTokens at 96K (>= 95K elideFillPct): the old tool result is elided.
     const elidedRender = engine.render(entries.map((e) => e.message), makeFold);
-    const toolMsg = elidedRender[5] as { role: string; content: string };
-    expect(toolMsg.role).toBe("toolResult");
-    expect(toolMsg.content).toContain("· elided]");
+    const oldTool = elidedRender[5] as { role: string; content: string };
+    expect(oldTool.role).toBe("toolResult");
+    expect(oldTool.content).toContain("· elided]");
 
-    // 2. If projectedTokens drops back to 50K (< 85K): no elision fires
+    // The tool result inside the protected tail stays verbatim.
+    const recentTool = elidedRender[8] as { role: string; content: string };
+    expect(recentTool.content).toContain("recent output");
+
+    // 2. If projectedTokens drops back to 50K (< 95K): no elision fires
     projected = 50_000;
     const normalRender = engine.render(entries.map((e) => e.message), makeFold);
     const normalToolMsg = normalRender[5] as { role: string; content: string };
-    expect(normalToolMsg.content).toContain("output line 1");
+    expect(normalToolMsg.content).toContain("old output");
+  });
+
+  it("does not elide after a fold reclaimed enough to clear the emergency threshold", () => {
+    const journal: JournalOp[] = [];
+    const M = (role: string, content: string) => ({ type: "message", message: { role, content } });
+    const entries = [
+      M("user", "task one"),
+      M("assistant", "working one"),
+      M("user", "task two"),
+      M("assistant", "working two"),
+      M("toolResult", "big output\n" + "X".repeat(20_000)),
+      M("assistant", "done two"),
+      M("user", "task three"),
+      M("assistant", "three a"),
+      M("assistant", "three b"),
+      M("assistant", "three c"),
+      M("assistant", "three d\n" + "Y".repeat(6_000)),
+      M("user", "latest"),
+    ];
+
+    // Host anchor still reports the pre-fold fill: 96% of the window.
+    const host = {
+      sessionId: () => "sess-stale",
+      appendEvent: (op: JournalOp) => journal.push(op),
+      saveArtifact: async () => "/tmp/art",
+      windowTokens: () => 100_000,
+      projectedTokens: () => 96_000,
+      entries: () => entries,
+    };
+
+    const engine = new OrigamiEngine({
+      host,
+      entries,
+      modelId: "test-model",
+      config: configFromPreset("balanced"),
+      countFn: (t) => t.length,
+    });
+
+    engine.refresh(entries);
+    const facts: KernelMessage[] = [];
+    for (const e of entries) {
+      const f = messageFacts(e.message);
+      if (f) facts.push(f);
+    }
+    engine.ingest(facts);
+
+    // Fold the whole second turn: the re-paid prefix correction must clear the elision gate.
+    const result = engine.executeFold({
+      folds: [{ range: "m00003..m00006", topic: "t", summary: "s" }],
+      tier: 1,
+      force: true,
+    });
+    expect(result.ok).toBe(true);
+
+    const rendered = engine.render(entries.map((e) => e.message), (text: string, blockId: string) => ({
+      role: "custom",
+      customType: "origami:fold",
+      blockId,
+      text,
+    })) as { role: string; content: string }[];
+
+    // The folded tool result is replaced by the block, never by an elide label.
+    for (const message of rendered) {
+      expect(typeof message.content === "string" ? message.content : "").not.toContain("· elided]");
+    }
   });
 });

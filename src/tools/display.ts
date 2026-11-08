@@ -594,6 +594,10 @@ export function formatStatusReport(report: StatusReport): string {
           ? "Fold gate: blocked mid-task (waiting for a user turn, idle cache, or 2× growth step)"
           : `Fold gate: blocked by cost (break-even ${gate.breakevenTurns === null ? "never" : gate.breakevenTurns.toFixed(1)} turns > ${gate.paybackHorizonTurns})`,
   );
+  if (report.blockMirrorMismatch) {
+    lines.push("");
+    lines.push("warning: persisted block mirror disagrees with the journal; economics used the union (journal wins)");
+  }
   if (report.invariantViolations.length > 0) {
     lines.push("");
     lines.push("invariant violations:");

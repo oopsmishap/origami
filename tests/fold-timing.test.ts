@@ -93,6 +93,26 @@ describe("assessFoldTiming", () => {
     expect(highGrowth.allowed).toBe(true);
     expect(highGrowth.blockedBy).toBeNull();
   });
+
+  it("keeps the gate open at a zero cache-read price when the summary is smaller", () => {
+    const zeroPrice = { cacheRead: 0, output: 4, cacheWrite: 1 };
+    for (const growth of [0, 100_000, 10_000_000]) {
+      const t = assessFoldTiming({ ...base, price: zeroPrice, growthSinceFoldTokens: growth });
+      expect(t.allowed).toBe(true);
+      expect(t.blockedBy).toBeNull();
+      expect(t.breakevenTurns).toBeNull();
+    }
+  });
+
+  it("still blocks a fold whose summary is not smaller than its source at a zero price", () => {
+    const t = assessFoldTiming({
+      ...base,
+      summaryRatio: 1.2,
+      price: { cacheRead: 0, output: 4, cacheWrite: 1 },
+    });
+    expect(t.allowed).toBe(false);
+    expect(t.blockedBy).toBe("cost");
+  });
 });
 
 describe("engine fold gate", () => {

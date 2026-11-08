@@ -34,7 +34,8 @@ function entriesFrom(raws: readonly RawMessage[]): SessionEntryLike[] {
 describe("RefRegistry", () => {
   it("assigns ordinal refs by journal message order", () => {
     const reg = new RefRegistry(entriesFrom([raw("user", "a"), raw("assistant", "b"), raw("toolResult", "c", "t1")]));
-    expect(reg.entries.map((e) => e.ref)).toEqual([1, 2, 3]);
+    expect([...reg.byEntryId.values()]).toEqual([1, 2, 3]);
+    expect(reg.messages).toHaveLength(3);
     expect(reg.byToolCallId.get("t1")).toBe(3);
     expect(reg.nextRef).toBe(4);
   });

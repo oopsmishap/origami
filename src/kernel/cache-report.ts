@@ -34,6 +34,8 @@ export interface FoldEvent {
   replacedTokens: number;
   summaryTokens: number;
   topic?: string;
+  /** Folds from one commit share a batch and one prefix invalidation. */
+  batchId?: string | null;
 }
 
 /** Price profile in units where 1 unit = 1 uncached input token. */
@@ -84,6 +86,7 @@ export interface FoldBlockInfo {
   tokensAfter: number;
   children: readonly string[];
   topic?: string;
+  batchId?: string | null;
 }
 
 /** Derive fold events from blocks; tier-2/3 replace their children's summaries, not raw source. */
@@ -97,6 +100,7 @@ export function foldEventsFromBlocks(blocks: readonly FoldBlockInfo[]): FoldEven
       b.tier === 1 ? b.tokensBefore : b.children.reduce((sum, c) => sum + (byId.get(c)?.tokensAfter ?? 0), 0),
     summaryTokens: b.tokensAfter,
     topic: b.topic,
+    batchId: b.batchId ?? null,
   }));
 }
 
@@ -270,6 +274,23 @@ export function buildCacheReport(
     }
   }
 
+  // A batch shares one prefix invalidation: attribute its measured re-pay to each member in
+  // proportion to the source it replaced, so no middle fold of a batch reports T = 0.
+  const batchKey = (f: FoldEvent): string => f.batchId ?? f.id;
+  const batchRepay = new Map<string, number>();
+  const batchMass = new Map<string, number>();
+  for (const f of folds) {
+    const key = batchKey(f);
+    batchRepay.set(key, (batchRepay.get(key) ?? 0) + (foldRepayMap.get(f.id) ?? 0));
+    batchMass.set(key, (batchMass.get(key) ?? 0) + f.replacedTokens);
+  }
+  const attributableRepay = (f: FoldEvent): number => {
+    const key = batchKey(f);
+    const total = batchRepay.get(key) ?? 0;
+    const mass = batchMass.get(key) ?? 0;
+    return mass > 0 ? (total * f.replacedTokens) / mass : total;
+  };
+
   // Calculate per-fold economics
   const foldEconomics: FoldEconomics[] = [];
   for (let j = 0; j < folds.length; j++) {
@@ -308,7 +329,7 @@ export function buildCacheReport(
 
     const S = f.replacedTokens;
     const sigma = f.summaryTokens;
-    const T = foldRepayMap.get(f.id) ?? 0;
+    const T = attributableRepay(f);
     const pricedSample = sampleIdx >= 0 ? samples[sampleIdx] : samples[samples.length - 1];
     const foldPrice = pricedSample?.price ?? price;
     const { oneTimeCostUnits, perTurnSavingUnits, breakevenTurns } = foldBreakeven(S, sigma, T, foldPrice);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { OrigamiEngine } from "../src/engine.ts";
 import { configFromPreset, type OrigamiConfig } from "../src/config.ts";
-import { JOURNAL_ENTRY_TYPE, type JournalOp } from "../src/persist/journal.ts";
+import { JOURNAL_ENTRY_TYPE, type JournalOp } from "../src/kernel/journal.ts";
 import type { KernelMessage } from "../src/kernel/types.ts";
 import { messageFacts } from "../src/kernel/message-facts.ts";
 import { openDb, type OrigamiDb } from "../src/persist/db.ts";

@@ -1,33 +1,7 @@
-import type { EngineContext, FoldError, FoldParams, FoldResult, PlannedFold } from "./engine-types.ts";
+import type { EngineContext } from "./engine-types.ts";
 import { extractManifest } from "./kernel/manifest.ts";
 import type { BoundMessage, RefRange } from "./kernel/types.ts";
 import { parseRef } from "./kernel/types.ts";
-
-/** Dependencies for fold operations. Callbacks keep façade lifecycle state explicit. */
-export interface FoldOperationInput {
-  context: Readonly<EngineContext>;
-  appendEvent?(event: unknown): void;
-  disablePersistence?(error: unknown): void;
-  setFoldAttribution?(blockId: string): void;
-  resetActiveNudge?(): void;
-  setFoldTurn?(turn: number): void;
-  updateBackoff?(tier: 1 | 2 | 3): void;
-}
-
-export interface FoldOperationDelegate {
-  plan(params: FoldParams): { ok: true; planned: PlannedFold[] } | FoldError;
-  commit(planned: readonly PlannedFold[]): FoldResult;
-}
-
-/** Public operation boundary used by the compatibility façade. */
-export function planFoldBatch(_input: FoldOperationInput, params: FoldParams, delegate: FoldOperationDelegate): { ok: true; planned: PlannedFold[] } | FoldError {
-  return delegate.plan(params);
-}
-
-/** Public operation boundary used by the compatibility façade. */
-export function commitFoldBatch(_input: FoldOperationInput, planned: readonly PlannedFold[], delegate: FoldOperationDelegate): FoldResult {
-  return delegate.commit(planned);
-}
 
 export function archiveDigest(
   context: Readonly<EngineContext>,

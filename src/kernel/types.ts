@@ -67,6 +67,8 @@ export interface Block {
   createdAt: number;
   /** Newest message ref present when the fold happened; baseline for growth accounting. */
   anchorRef: string | null;
+  /** Folds committed in one call share a batch: they share one prefix invalidation. */
+  batchId?: string;
   /** Deterministic facts (paths, symbols, errors, commits, tools) extracted from the covered source. */
   manifest?: BlockManifest;
   /** Manifest items the summary did not mention; rendered as "Also covered". */

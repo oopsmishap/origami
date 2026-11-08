@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { JOURNAL_ENTRY_TYPE, extractOps, makeFoldOp, makeUnfoldOp, parseJournalOp } from "../src/persist/journal.ts";
+import { JOURNAL_ENTRY_TYPE, extractOps, makeFoldOp, makeUnfoldOp, parseJournalOp } from "../src/kernel/journal.ts";
 import { BlockTree } from "../src/kernel/blocks.ts";
 import type { Block } from "../src/kernel/types.ts";
 

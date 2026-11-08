@@ -15,7 +15,7 @@ import { extractManifest, pathArguments } from "../src/kernel/manifest.ts";
 import { matchRecallHints } from "../src/kernel/recall-hints.ts";
 import type { SessionEntryLike } from "../src/kernel/state.ts";
 import { parseRef } from "../src/kernel/types.ts";
-import { JOURNAL_ENTRY_TYPE } from "../src/persist/journal.ts";
+import { JOURNAL_ENTRY_TYPE } from "../src/kernel/journal.ts";
 import { kernelMessagesFromEntries } from "../src/runtime.ts";
 import { createReplayPolicyState, decideReplayPolicy, type ReplayPolicy } from "./replay-policy.ts";
 import { cachedFoldSpec, replaySummaryRequest, type ReplaySummaryRecord, type ReplaySummaryRequest, type ReplaySummarySource } from "./replay-summary.ts";

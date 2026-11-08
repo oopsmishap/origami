@@ -1,4 +1,4 @@
-import type { Block, BoundMessage, RefRange } from "./types.ts";
+import type { Block, BoundMessage } from "./types.ts";
 import { parseRef } from "./types.ts";
 
 export interface RenderOp {
@@ -37,22 +37,35 @@ export function withRefTag<T>(message: T, ref: string): T {
   return message;
 }
 
-function refInRanges(ref: string, ranges: readonly RefRange[]): boolean {
-  const n = parseRef(ref);
-  for (const r of ranges) {
-    if (n >= parseRef(r.start) && n <= parseRef(r.end)) return true;
-  }
-  return false;
-}
-
-function coveredIndices(bound: readonly BoundMessage[], block: Block): number[] {
-  const out: number[] = [];
+/** Non-ephemeral ref ordinal -> bound index. Refs are assigned per journal entry. */
+function refIndex(bound: readonly BoundMessage[]): Map<number, number> {
+  const byRef = new Map<number, number>();
   for (let i = 0; i < bound.length; i++) {
     const m = bound[i]!;
     if (m.ephemeral) continue;
-    if (refInRanges(m.ref, block.ranges)) out.push(i);
+    byRef.set(parseRef(m.ref), i);
   }
-  return out;
+  return byRef;
+}
+
+/**
+ * Indices a block covers, plus the lowest one. Blocks are disjoint by invariant, so the
+ * total work across a plan is O(bound + covered refs) instead of O(blocks × bound).
+ */
+function coveredIndices(byRef: ReadonlyMap<number, number>, block: Block): { indices: number[]; first: number } {
+  const indices: number[] = [];
+  let first = -1;
+  for (const r of block.ranges) {
+    const a = parseRef(r.start);
+    const z = parseRef(r.end);
+    for (let n = a; n <= z; n++) {
+      const i = byRef.get(n);
+      if (i === undefined) continue;
+      indices.push(i);
+      if (first === -1 || i < first) first = i;
+    }
+  }
+  return { indices, first };
 }
 
 export function planRender(input: {
@@ -63,16 +76,16 @@ export function planRender(input: {
   const { bound, blocks, pinnedHeadIndex } = input;
   const ops: RenderOp[] = [];
   const removed = new Set<number>();
+  const byRef = refIndex(bound);
 
   for (const block of blocks) {
-    const indices = coveredIndices(bound, block);
+    const { indices, first } = coveredIndices(byRef, block);
     if (indices.length === 0) continue;
     for (const i of indices) {
       if (i < pinnedHeadIndex) continue;
       removed.add(i);
     }
 
-    const first = indices[0]!;
     const anchor = first < pinnedHeadIndex ? pinnedHeadIndex : first;
     ops.push({
       kind: "insert",
@@ -83,60 +96,41 @@ export function planRender(input: {
     });
   }
 
+  // Nearest non-ephemeral neighbours and per-turn counts, computed once: deciding whether an
+  // ephemeral reminder sits inside folded history is then O(1) instead of two array scans.
+  const prevNonEph = new Int32Array(bound.length).fill(-1);
+  const nextNonEph = new Int32Array(bound.length).fill(-1);
+  const turnTotal = new Map<number, number>();
+  const turnRemoved = new Map<number, number>();
+  let prev = -1;
+  for (let i = 0; i < bound.length; i++) {
+    const m = bound[i]!;
+    prevNonEph[i] = prev;
+    if (m.ephemeral) continue;
+    prev = i;
+    turnTotal.set(m.turn, (turnTotal.get(m.turn) ?? 0) + 1);
+    if (removed.has(i)) turnRemoved.set(m.turn, (turnRemoved.get(m.turn) ?? 0) + 1);
+  }
+  let next = -1;
+  for (let i = bound.length - 1; i >= 0; i--) {
+    nextNonEph[i] = next;
+    if (!bound[i]!.ephemeral) next = i;
+  }
+
   // Remove obsolete ephemeral developer/system messages inside folded history:
-  // An ephemeral message at index i (i >= pinnedHeadIndex) is removed if:
-  // 1. Both its nearest preceding non-ephemeral message and nearest succeeding
-  //    non-ephemeral message are removed (surrounded by folded history), OR
-  // 2. All non-ephemeral messages in its turn are removed.
+  // 1. both nearest non-ephemeral neighbours are removed (surrounded by folded history), OR
+  // 2. every non-ephemeral message in its turn is removed.
   for (let i = pinnedHeadIndex; i < bound.length; i++) {
     const m = bound[i]!;
     if (!m.ephemeral || removed.has(i)) continue;
-
-    let prevNonEph = -1;
-    for (let k = i - 1; k >= 0; k--) {
-      if (!bound[k]!.ephemeral) {
-        prevNonEph = k;
-        break;
-      }
-    }
-
-    let nextNonEph = -1;
-    for (let k = i + 1; k < bound.length; k++) {
-      if (!bound[k]!.ephemeral) {
-        nextNonEph = k;
-        break;
-      }
-    }
-
-    const surroundedByFolded =
-      prevNonEph !== -1 &&
-      removed.has(prevNonEph) &&
-      nextNonEph !== -1 &&
-      removed.has(nextNonEph);
-
-    if (surroundedByFolded) {
+    const before = prevNonEph[i]!;
+    const after = nextNonEph[i]!;
+    if (before !== -1 && removed.has(before) && after !== -1 && removed.has(after)) {
       removed.add(i);
       continue;
     }
-
-    const turn = m.turn;
-    if (turn > 0) {
-      let turnHasNonEph = false;
-      let allTurnNonEphRemoved = true;
-      for (let k = 0; k < bound.length; k++) {
-        const t = bound[k]!;
-        if (t.turn === turn && !t.ephemeral) {
-          turnHasNonEph = true;
-          if (!removed.has(k)) {
-            allTurnNonEphRemoved = false;
-            break;
-          }
-        }
-      }
-      if (turnHasNonEph && allTurnNonEphRemoved) {
-        removed.add(i);
-      }
-    }
+    const total = turnTotal.get(m.turn) ?? 0;
+    if (m.turn > 0 && total > 0 && (turnRemoved.get(m.turn) ?? 0) >= total) removed.add(i);
   }
 
   for (const i of [...removed].sort((a, b) => a - b)) {
@@ -193,8 +187,8 @@ export function foldCoverageStats(bound: readonly BoundMessage[], foldedRefs: Re
 }
 
 export function blockAnchorRef(bound: readonly BoundMessage[], block: Block): string | null {
-  const indices = coveredIndices(bound, block);
-  return indices.length === 0 ? null : bound[indices[0]!]!.ref;
+  const { indices, first } = coveredIndices(refIndex(bound), block);
+  return indices.length === 0 ? null : bound[first]!.ref;
 }
 
 export function expandRefRange(start: string, end: string): string[] {

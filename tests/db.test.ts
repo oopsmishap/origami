@@ -112,6 +112,7 @@ describe("OrigamiDb", () => {
       manifest: "{}",
       ledger: "[]",
       facts: "",
+      batch_id: null,
     }]);
     const hits = db.searchBlocks("dragonfruit", 10);
     expect(hits).toHaveLength(1);
@@ -183,6 +184,22 @@ describe("OrigamiDb", () => {
     db.close();
   });
 
+  test("migrates v7 to v8 and round-trips batch ids", () => {
+    const { path } = tempDb();
+    const current = openDb(path);
+    current.close();
+    const v7 = new Database(path);
+    v7.exec("ALTER TABLE blocks DROP COLUMN batch_id; PRAGMA user_version = 7;");
+    v7.close();
+
+    const db = openDb(path);
+    expect(db.schemaVersion).toBe(SCHEMA_VERSION);
+    db.insertBlock(block({ batch_id: "b1" }));
+    expect(db.blocksForSession("session-1")[0]!.batch_id).toBe("b1");
+    expect(db.integrity()).toEqual({ ok: true, detail: "ok" });
+    db.close();
+  });
+
   test("upserts a block without duplicate or stale full-text rows", () => {
     const { path } = tempDb();
     const db = openDb(path);
@@ -208,17 +225,17 @@ describe("OrigamiDb", () => {
     const current = openDb(path);
     current.close();
     const future = new Database(path);
-    future.exec("PRAGMA user_version = 8; UPDATE schema_meta SET value='7' WHERE key='minimum_reader_schema'; ALTER TABLE rounds ADD COLUMN future_note TEXT DEFAULT '';");
+    future.exec("PRAGMA user_version = 9; UPDATE schema_meta SET value='8' WHERE key='minimum_reader_schema'; ALTER TABLE rounds ADD COLUMN future_note TEXT DEFAULT '';");
     future.close();
     const db = openDb(path);
-    expect(db.schemaVersion).toBe(8);
-    expect(db.minimumReaderSchema).toBe(7);
+    expect(db.schemaVersion).toBe(9);
+    expect(db.minimumReaderSchema).toBe(8);
     expect(db.forwardCompatible).toBe(true);
     db.insertRound({ session_id: "future", ts: 1, total_in: 2, cache_read: 1, cache_write: 0, fold_event_id: null, host_rewrite: 0 });
     expect(db.roundsForSession("future")).toHaveLength(1);
     db.close();
     const raw = new Database(path);
-    expect(raw.query<{ user_version: number }, []>("PRAGMA user_version").get()!.user_version).toBe(8);
+    expect(raw.query<{ user_version: number }, []>("PRAGMA user_version").get()!.user_version).toBe(9);
     raw.close();
   });
 
@@ -226,9 +243,9 @@ describe("OrigamiDb", () => {
     const { path } = tempDb();
     const current = openDb(path); current.close();
     const future = new Database(path);
-    future.exec("PRAGMA user_version = 8; UPDATE schema_meta SET value='8' WHERE key='minimum_reader_schema';");
+    future.exec("PRAGMA user_version = 9; UPDATE schema_meta SET value='9' WHERE key='minimum_reader_schema';");
     future.close();
-    expect(() => openDb(path)).toThrow("origami.db schema v8 requires reader v8; this build supports v7");
+    expect(() => openDb(path)).toThrow("origami.db schema v9 requires reader v9; this build supports v8");
   });
 
   test("quarantines a corrupt database and opens a fresh one", () => {

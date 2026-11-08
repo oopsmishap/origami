@@ -17,7 +17,7 @@ import { OrigamiEngine } from "../src/engine.ts";
 import { configFromPreset, type Preset } from "../src/config.ts";
 import type { KernelMessage } from "../src/kernel/types.ts";
 import { messageFacts } from "../src/kernel/message-facts.ts";
-import { JOURNAL_ENTRY_TYPE } from "../src/persist/journal.ts";
+import { JOURNAL_ENTRY_TYPE } from "../src/kernel/journal.ts";
 import { expandRefRange } from "../src/kernel/render.ts";
 
 interface Options {

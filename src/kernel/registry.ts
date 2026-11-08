@@ -17,12 +17,6 @@ export function entryMessage(entry: SessionEntryLike): unknown {
   return undefined;
 }
 
-export interface RegistryEntry {
-  entryId: string;
-  ref: number;
-  facts: KernelMessage;
-}
-
 function contentKey(facts: KernelMessage): string {
   return `${facts.role}\u0000${facts.contentHash}`;
 }
@@ -31,16 +25,24 @@ function contentKey(facts: KernelMessage): string {
  * Ref numbers are the ordinal of the message entry among ALL message entries in
  * the journal (never per-branch): monotonic, never reused, and identical shared
  * history carries identical refs across /branch //fork //tree.
+ *
+ * `messages` is the single derived copy of the history: appended entries are
+ * registered incrementally, so a new journal entry costs O(1) hashing.
  */
 export class RefRegistry {
   readonly byEntryId = new Map<string, number>();
   readonly byToolCallId = new Map<string, number>();
   readonly byContent = new Map<string, number[]>();
-  readonly entries: RegistryEntry[] = [];
-  readonly messageEntryCount: number;
+  readonly messages: KernelMessage[] = [];
+  messageEntryCount = 0;
 
   constructor(entries: readonly SessionEntryLike[]) {
-    let ordinal = 0;
+    this.append(entries);
+  }
+
+  /** Register newly appended journal entries; refs continue from the current ordinal. */
+  append(entries: readonly SessionEntryLike[]): void {
+    let ordinal = this.messageEntryCount;
     for (const entry of entries) {
       const message = entryMessage(entry);
       if (message === undefined) continue;
@@ -55,7 +57,7 @@ export class RefRegistry {
       const queue = this.byContent.get(key);
       if (queue) queue.push(ref);
       else this.byContent.set(key, [ref]);
-      this.entries.push({ entryId, ref, facts });
+      this.messages.push(facts);
     }
     this.messageEntryCount = ordinal;
   }

@@ -68,6 +68,42 @@ export function applyElision<T extends { role: string }>(
   });
 }
 
-export function selectElideCandidates(bound: readonly { ref: string; index: number; role: string; tokens: number; ephemeral: boolean; turn: number }[]): ElideCandidate[] {
-  return bound.filter((m) => m.role === "toolResult" && !m.ephemeral && m.turn > 1).map((m) => ({ ref: m.ref, index: m.index, tokens: m.tokens, turn: m.turn }));
+export interface ElideCandidateInput {
+  ref: string;
+  index: number;
+  role: string;
+  tokens: number;
+  ephemeral: boolean;
+  turn: number;
+}
+
+export interface ElideExclusions {
+  /** Refs an active block already removes; eliding them would credit reclaim render never delivers. */
+  foldedRefs: ReadonlySet<string>;
+  /** Origami's own bookkeeping tool calls; they are never conversation content. */
+  bookkeepingRefs: ReadonlySet<string>;
+  /** First turn of the protected tail: recent turns stay verbatim. */
+  protectedFromTurn: number;
+  /** Current turn: its tool results are the task in progress. */
+  activeTurn: number;
+}
+
+/**
+ * Tool results that are safe to collapse: unfolded, not bookkeeping, and outside both the
+ * protected tail and the active turn. Content is replaced by a ref label, so the original
+ * stays recoverable with `fold_recall`; the message shell and its pairing stay intact.
+ */
+export function selectElideCandidates(bound: readonly ElideCandidateInput[], exclusions: ElideExclusions): ElideCandidate[] {
+  return bound
+    .filter(
+      (m) =>
+        m.role === "toolResult" &&
+        !m.ephemeral &&
+        m.turn > 1 &&
+        m.turn !== exclusions.activeTurn &&
+        m.turn < exclusions.protectedFromTurn &&
+        !exclusions.foldedRefs.has(m.ref) &&
+        !exclusions.bookkeepingRefs.has(m.ref),
+    )
+    .map((m) => ({ ref: m.ref, index: m.index, tokens: m.tokens, turn: m.turn }));
 }

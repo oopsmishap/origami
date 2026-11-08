@@ -13,7 +13,7 @@ import { OrigamiEngine } from "../src/engine.ts";
 import { configFromPreset, type Preset } from "../src/config.ts";
 import { entryMessage } from "../src/kernel/registry.ts";
 import type { SessionEntryLike } from "../src/kernel/state.ts";
-import { JOURNAL_ENTRY_TYPE } from "../src/persist/journal.ts";
+import { JOURNAL_ENTRY_TYPE } from "../src/kernel/journal.ts";
 import { kernelMessagesFromEntries } from "../src/runtime.ts";
 import { countTokens, type JournalEntry } from "./replay-lib.ts";
 import { createReplayPolicyState, decideReplayPolicy } from "./replay-policy.ts";

@@ -4,8 +4,8 @@ import { BlockTree } from "./blocks.ts";
 import type { CountFn } from "./tokens.ts";
 import { TokenLedger } from "./tokens.ts";
 import { bindMessages } from "./refs.ts";
-import type { JournalOp } from "../persist/journal.ts";
-import { extractOps } from "../persist/journal.ts";
+import { messageFacts } from "./message-facts.ts";
+import { extractOps } from "./journal.ts";
 import type { RefRegistry, SessionEntryLike } from "./registry.ts";
 import { RefRegistry as Registry } from "./registry.ts";
 
@@ -18,48 +18,110 @@ export interface SessionStateOptions {
   countFn: CountFn | null;
 }
 
+/**
+ * Journal-derived session state. `refresh` is incremental: appending one entry costs one
+ * message hash and one journal op, not a full replay. A shortened or rewritten entry list
+ * (host compaction, branch switch) falls back to a full rebuild.
+ */
 export class SessionState {
   readonly sessionId: string;
   readonly tree: BlockTree;
   readonly ledger: TokenLedger;
   private registry: RefRegistry = new Registry([]);
-  private entryCount = 0;
-  private messageEntryCount = 0;
+  private appliedEntries = 0;
+  private lastEntryId: string | null = null;
   private cachedBound: BoundMessage[] = [];
+  private requestCache = new WeakMap<readonly unknown[], { version: number; facts: KernelMessage[]; aligned: boolean; bound: BoundMessage[] }>();
+  private foldedRefsCache: { treeVersion: number; refs: Set<string> } | null = null;
+  private _version = 0;
+  /** What the last `refresh` did; diagnostics and test seam. */
+  refreshStats: { appended: number; rebuilt: boolean } = { appended: 0, rebuilt: false };
 
   constructor(opts: SessionStateOptions) {
     this.sessionId = opts.sessionId;
     this.tree = new BlockTree();
     this.ledger = new TokenLedger(opts.modelId, opts.countFn);
-    this.ingestEntries(opts.entries);
+    this.rebuild(opts.entries);
+    this.refreshStats = { appended: opts.entries.length, rebuilt: true };
   }
 
-  private ingestEntries(entries: readonly SessionEntryLike[]): void {
-    this.tree.rebuild(extractOps(entries as readonly { type: string; data?: unknown }[]) as JournalOp[]);
+  /** Monotonic: increments whenever the journal-derived state changes. */
+  get version(): number {
+    return this._version;
+  }
+
+  /** Facts for every message entry, in journal order: the single derived copy of the history. */
+  get messages(): readonly KernelMessage[] {
+    return this.registry.messages;
+  }
+
+  private rebuild(entries: readonly SessionEntryLike[]): void {
+    this.tree.rebuild(extractOps(entries));
     this.registry = new Registry(entries);
-    this.entryCount = entries.length;
-    this.messageEntryCount = this.registry.messageEntryCount;
+    this.appliedEntries = entries.length;
+    this.lastEntryId = entries.length > 0 ? entries[entries.length - 1]?.id ?? null : null;
     this.cachedBound = [];
+    this.requestCache = new WeakMap();
+    this._version++;
   }
 
-  refresh(entries: readonly SessionEntryLike[]): void {
-    if (entries.length === this.entryCount && this.registry.messageEntryCount === this.messageEntryCount) return;
-    this.ingestEntries(entries);
+  refresh(entries: readonly SessionEntryLike[], verify = false): void {
+    if (verify) {
+      // Rare path (candidate acceptance): the host may have rewritten history in place while
+      // keeping entry ids, which the O(1) boundary check cannot see.
+      this.rebuild(entries);
+      this.refreshStats = { appended: 0, rebuilt: true };
+      return;
+    }
+    const lastId = entries.length > 0 ? entries[entries.length - 1]?.id ?? null : null;
+    if (entries.length === this.appliedEntries && lastId === this.lastEntryId) return;
+
+    // Append-only is the norm (the host only ever appends). Anything else — a shorter list,
+    // or a prefix whose last applied entry no longer matches — needs a full replay.
+    const prefixIntact =
+      this.appliedEntries === 0 || (entries[this.appliedEntries - 1]?.id ?? null) === this.lastEntryId;
+    if (entries.length <= this.appliedEntries || !prefixIntact) {
+      this.rebuild(entries);
+      this.refreshStats = { appended: 0, rebuilt: true };
+      return;
+    }
+
+    const delta = entries.slice(this.appliedEntries);
+    this.registry.append(delta);
+    this.tree.applyOps(extractOps(delta));
+    this.appliedEntries = entries.length;
+    this.lastEntryId = lastId;
+    this.cachedBound = [];
+    this.requestCache = new WeakMap();
+    this._version++;
+    this.refreshStats = { appended: delta.length, rebuilt: false };
   }
 
-  bind(messages: readonly KernelMessage[]): BoundMessage[] {
+  bind(messages: readonly KernelMessage[] = this.registry.messages): BoundMessage[] {
     this.cachedBound = bindMessages(messages, this.registry);
     return this.cachedBound;
   }
 
   /**
-   * Bind an outbound request array against the journal registry WITHOUT
-   * disturbing the journal-derived cache. Render must rewrite the array it is
-   * actually given (which may carry ephemeral developer reminders the journal
-   * never recorded), so its bound indices line up with that array.
+   * Derive facts for a host request array and bind it against the journal registry.
+   *
+   * The host reuses one array across the several render passes of a single request, so both
+   * the derivation and the bind are cached by array identity and invalidated by journal version.
    */
-  bindOutbound(messages: readonly KernelMessage[]): BoundMessage[] {
-    return bindMessages(messages, this.registry);
+  bindRequest(messages: readonly unknown[]): { facts: KernelMessage[]; aligned: boolean; bound: BoundMessage[] } {
+    const hit = this.requestCache.get(messages);
+    if (hit && hit.version === this._version) return hit;
+    const facts: KernelMessage[] = [];
+    for (const message of messages) {
+      const derived = messageFacts(message);
+      if (!derived) break;
+      facts.push(derived);
+    }
+    const aligned = facts.length === messages.length;
+    const bound = aligned ? bindMessages(facts, this.registry) : this.cachedBound;
+    const value = { version: this._version, facts, aligned, bound };
+    this.requestCache.set(messages, value);
+    return value;
   }
 
   get bound(): BoundMessage[] {
@@ -70,8 +132,12 @@ export class SessionState {
     return this.registry.formatNext();
   }
 
+  /** Folded refs, memoized on the block tree version: rebuilt on every fold, not every read. */
   foldedRefs(): Set<string> {
-    return this.tree.foldedRefs();
+    if (this.foldedRefsCache?.treeVersion === this.tree.version) return this.foldedRefsCache.refs;
+    const refs = this.tree.foldedRefs();
+    this.foldedRefsCache = { treeVersion: this.tree.version, refs };
+    return refs;
   }
 
   /** Live (unfolded, not hidden) tokens that arrived after the most recent fold event. */

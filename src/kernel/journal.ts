@@ -1,12 +1,14 @@
-import type { Block, LedgerKind, LedgerRecord } from "../kernel/types.ts";
-import { parseManifest } from "../kernel/manifest.ts";
-import { isRecord, numOr, strOr } from "../kernel/guards.ts";
+import type { Block, LedgerKind, LedgerRecord } from "./types.ts";
+import { parseManifest } from "./manifest.ts";
+import { isRecord, numOr, strOr } from "./guards.ts";
 
 export interface JournalFoldOp {
   v: 1;
   op: "fold";
   block: Block;
   at: number;
+  /** Folds appended in one commit share a batch id and therefore one prefix invalidation. */
+  batchId?: string;
 }
 
 export interface JournalUnfoldOp {
@@ -67,6 +69,7 @@ function parseBlock(value: unknown): Block | null {
   };
   const manifest = parseManifest(value.manifest);
   if (manifest) block.manifest = manifest;
+  if (typeof value.batchId === "string" && value.batchId !== "") block.batchId = value.batchId;
   if (Array.isArray(value.missing)) {
     const missing = value.missing.filter((s): s is string => typeof s === "string");
     if (missing.length > 0) block.missing = missing;
@@ -82,7 +85,9 @@ export function parseJournalOp(data: unknown): JournalOp | null {
 
   if (data.op === "fold") {
     const block = parseBlock(data.block);
-    return block ? { v: 1, op: "fold", block, at } : null;
+    if (!block) return null;
+    const batchId = typeof data.batchId === "string" && data.batchId !== "" ? data.batchId : undefined;
+    return { v: 1, op: "fold", block, at, ...(batchId ? { batchId } : {}) };
   }
 
   if (data.op === "unfold") {
@@ -106,8 +111,8 @@ export function parseJournalOp(data: unknown): JournalOp | null {
   return null;
 }
 
-export function makeFoldOp(block: Block, at = Date.now()): JournalFoldOp {
-  return { v: 1, op: "fold", block, at };
+export function makeFoldOp(block: Block, at = Date.now(), batchId?: string): JournalFoldOp {
+  return { v: 1, op: "fold", block, at, ...(batchId ? { batchId } : {}) };
 }
 
 export function makeUnfoldOp(id: string, at = Date.now()): JournalUnfoldOp {

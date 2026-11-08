@@ -16,7 +16,7 @@
  */
 import { OrigamiEngine } from "../src/engine.ts";
 import { configFromPreset, type Preset } from "../src/config.ts";
-import { JOURNAL_ENTRY_TYPE } from "../src/persist/journal.ts";
+import { JOURNAL_ENTRY_TYPE } from "../src/kernel/journal.ts";
 import { messageFacts } from "../src/kernel/message-facts.ts";
 
 export interface CapacityRunResult {

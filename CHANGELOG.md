@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.1 — 2026-11-08
+
+### Fixed
+- **Emergency elision elided live work** (`src/engine-render.ts`, `src/kernel/guard.ts`): the gate read the host's raw `projectedTokens()`, which still contains history folded since the last provider round, so the first request after a fold elided ~100 live tool results while real occupancy was 66%. The gate now uses the `reclaimedSinceRound`-corrected fill, and `selectElideCandidates` takes exclusions: folded refs (render removes them anyway, so eliding them credited dead reclaim), Origami's bookkeeping calls, the protected tail, and the active turn.
+- **A zero cache-read price disabled advisory folding** (`src/kernel/fold-timing.ts`): with `cacheReadPrice = 0`, `perTurnSaving = r·(S−σ) = 0`, break-even was `null`, and the growth override required a non-null break-even — so the gate returned `cost` at every growth level (verified at 1000× `growthStep`). `sigma ≥ S` now blocks outright (the true never-pays-back case), and `null` break-even with a smaller summary is treated as "the price model cannot rank this fold": the fill floor and boundary carry the gate.
+- **Batch folds misattributed their re-paid prefix** (`src/engine.ts`, `src/kernel/cache-report.ts`, `src/persist/db.ts`): a multi-range fold shares one prefix invalidation, but only the last block was tagged and untagged cold rounds went to the oldest claimant, so middle folds reported `T = 0` and break-even 1.1 turns while their siblings absorbed 131. Folds from one commit now carry a shared `batchId` (journal, block, DB v8) and the report splits the batch's measured re-pay pro rata by replaced mass; totals reconcile exactly.
+- **A partial commit looked like a total failure** (`src/engine.ts`, `src/tools/index.ts`): `commitFoldBatch` applied folds one at a time and let a host `appendEvent` throw after earlier folds were journaled and live, with persistence and bookkeeping skipped. The journal append is now the commit point: every recorded fold is applied, persisted and accounted, and the error names the committed blocks (`FoldError.committed`). A retry of an already-folded range now reports `already covered by block b1` instead of `matches no messages`.
+- **The DB mirror could silently outrank the journal** (`src/engine.ts`): `cacheReport()` used DB blocks whenever any existed, so a partial mirror replaced the complete journal tree and corrupted payback and cooldown. The two sources are merged by id with the journal winning, and `fold_status` warns when the mirror disagrees.
+- **Per-turn cost grew quadratically with session length** (`src/kernel/state.ts`, `src/kernel/render.ts`, `src/engine.ts`, `src/runtime.ts`): every appended journal entry triggered a full replay that re-hashed the whole history (77.6 ms at 16k messages), `planRender` scanned the bound list once per block (96 ms at 10k/100), and `status()` re-ran four unbounded `SELECT *` reads plus the O(folds² × rounds) report on every request. Refresh is now append-only (0.04 ms per append at 16k), render plans in one pass over refs (2.9 ms at 10k/100), and rounds/report are memoized on a data version. `bun bench/hot-path.ts` reproduces all three.
+- **The token memo retained every message body** (`src/kernel/tokens.ts`, `src/kernel/registry.ts`): `TokenLedger` keyed its memo by the full text and `RefRegistry` kept an unused `{entryId, ref, facts}` copy, so a months-long session held the whole conversation two extra times (16.4 MB retained for 19.1 MB of input). Memo keys are now content hashes with a size cap, and the registry keeps only the facts `bind` needs.
+
+### Changed
+- **Kernel owns the journal contract** (`src/kernel/journal.ts`): the op types and parsers moved out of `src/persist/journal.ts`, removing the only `kernel → persist` import and the duplicate op definitions in `src/kernel/blocks.ts`.
+- **Database schema v8**: additive `blocks.batch_id` column; v7 readers stay compatible (`minimum_reader_schema` unchanged).
+- **`selectElideCandidates`** takes an `ElideExclusions` argument (folded refs, bookkeeping refs, protected tail, active turn).
+- **`SessionState.refresh(entries, verify?)`**: incremental by default; `verify` forces a replay and is used when accepting a fold candidate so in-place source edits are observed.
+- Removed dead code: `FoldOperationInput`/`FoldOperationDelegate` façades, `Engine.executeTier`, `kernelMessagesFrom`, and `RefRegistry.entries`.
+
+### Bench
+- `bun test`: 394 pass / 1 skip / 0 fail. `tsc --noEmit` clean.
+- `bun bench/hot-path.ts`: refresh append @16k 0.041 ms (was 77.6 ms), `planRender` @10k/100 2.89 ms (was 96 ms), `buildCacheReport` @8k rounds 5.0 ms once per data version instead of ~3× per request.
+
 ## 0.6.0 — 2026-11-07
 
 ### Fixed

@@ -253,7 +253,9 @@ describe("initial context head", () => {
         appendEvent: (op) => entries.push({ type: "custom", id: `j${entries.length}`, customType: "origami:event", data: op } as never),
         saveArtifact: async () => "/tmp/unused.md",
         windowTokens: () => 10_000,
-        projectedTokens: () => 9_900,
+        // Well over the window even after the fold's reclaim is subtracted, so this exercises
+        // the emergency elision path alongside the head invariant.
+        projectedTokens: () => 20_000,
       },
       entries,
       modelId: "test",

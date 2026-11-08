@@ -1,37 +1,28 @@
 import type { Block } from "./types.ts";
 import { parseRef } from "./types.ts";
+import type { JournalOp } from "./journal.ts";
 
-export interface JournalFoldOp {
-  op: "fold";
-  block: Block;
-}
-
-export interface JournalUnfoldOp {
-  op: "unfold";
-  id: string;
-}
-
-export interface JournalTierOp {
-  op: "tier";
-  id: string;
-  tier: 1 | 2 | 3;
-  summary: string;
-  topic: string;
-  tokensBefore: number;
-  tokensAfter: number;
-}
-
-export type JournalOp = JournalFoldOp | JournalUnfoldOp | JournalTierOp;
+export type { JournalOp } from "./journal.ts";
 
 export class BlockTree {
   private blocks = new Map<string, Block>();
   private order: string[] = [];
+  private _version = 0;
+
+  /** Monotonic: changes whenever a block is added, consumed, unfolded or re-summarised. */
+  get version(): number {
+    return this._version;
+  }
 
   apply(op: JournalOp): void {
+    this._version++;
     if (op.op === "fold") {
       const block: Block = { ...op.block, children: [...op.block.children], status: "active", consumedBy: null };
+      // A committed fold is applied in memory and then replayed from the journal on the next
+      // refresh; replacing in place keeps `order` free of duplicates.
+      const existed = this.blocks.has(block.id);
       this.blocks.set(block.id, block);
-      this.order.push(block.id);
+      if (!existed) this.order.push(block.id);
       for (const childId of block.children) {
         const child = this.blocks.get(childId);
         if (!child) continue;
@@ -127,9 +118,15 @@ export class BlockTree {
     return out;
   }
 
+  /** Apply journal ops in order; used by incremental replay. */
+  applyOps(ops: readonly JournalOp[]): void {
+    for (const op of ops) this.apply(op);
+  }
+
   rebuild(ops: JournalOp[]): void {
     this.blocks.clear();
     this.order = [];
+    this._version++;
     for (const op of ops) this.apply(op);
   }
 }

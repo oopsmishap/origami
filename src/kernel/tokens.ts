@@ -1,4 +1,5 @@
 import type { KernelMessage } from "./types.ts";
+import { contentHash } from "./hash.ts";
 
 export type Encoding =
   | "O200kBase"
@@ -41,8 +42,12 @@ export class TokenLedger {
     this.encoding = pickEncoding(modelId);
   }
 
+  /**
+   * Token count for arbitrary text. The memo is keyed by content hash, never by the text
+   * itself: a months-long session would otherwise retain every message body as a Map key.
+   */
   countText(text: string): number {
-    const key = `t\u0000${text}`;
+    const key = `t\u0000${contentHash(text)}`;
     const hit = this.memo.get(key);
     if (hit !== undefined) return hit;
     let n = estimateTokens(text);
@@ -54,6 +59,7 @@ export class TokenLedger {
         /* natives unavailable — keep estimate */
       }
     }
+    if (this.memo.size >= MAX_MEMO_ENTRIES) this.memo.clear();
     this.memo.set(key, n);
     return n;
   }
@@ -75,3 +81,5 @@ export class TokenLedger {
 }
 
 const PER_MESSAGE_OVERHEAD_TOKENS = 4;
+/** Safety valve: hashed keys are small, but a session can still accumulate unbounded entries. */
+const MAX_MEMO_ENTRIES = 50_000;

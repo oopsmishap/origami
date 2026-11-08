@@ -7,7 +7,7 @@ import { entryMessage } from "./kernel/registry.ts";
 import type { SessionEntryLike } from "./kernel/registry.ts";
 import type { OrigamiConfig } from "./config.ts";
 import type { OrigamiDb } from "./persist/db.ts";
-import type { JournalOp } from "./persist/journal.ts";
+import type { JournalOp } from "./kernel/journal.ts";
 
 export type { SessionEntryLike };
 
@@ -18,21 +18,6 @@ export function kernelMessagesFromEntries(entries: readonly SessionEntryLike[]):
     const message = entryMessage(e);
     if (message === undefined) continue;
     const facts = messageFacts(message);
-    if (facts) out.push(facts);
-  }
-  return out;
-}
-
-/**
- * Derive bindable kernel messages from a live outbound request array (the
- * `context` event's messages). The journal may lag or omit ephemeral developer
- * reminders, so render must bind the array it is actually rewriting for
- * `bound[i].index === messages[i]` to hold.
- */
-export function kernelMessagesFrom(messages: readonly unknown[]): KernelMessage[] {
-  const out: KernelMessage[] = [];
-  for (const m of messages) {
-    const facts = messageFacts(m);
     if (facts) out.push(facts);
   }
   return out;
@@ -82,10 +67,8 @@ export class OrigamiRuntime {
     });
   }
 
-  /** Refresh journal-derived state and re-bind current messages. Call before every use. */
-  sync(): void {
-    const entries = this.host.entries();
-    this.engine.refresh(entries);
-    this.engine.ingest(kernelMessagesFromEntries(entries));
+  /** Refresh journal-derived state. The engine re-binds only when the journal changed. */
+  sync(verify = false): void {
+    this.engine.refresh(this.host.entries(), verify);
   }
 }

@@ -1,6 +1,10 @@
 import type { BoundMessage, RefRange } from "./types.ts";
 import { formatRef, parseRef } from "./types.ts";
 import { widenSelectedToolPairs } from "./tool-pairs.ts";
+
+/** Distinct from "matches no messages": the range is real but every ref is already covered. */
+export const ALREADY_FOLDED = "range is already fully folded";
+
 export interface ProjectUnitInput {
   bound: readonly BoundMessage[];
   ranges: readonly RefRange[];
@@ -175,7 +179,7 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
   }
   const indices = [...selected].sort((a, b) => a - b);
   const anyNew = indices.some((i) => !foldedRefs.has(bound[i]!.ref));
-  if (!anyNew) return { ok: false, error: "range matches no messages" };
+  if (!anyNew) return { ok: false, error: ALREADY_FOLDED };
 
   const foldable = new Set<number>();
   for (const i of indices) {

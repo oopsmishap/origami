@@ -71,18 +71,23 @@ export function assessFoldTiming(i: FoldTimingInput): FoldTiming {
     // Candidate source tokens are S; sigma replaces them and is added exactly once here.
     const T = i.cacheCold ? 0 : i.estimatedRewriteTokens + sigma;
     breakevenTurns = foldBreakeven(S, sigma, T, i.price).breakevenTurns;
+    // A summary that is not smaller than its source can never pay back at any horizon.
+    if (sigma >= S) return blocked("cost", boundary, null);
     // Scale payback horizon adaptively when accumulated growth debt is high,
     // preventing the absorbing cost trap where older tasks can never break even.
     const growthOverage = Math.max(0, i.growthSinceFoldTokens - 2 * i.growthStep);
     const growthFactor = 1 + Math.min(3, growthOverage / Math.max(1, i.growthStep));
     const effectiveHorizon = Math.round(i.paybackHorizonTurns * growthFactor);
 
-    // If accumulated growth is massive (>= 4x growthStep) and fold yields positive per-turn savings,
-    // growth debt overrides suffix rewrite cost to prevent unbounded context bloating.
-    const growthOverride = i.growthSinceFoldTokens >= 4 * i.growthStep && breakevenTurns !== null;
-    if (!growthOverride && (breakevenTurns === null || breakevenTurns > effectiveHorizon)) {
+    // If accumulated growth is massive (>= 4x growthStep), growth debt overrides the suffix
+    // rewrite cost to prevent unbounded context bloating.
+    const growthOverride = i.growthSinceFoldTokens >= 4 * i.growthStep;
+    if (breakevenTurns !== null && breakevenTurns > effectiveHorizon && !growthOverride) {
       return blocked("cost", boundary, breakevenTurns);
     }
+    // breakevenTurns === null with sigma < S means the cache-read price is 0: the cost model has
+    // no per-turn saving to rank, so the fill floor and boundary carry the gate. Blocking here
+    // would suppress every advisory nudge forever even as the window fills.
   }
   return { allowed: true, blockedBy: null, boundary, fillFloorTokens, breakevenTurns };
 }

@@ -4,7 +4,7 @@ import { configFromPreset } from "../src/config.ts";
 import { messageFacts } from "../src/kernel/message-facts.ts";
 import { decideNudge, type NudgeConfig, type NudgeRange, type NudgeState, type PromotionCandidate } from "../src/kernel/nudge.ts";
 import { salvageFoldParams } from "../src/tools/salvage.ts";
-import { JOURNAL_ENTRY_TYPE } from "../src/persist/journal.ts";
+import { JOURNAL_ENTRY_TYPE } from "../src/kernel/journal.ts";
 import type { KernelMessage } from "../src/kernel/types.ts";
 import type { SessionEntryLike } from "../src/kernel/registry.ts";
 function conversation(turns: number) {
