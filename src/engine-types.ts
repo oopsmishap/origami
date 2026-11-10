@@ -23,6 +23,8 @@ export interface EngineContext {
   now(): number;
   activeTurn: number;
   protectedFromTurn: number;
+  /** Turns kept whole and unfoldable besides the tail (the latest user instruction's turn). */
+  pinnedTurns: ReadonlySet<number>;
   bookkeepingRefs: ReadonlySet<string>;
   pinnedHeadRef: string | null;
   /** Tokens reclaimed by folds since the host's last provider round. */

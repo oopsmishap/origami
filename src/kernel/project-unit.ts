@@ -13,6 +13,8 @@ export interface ProjectUnitInput {
   activeTurn: number;
   /** Turns at or after this one are the protected recent tail. Defaults to `activeTurn`. */
   protectedFromTurn?: number;
+  /** Turns kept whole and unfoldable (the latest user instruction's turn). */
+  pinnedTurns?: ReadonlySet<number>;
 }
 
 export interface ProjectedSpan {
@@ -69,6 +71,7 @@ function compressToRanges(bound: readonly BoundMessage[], indices: readonly numb
 export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
   const { bound, ranges, foldedRefs, pinnedHeadRef, activeTurn } = input;
   const protectedFromTurn = Math.min(activeTurn, input.protectedFromTurn ?? activeTurn);
+  const pinnedTurns = input.pinnedTurns ?? null;
   if (ranges.length === 0) return { ok: false, error: "empty range" };
 
   const maxRefNum = bound.reduce((max, m) => (m.ref && /^m\d{5,}$/.test(m.ref) ? Math.max(max, parseRef(m.ref)) : max), 0);
@@ -119,7 +122,8 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
     const inSpan = members.filter((i) => spanHits(bound[i]!.ref, ranges));
     const hasHead = pinnedHeadRef !== null && members.some((i) => bound[i]!.ref === pinnedHeadRef);
     const isInFlight = turn === activeTurn;
-    const isTail = turn >= protectedFromTurn;
+    const isPinned = pinnedTurns !== null && pinnedTurns.has(turn);
+    const isTail = turn >= protectedFromTurn || isPinned;
 
     if (hasHead || isInFlight || isTail) {
       if (inSpan.length === members.length) {
@@ -136,7 +140,7 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
           if (after) boundaryHints.push(`start at ${after.ref} or later`);
         } else {
           const before = bound.slice(0, firstIdx).reverse().find((m) => !m.ephemeral);
-          if (before) boundaryHints.push(`end at ${before.ref} or earlier (turn ${turn} is ${isInFlight ? "in flight" : "in the protected tail"})`);
+          if (before) boundaryHints.push(`end at ${before.ref} or earlier (turn ${turn} is ${isInFlight ? "in flight" : isPinned ? "the latest user instruction" : "in the protected tail"})`);
         }
       }
       for (let r = 0; r < ranges.length; r++) {
@@ -151,7 +155,10 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
   if (selected.size === 0) {
     // Nothing foldable inside the request: keep the actionable rejections.
     if (splits > 0) {
-      const hint = boundaryHints.length > 0 ? `; ${[...new Set(boundaryHints)].join("; ")}` : "";
+      const hint =
+        boundaryHints.length > 0
+          ? `; ${[...new Set(boundaryHints)].join("; ")}`
+          : "; everything in the requested span is in the pinned head, the in-flight turn, or the protected tail — nothing is foldable there yet, so stop retrying and continue working";
       return { ok: false, error: `range splits ${splits} turn(s)${hint}` };
     }
     if (headHit) return { ok: false, error: "range inside protected head" };
@@ -167,6 +174,7 @@ export function projectUnit(input: ProjectUnitInput): ProjectUnitResult {
     if (m.turn === headTurn) return false;
     if (m.turn === activeTurn) return false;
     if (m.turn >= protectedFromTurn) return false;
+    if (pinnedTurns !== null && pinnedTurns.has(m.turn)) return false;
     return true;
   };
 

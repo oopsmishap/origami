@@ -99,8 +99,10 @@ export function salvageFoldParams(raw: unknown): SalvageResult {
 
   const folds: FoldSpec[] = [];
 
-  // Case 1: Standard { folds: [...] }
-  if (Array.isArray(obj.folds)) {
+  // Case 1: Standard { folds: [...] }. An empty array falls through to the
+  // shorthand fields: models answering a candidate note send `folds: []` plus
+  // top-level range/topic/summary, which must not shadow them.
+  if (Array.isArray(obj.folds) && obj.folds.length > 0) {
     for (let i = 0; i < obj.folds.length; i++) {
       const item = obj.folds[i];
       if (!item || typeof item !== "object") {
@@ -141,6 +143,17 @@ export function salvageFoldParams(raw: unknown): SalvageResult {
   if (folds.length === 0) {
     return { ok: false, error: "fold requires either 'folds' array or 'range' and 'summary' fields" };
   }
+
+  // A candidate id is not a fold range: answering a background candidate goes
+  // through fold_candidate, not fold (observed model confusion in live sessions).
+  const candidateLike = folds.find((f) => /^c\d+$/i.test(f.range));
+  if (candidateLike) {
+    return {
+      ok: false,
+      error: `range '${candidateLike.range}' is a background candidate id, not a message/block range; answer it with fold_candidate {"id":"${candidateLike.range}","action":"accept"} (or "edit"/"reject")`,
+    };
+  }
+
 
   // Infer tier 2 if all ranges target blocks (e.g. "b1,b2" or "b1..b5") and tier was not set
   if (tier === undefined && folds.every((f) => /^\s*b\d+/i.test(f.range))) {

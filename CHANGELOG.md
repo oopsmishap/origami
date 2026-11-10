@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.2 — 2026-11-10
+
+Live telemetry across a week of real sessions showed 221 failed `fold` calls against 16 successes. The failures decompose into five mechanisms, all fixed here.
+
+### Fixed
+- **Single-prompt marathons were structurally unfoldable** (`src/kernel/refs.ts`, `src/engine.ts`, `src/kernel/project-unit.ts`, `src/kernel/nudge.ts`): a subagent (one user message, hundreds of tool steps) or any long autonomous stretch formed one giant in-flight turn, so every fold failed (`range splits 1 turn(s)`; one live subagent went 43/43 failures and armed the breaker for its whole life), while the doctrine still told the model to fold. Turns now segment at assistant step boundaries once ~24 KB accumulates (`TURN_SEGMENT_BYTES`); tool pairs always share a segment. Replay of the failing session (`Phase1Sandbox.jsonl`, `--policy current`) now produces 1 fold and 1.43M billed tokens against a 2.32M uncompressed baseline; the pre-fix replay was not measured.
+- **Everything after the last user message was protected forever** (`src/engine.ts`): `protectedFromTurn = min(tailTurn, lastUserTurn)` froze hours of autonomous work after the user's last prompt (`range includes protected recent tail (turn 43 onward)` rejection loops in orchestration sessions). Only the latest user instruction's own turn is pinned now (`pinnedTurns` through `EngineContext`, `projectUnit`, `recommendRanges`); work after it folds normally once outside the tail.
+- **Nudges demanded a tool the session did not have** (`src/index.ts`): a plugin swapping the session to a restricted roster (e.g. vibe workers) removes `fold`, but emergency nudges kept demanding it — observed as an 18-call `Tool fold not found` retry loop that a host loop-detector had to interrupt. Nudges and candidate notes are now suppressed when `fold` is not in `api.getActiveTools()`, and at the emergency threshold Origami folds extractively in-process instead.
+- **The circuit breaker never disarmed under retries** (`src/tools/index.ts`): a breaker refusal recorded itself as a new failure, refreshing the 10-minute decay window; a model retrying every minute stayed locked out indefinitely (streaks of 30+ in telemetry). Refusals no longer touch the streak.
+- **`keep` refs outside the fold rejected whole folds** (`src/engine.ts`): models routinely cite a tail message in a `keep` record; the rejection threw away the whole summary and forced a retry (e.g. `keep ref m01483 is outside this fold`, `keep ref m01393 is outside this fold` in the-one-proxy session). The ref is provenance metadata: it is stripped and the record kept.
+- **Fold renderer crash spam** (`src/tools/display.ts`, `src/tools/index.ts`): `foldCallView`/`renderCall` assumed `folds` is an array, but models legitimately send it as a JSON string (salvage parses it at execute time), crashing every transcript render (`folds.map is not a function` hundreds of times in host logs). Renderers now normalize via `previewFoldSpecs`.
+- **Candidate-id confusion** (`src/tools/salvage.ts`): `{ folds: [], range: "c1", … }` — a model answering a background candidate with the `fold` tool — hit `fold requires either 'folds' array…` even though range/summary were present. An empty `folds` array now falls through to the shorthand fields, and a `cN` range returns an error pointing at `fold_candidate`.
+- **Opaque split rejection** (`src/kernel/project-unit.ts`): `range splits 1 turn(s)` with no boundary hint (67 occurrences in telemetry) now explains that the span is entirely inside protected zones and tells the model to stop retrying.
+
+### Bench
+- `bun test`: 404 pass / 1 skip / 0 fail. `tsc --noEmit` clean. `bun bench/marathon.ts --turns 300 --assert`: 0 lost facts, 0 invariant violations, input cost 60.5% of baseline.
+
 ## 0.6.1 — 2026-11-08
 
 ### Fixed

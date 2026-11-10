@@ -79,12 +79,17 @@ describe("pinned ledger", () => {
     expect(engine.state.tree.get("b3")!.ledger!.map((r) => r.text)).not.toContain("ship part 3 docs");
   });
 
-  it("rejects keep refs outside the fold and retire on tier 1", () => {
+  it("keeps a record whose ref lies outside the fold by stripping the ref, and rejects retire on tier 1", () => {
     const { engine } = setup();
+    // A ref outside the folded span is provenance metadata, not grounds to reject
+    // the whole fold (live sessions lost multi-KB folds to tail-message refs).
     const outside = engine.executeFold({ folds: [{ range: "m00003..m00004", topic: "P", summary: "s", keep: [{ kind: "decision", text: "use sqlite", ref: "m00009" }] }] });
-    expect(outside.ok).toBe(false);
-    if (!outside.ok) expect(outside.error).toBe("keep ref m00009 is outside this fold");
-    const retire = engine.executeFold({ folds: [{ range: "m00003..m00004", topic: "P", summary: "s", retire: ["b1.L1"] }] });
+    expect(outside.ok).toBe(true);
+    const block = engine.state.tree.get("b1")!;
+    const record = block.ledger!.find((r) => r.text === "use sqlite")!;
+    expect(record.kind).toBe("decision");
+    expect(record.ref).toBeNull();
+    const retire = engine.executeFold({ folds: [{ range: "m00005..m00006", topic: "P", summary: "s", retire: ["b1.L1"] }] });
     expect(retire.ok).toBe(false);
     if (!retire.ok) expect(retire.error).toBe("retire is only valid when merging blocks");
   });

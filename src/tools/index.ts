@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { expandRefRange } from "../kernel/render.ts";
-import { formatTokens, type FoldSpec } from "../engine.ts";
+import { formatTokens } from "../engine.ts";
 import { parseRangeList } from "../engine-ranges.ts";
 import type { OrigamiRuntime } from "../runtime.ts";
 import {
@@ -12,6 +12,7 @@ import {
   formatFoldOutcome,
   formatSearchHits,
   formatStatusReport,
+  previewFoldSpecs,
   renderInlineToolCall,
   renderInlineToolResult,
   searchCallView,
@@ -109,7 +110,9 @@ export function registerTools(
 
       const breaker = checkFoldBreaker(rt.sessionId);
       if (breaker.refusal) {
-        recordFoldFailure(rt.sessionId);
+        // A refusal must NOT count as a new failure: recording it refreshed the
+        // 10-minute decay window, so a model retrying every minute stayed locked
+        // out forever (observed streaks of 30+ in live telemetry).
         const durationMs = performance.now() - t0;
         const row = recordToolTelemetry(rt, {
           tool: "fold",
@@ -204,8 +207,8 @@ export function registerTools(
       return foldResultView(result, result.details as ToolDetail | undefined, Boolean(result.isError));
     },
     renderCall(args, options, uiTheme) {
-      const a = (args ?? {}) as { folds?: FoldSpec[]; range?: string; topic?: string; tier?: number | string };
-      const folds = a.folds ?? (a.range ? [{ range: a.range, topic: a.topic ?? "Summary", summary: "" }] : []);
+      const a = (args ?? {}) as { folds?: unknown; range?: string; topic?: string; tier?: number | string };
+      const folds = previewFoldSpecs(a);
       const tier = Number(a.tier ?? 1) || 1;
       return renderInlineToolCall(
         "Fold",

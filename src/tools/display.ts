@@ -380,8 +380,33 @@ function viewMemos(): { call: ViewMemos; result: ViewMemos } {
   return memos;
 }
 
-export function foldCallView(args: { folds?: FoldSpec[]; range?: string; topic?: string; summary?: string; tier?: number | string }): NativeToolView {
-  const folds = args.folds ?? (args.range ? [{ range: args.range, topic: args.topic ?? "Summary", summary: args.summary ?? "" }] : []);
+/**
+ * Renderer-safe fold-spec extraction. Models legitimately send `folds` as a JSON string
+ * (salvage parses it at execute time); renderers must never throw on that shape
+ * (observed: `folds.map is not a function` renderer-crash spam in host logs).
+ */
+export function previewFoldSpecs(args: { folds?: unknown; range?: string; topic?: string; summary?: string }): { range: string; topic: string; summary: string }[] {
+  let raw: unknown = args.folds;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = undefined;
+    }
+  }
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw
+      .filter((f): f is Record<string, unknown> => f !== null && typeof f === "object")
+      .map((f) => ({ range: String(f.range ?? ""), topic: String(f.topic ?? "Summary"), summary: String(f.summary ?? "") }));
+  }
+  if (typeof args.range === "string" && args.range) {
+    return [{ range: args.range, topic: args.topic ?? "Summary", summary: args.summary ?? "" }];
+  }
+  return [];
+}
+
+export function foldCallView(args: { folds?: unknown; range?: string; topic?: string; summary?: string; tier?: number | string }): NativeToolView {
+  const folds = previewFoldSpecs(args);
   const tier = Number(args.tier ?? 1) || 1;
   return viewMemos().call.fold.get(args, [tier, folds.length, args.range ?? ""], () => {
     const ranges = folds.map((f) => f.range).join(", ");

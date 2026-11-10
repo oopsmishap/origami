@@ -68,6 +68,8 @@ const INTENT_VERBATIM_CHARS = 600;
 const INTENT_CLIP_CHARS = 300;
 /** At most this many intents per tier-1 fold: the first 2 and the most recent rest. */
 const MAX_INTENTS = 8;
+/** Shared empty set: `ingest` runs on every refresh and must not allocate. */
+const NO_PINNED_TURNS: ReadonlySet<number> = new Set();
 
 
 export class OrigamiEngine {
@@ -78,6 +80,8 @@ export class OrigamiEngine {
   private nudgedThisTurn = false;
   private activeTurn = 1;
   private protectedFromTurn = 1;
+  /** Turns that stay whole and unfoldable besides the tail: the latest user instruction's turn. */
+  private pinnedTurns: ReadonlySet<number> = NO_PINNED_TURNS;
   private bookkeepingRefs: ReadonlySet<string> = new Set();
   private pinnedHeadRef: string | null = null;
   private lastNudge: NudgeDecision = { kind: null, text: null };
@@ -186,8 +190,12 @@ export class OrigamiEngine {
       this.config.protectedTailTokens,
       (m) => this.state.ledger.countMessage(m),
     );
-    // The latest user instruction stays verbatim even when custom messages opened later turns.
-    let lastUserTurn = this.activeTurn;
+    // The latest user instruction stays verbatim even when custom messages or turn
+    // segmentation opened later turns. Only its own turn is pinned: clamping the
+    // whole protection window to it (`min(tailTurn, lastUserTurn)`) made every
+    // message after the last user prompt unfoldable, which in autonomous marathons
+    // froze hours of history ("range includes protected recent tail" loops).
+    let lastUserTurn: number | null = null;
     for (let i = bound.length - 1; i >= 0; i--) {
       const m = bound[i]!;
       if (!m.ephemeral && m.role === "user") {
@@ -195,7 +203,8 @@ export class OrigamiEngine {
         break;
       }
     }
-    this.protectedFromTurn = Math.min(tailTurn, lastUserTurn);
+    this.protectedFromTurn = tailTurn;
+    this.pinnedTurns = lastUserTurn !== null && lastUserTurn < tailTurn ? new Set([lastUserTurn]) : NO_PINNED_TURNS;
     this.bookkeepingRefs = historicalFoldCallRefs(bound, this.protectedFromTurn);
     let last: (typeof bound)[number] | undefined;
     for (let i = bound.length - 1; i >= 0 && !last; i--) if (!bound[i]!.ephemeral) last = bound[i];
@@ -248,7 +257,7 @@ export class OrigamiEngine {
   }
 
   private context(): EngineContext {
-    return { state: this.state, config: this.config, host: this.host, db: this.db, now: this.now, activeTurn: this.activeTurn, protectedFromTurn: this.protectedFromTurn, bookkeepingRefs: this.bookkeepingRefs, pinnedHeadRef: this.pinnedHeadRef, reclaimedSinceRound: this.reclaimedSinceRound };
+    return { state: this.state, config: this.config, host: this.host, db: this.db, now: this.now, activeTurn: this.activeTurn, protectedFromTurn: this.protectedFromTurn, pinnedTurns: this.pinnedTurns, bookkeepingRefs: this.bookkeepingRefs, pinnedHeadRef: this.pinnedHeadRef, reclaimedSinceRound: this.reclaimedSinceRound };
   }
 
   onTurnEnd(): void {
@@ -398,6 +407,7 @@ export class OrigamiEngine {
         pinnedHeadRef: this.pinnedHeadRef,
         activeTurn: this.activeTurn,
         protectedFromTurn: this.protectedFromTurn,
+        pinnedTurns: this.pinnedTurns,
       });
     }
     return this.projectBlocks(parseBlockRangeList(spec));
@@ -764,8 +774,10 @@ export class OrigamiEngine {
     for (const k of keep) {
       const text = k.text.trim();
       if (text.length < 1 || text.length > MAX_KEEP_CHARS) return `keep text must be 1-${MAX_KEEP_CHARS} characters`;
-      const ref = k.ref?.trim() || null;
-      if (ref !== null && tier === 1 && !refSet.has(ref)) return `keep ref ${ref} is outside this fold`;
+      let ref = k.ref?.trim() || null;
+      // The ref is provenance metadata; a ref outside the folded span (usually a tail
+      // message the model cited) must not reject the whole fold. Keep the record, drop the ref.
+      if (ref !== null && tier === 1 && !refSet.has(ref)) ref = null;
       kept.push({ kind: k.kind, text, ref });
     }
 

@@ -96,6 +96,23 @@ describe("salvageFoldParams (Billion-Context #2580, #1502)", () => {
     expect(salvageFoldParams({ tier: 99 }).ok).toBe(false);
   });
 
+  it("falls through an empty folds[] to the shorthand range/summary fields", () => {
+    // Observed live: a model answering a candidate note sent { folds: [], range, topic, summary }
+    // and was rejected with "fold requires either 'folds' array or 'range' and 'summary' fields".
+    const res = salvageFoldParams({ folds: [], range: "m00010..m00020", topic: "T", summary: "S" });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.params.folds).toHaveLength(1);
+      expect(res.params.folds[0]?.range).toBe("m00010..m00020");
+    }
+  });
+
+  it("points a candidate id used as a range at fold_candidate", () => {
+    const res = salvageFoldParams({ folds: [], range: "c1", topic: "T", summary: "S" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain("fold_candidate");
+  });
+
   it("parses stringified keep/retire and rejects malformed ledger fields", () => {
     const res = salvageFoldParams({
       folds: [{ range: "b1,b2", topic: "t", summary: "s", keep: '[{"kind":"decision","text":"use sqlite","ref":"m00004"}]', retire: '["b1.L1"]' }],

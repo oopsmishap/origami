@@ -191,9 +191,11 @@ export function recommendRanges(input: {
   /** First protected turn: only messages from strictly earlier turns are candidates. */
   protectedFromTurn: number;
   pinnedHeadRef?: string | null;
+  /** Turns kept whole and unfoldable (the latest user instruction's turn). */
+  pinnedTurns?: ReadonlySet<number>;
   maxRanges?: number;
 }): NudgeRange[] {
-  const { bound, foldedRefs, protectedFromTurn, pinnedHeadRef } = input;
+  const { bound, foldedRefs, protectedFromTurn, pinnedHeadRef, pinnedTurns } = input;
   const pinnedTurn = pinnedHeadRef ? bound.find((m) => m.ref === pinnedHeadRef)?.turn ?? -1 : -1;
   const partnerMap = buildToolPairPartnerMap(bound);
 
@@ -210,7 +212,7 @@ export function recommendRanges(input: {
 
   for (let i = 0; i < bound.length; i++) {
     const m = bound[i]!;
-    const isProtected = m.turn >= protectedFromTurn || m.turn === pinnedTurn;
+    const isProtected = m.turn >= protectedFromTurn || m.turn === pinnedTurn || (pinnedTurns !== undefined && pinnedTurns.has(m.turn));
     const isFolded = !m.ephemeral && foldedRefs.has(m.ref);
 
     if (isProtected || isFolded) {

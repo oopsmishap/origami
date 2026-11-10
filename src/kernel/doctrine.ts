@@ -27,7 +27,7 @@ Fold a contiguous span of older messages into one summary block. The summary rep
 - Write a \`topic\` (a few words) and a \`summary\` that lets a later reader continue WITHOUT the originals. A summary that does not shrink its span is rejected before committing. Be dense: compact bullets, no filler or repetition.
 - Group under short thematic headers when a range spans distinct concerns.
 - Preserve the goal, its evolution, every open objective, every decision and its rationale.
-- The pinned first user message, the current in-flight turn, and the protected recent tail cannot be folded.
+- The pinned first user message, the latest user instruction, the current in-flight turn, and the protected recent tail cannot be folded. Long autonomous stretches are segmented automatically; older segments of the current task ARE foldable.
 - Mention every file path, commit and error the span touched; omitted ones are attached automatically as \`Also covered\` and cost tokens without context.`;
 
 const TIER2_RULES = `## Tier 2 — Distillation (fold block ranges \`"b1..b5"\` or \`"b1,b4,b7"\`)

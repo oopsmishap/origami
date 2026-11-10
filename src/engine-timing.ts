@@ -23,6 +23,7 @@ export function recommendedRanges(context: Readonly<EngineContext>, maxRanges = 
     foldedRefs: context.state.foldedRefs(),
     protectedFromTurn: context.protectedFromTurn,
     pinnedHeadRef: context.pinnedHeadRef,
+    pinnedTurns: context.pinnedTurns,
     maxRanges,
   });
 }

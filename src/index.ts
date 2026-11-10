@@ -290,6 +290,36 @@ export default function origamiExtension(api: ExtensionAPI): void {
     registry.touch(record.sessionId, { status });
     refreshStatusChip(record.sessionId, { sessionId: record.sessionId, status });
 
+    // The host roster can swap Origami's tools out (a plugin entering a restricted
+    // tool mode removes `fold` from the session). A nudge or candidate note then
+    // instructs the model to call a tool it does not have — observed as an
+    // 18-call "Tool fold not found" retry loop in a live session — so notes are
+    // suppressed and emergency folding runs extractively here instead.
+    const foldToolAvailable = typeof api.getActiveTools === "function" ? api.getActiveTools().includes("fold") : true;
+    if (!foldToolAvailable) {
+      const win = rt.engine.windowTokens;
+      if (win > 0 && status.projectedTokens / win >= record.config.emergencyFillPct) {
+        const ranges = rt.engine.recommendedRanges();
+        if (ranges.length > 0) {
+          let specs = ranges.map((range) => ({ range: `${range.start}..${range.end}`, topic: `Emergency fold ${range.start}..${range.end}`, summary: rt.engine.archiveDigest([{ start: range.start, end: range.end }]) }));
+          const selected = specs.map((spec) => spec.range);
+          const started = performance.now();
+          let result = rt.engine.executeFold({ folds: specs, tier: 1, force: true });
+          while (!result.ok && specs.length > 1) {
+            const failedIndex = result.foldIndex;
+            specs = specs.filter((_spec, index) => index !== failedIndex);
+            result = rt.engine.executeFold({ folds: specs, tier: 1, force: true });
+          }
+          recordToolTelemetry(rt, { tool: "emergency_auto_fold", durationMs: performance.now() - started, ok: result.ok, error: result.ok ? null : result.error, inputSummary: selected.join(","), outputSummary: result.ok ? `${result.outcome.foldCount} folds (fold tool unavailable)` : "fold failed" });
+          if (result.ok) {
+            recordFoldSuccess(record.sessionId);
+            for (const block of result.outcome.blocks) registry.emit("fold", record.sessionId, block);
+            rt.sync();
+          }
+        }
+      }
+    }
+
     const compose = (projectedTokensOverride?: number) => {
       const rendered = rt.engine.render(event.messages, makeFoldMessage, projectedTokensOverride);
       if (!record.doctrineInSystemPrompt) {
@@ -300,11 +330,11 @@ export default function origamiExtension(api: ExtensionAPI): void {
       const nudgeKind = decision.text ? decision.kind : rt.engine.nudgeTextKind;
       const candidate = liveCandidate(rt.engine, rt.candidates);
       let emergencyAppended = false;
-      if (nudgeText && !(candidate && nudgeKind === "efficiency")) {
+      if (nudgeText && foldToolAvailable && !(candidate && nudgeKind === "efficiency")) {
         rendered.push({ role: "developer", content: [{ type: "text", text: nudgeText }], timestamp: Date.now() } as never);
         emergencyAppended = nudgeKind === "emergency";
       }
-      if (candidate) rendered.push({ role: "developer", content: [{ type: "text", text: formatCandidate(candidate) }], timestamp: Date.now() } as never);
+      if (candidate && foldToolAvailable) rendered.push({ role: "developer", content: [{ type: "text", text: formatCandidate(candidate) }], timestamp: Date.now() } as never);
       const hydration = rt.engine.hydrationText();
       if (hydration) {
         rendered.push({ role: "developer", content: [{ type: "text", text: hydration }], timestamp: Date.now() } as never);
